@@ -24,6 +24,8 @@ When two sources of the same kind conflict, correct the stale/lower source inste
 
 Normal implementation/maintenance work uses a temporary task branch from the current `main` head and a PR targeting `main`. An active Phase may explicitly own one cumulative temporary implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches.
 
+For substantive work expected to need multiple implementation/self-review commits, open and keep the PR as **Draft** while the candidate is still changing. Draft is the implementation/correction state; **Ready for review is an acceptance-CI signal**, not merely a visibility state. Mark Ready only when the intended implementation has converged, focused validation and self-review have completed far enough that the current candidate is expected to consume merge-gate CI, and no planned material correction remains. If material implementation or self-review work is discovered after Ready, convert the PR back to Draft before further correction pushes; return to Ready only after the candidate stabilizes again. This rule never permits skipping the final applicable CI/review gates.
+
 Merging normal work to `main` is integration, not a production release or deployment. Version/release acceptance and production actions remain separately gated by their owning Issues, release rules, and deployment controls.
 
 When a temporary branch appears no longer needed, the Master reports the branch name to the Owner. Branch cleanup is Owner-operated; the Master does not remove branches automatically or create branch-cleanup automation unless the Owner explicitly changes this policy later.
@@ -58,7 +60,9 @@ Do **not** create a ceremonial Issue for bounded Low/Medium-risk self-executed F
 - the work is reversible and introduces no material schema, security/authorization, provider, deployment/release, secret, or production boundary;
 - no separate coordination state is needed beyond the PR/Git history.
 
-When a Task Contract Issue is warranted, keep it as small as correctness allows and record:
+When a Task Contract Issue is warranted, right-size it to the **minimum meaningful outcome**, not the smallest implementation seam. It must be no smaller than a coherent acceptance boundary and no larger than remains safely reviewable. A Task Contract stays open until its full accepted outcome is complete; integrating one partial PR does not justify closing the Issue and opening a mechanically similar sibling when the acceptance, dependency, ownership, risk, rollback/release, and validation boundaries remain aligned. Multiple cohesive PRs may reference one Task Contract when that improves reviewability; partial PRs use `Refs`, and only the PR that actually completes the contract uses `Closes`. Bounded refinements that remain inside the same outcome should update the existing contract/revision instead of manufacturing a new child Issue. Create a sibling Task only when a material boundary actually changes or continuing the same contract would become unsafe/mixed-purpose/unreviewable.
+
+When a Task Contract Issue is warranted, record:
 
 - parent/requirement or durable authority;
 - observable goal/outcome;
@@ -78,7 +82,7 @@ For this repository, required independent review is dispatched only by giving th
 
 ## Continuous execution
 
-When the current objective is authorized and a dependency-safe Task Contract is `READY`, the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review, corrections, and selecting or creating the next just-in-time READY task under the active phase.
+When the current objective is authorized and a dependency-safe Task Contract is `READY`, the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review and corrections. Continue the current meaningful outcome until its acceptance is actually satisfied; then select the next dependency-safe meaningful outcome. Create a new Task Contract only when no current contract properly owns that work and the persistence rules above require one.
 
 Delegate only when there is a concrete execution/review benefit. Worker availability is capacity, not a prerequisite for progress.
 
@@ -124,12 +128,12 @@ For every change:
 
 1. read the task Issue and only the canonical docs relevant to the decision;
 2. inspect current implementation/tests before adding a concept;
-3. make the smallest reliable change;
+3. make the smallest reliable change **inside the accepted meaningful outcome**; do not use "smallest change" as a reason to split one coherent contract into seam-sized Issues/PRs;
 4. add behavior-focused success/failure/security/concurrency tests only where they provide signal;
 5. run the applicable checks from `docs/06-test-strategy.md` through a supported execution path from `docs/development/execution-infrastructure.md`;
 6. never weaken checks to manufacture a pass;
 7. keep live progress in GitHub, not new handoff/status/evidence/infrastructure-inventory documents;
-8. capture future-useful follow-up work as an actionable Issue rather than burying it in completion prose;
+8. reuse an existing parent/backlog authority for follow-up when it already fits; create a separate follow-up Issue only when the work is distinct, actionable, likely to be executed, and benefits from independent tracking — do not manufacture Issues for cosmetic/speculative/duplicate cleanup;
 9. verify the live GitHub object/ref after every repository mutation.
 
 ## CI
