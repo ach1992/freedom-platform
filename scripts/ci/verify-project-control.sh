@@ -131,6 +131,8 @@ grep -F 'minimum meaningful outcome' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must right-size Task Contracts to meaningful outcomes rather than implementation seams'
 grep -F 'Ready for review is an acceptance-CI signal' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must keep changing candidates Draft until acceptance CI is useful'
+grep -F 'one** PR in the Ready/acceptance/review/integration lane' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep parallel WIP from creating avoidable base-drift acceptance churn'
 grep -F 'Task lifecycle: this Issue owns the full meaningful outcome' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
     || fail 'task template must keep one meaningful outcome open across cohesive partial PRs'
 grep -F 'Use `Closes` only when this PR completes the **entire** owning Task Contract' .github/pull_request_template.md >/dev/null \
