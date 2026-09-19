@@ -14,6 +14,21 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use RuntimeException;
 
+/**
+ * @phpstan-type CampaignAudienceRow object{
+ *     campaign_id:int|string,
+ *     bot_id:int|string,
+ *     state:string,
+ *     state_version:int|string,
+ *     current_audience_version:int|string,
+ *     audience_materialized_at:?string,
+ *     recipient_count:int|string,
+ *     audience_id:int|string,
+ *     audience_version:int|string,
+ *     filter_snapshot:string,
+ *     estimated_recipient_count:int|string
+ * }
+ */
 final readonly class TelegramBroadcastAudienceMaterializer
 {
     public function __construct(
@@ -39,6 +54,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
             $expectedAudienceVersion,
             $count,
         ): void {
+            /** @var object{state:string,current_audience_version:int|string,audience_materialized_at:?string} $campaign */
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('id', (int) $source->campaign_id)
                 ->lockForUpdate()
@@ -91,6 +107,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
             $now,
             $expectedStateVersion,
         ): int {
+            /** @var object{state:string,current_audience_version:int|string,state_version:int|string,audience_materialized_at:?string,recipient_count:int|string} $campaign */
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('id', (int) $source->campaign_id)
                 ->lockForUpdate()
@@ -135,9 +152,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
                         'updated_at' => $now,
                     ];
                 }
-                if ($rows !== []) {
-                    $connection->table('broadcast_recipients')->insert($rows);
-                }
+                $connection->table('broadcast_recipients')->insert($rows);
             }
 
             $count = count($recipients);
@@ -164,6 +179,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
         });
     }
 
+    /** @return CampaignAudienceRow */
     private function campaignAudience(string $campaignPublicId, int $expectedAudienceVersion): object
     {
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $campaignPublicId) !== 1 || $expectedAudienceVersion < 1) {
