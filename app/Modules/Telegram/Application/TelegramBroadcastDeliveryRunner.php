@@ -871,12 +871,9 @@ final readonly class TelegramBroadcastDeliveryRunner
                     null,
                     $this->resultCode($operation->result_code, 'telegram_delivery_review_required'),
                 ],
-                TelegramDeliveryOperationState::FailedFinal => [
-                    'failed',
-                    'failed_permanent',
-                    null,
-                    $this->resultCode($operation->result_code, 'telegram_delivery_failed_final'),
-                ],
+                TelegramDeliveryOperationState::FailedFinal => $this->failedFinalLinkedOutcome(
+                    $operation->result_code,
+                ),
                 TelegramDeliveryOperationState::Uncertain => [
                     'uncertain',
                     'uncertain',
@@ -894,17 +891,22 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'result_code' => $operation->result_code,
                     'updated_at' => $now,
                 ]);
+            $recipientValues = [
+                'delivery_state' => $recipientState,
+                'telegram_message_id' => $messageId,
+                'failure_code' => $failureCode,
+                'retry_not_before' => null,
+                'sent_at' => $recipientState === 'sent' ? $now : null,
+                'claim_token_hash' => null,
+                'claim_expires_at' => null,
+                'updated_at' => $now,
+            ];
+            if ($recipientState === 'queued') {
+                $recipientValues['delivery_operation_public_id'] = null;
+            }
             $connection->table('broadcast_recipients')
                 ->where('id', (int) $recipient->id)
-                ->update([
-                    'delivery_state' => $recipientState,
-                    'telegram_message_id' => $messageId,
-                    'failure_code' => $failureCode,
-                    'sent_at' => $recipientState === 'sent' ? $now : null,
-                    'claim_token_hash' => null,
-                    'claim_expires_at' => null,
-                    'updated_at' => $now,
-                ]);
+                ->update($recipientValues);
 
             return true;
         }, 3);
@@ -914,6 +916,31 @@ final readonly class TelegramBroadcastDeliveryRunner
         }
 
         return $changed;
+    }
+
+    /**
+     * @return array{0:string,1:string,2:null,3:?string}
+     */
+    private function failedFinalLinkedOutcome(mixed $resultCode): array
+    {
+        if ($resultCode === TelegramBroadcastDeliveryEffectGuard::PAUSED_BEFORE_EFFECT) {
+            return ['retryable', 'queued', null, null];
+        }
+        if ($resultCode === TelegramBroadcastDeliveryEffectGuard::CANCELLED_BEFORE_EFFECT) {
+            return [
+                'skipped',
+                'skipped',
+                null,
+                TelegramBroadcastDeliveryEffectGuard::CANCELLED_BEFORE_EFFECT,
+            ];
+        }
+
+        return [
+            'failed',
+            'failed_permanent',
+            null,
+            $this->resultCode($resultCode, 'telegram_delivery_failed_final'),
+        ];
     }
 
     private function pauseForSafety(TelegramBroadcastRecipientClaim $claim, string $resultCode): void
