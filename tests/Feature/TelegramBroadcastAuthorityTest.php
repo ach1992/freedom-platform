@@ -191,7 +191,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         DB::table('broadcast_campaigns')
             ->where('public_id', $scheduled->publicId)
             ->update([
-                'scheduled_at' => now('UTC')->subMinute(),
+                'scheduled_at' => now('UTC'),
                 'updated_at' => now('UTC'),
             ]);
 
