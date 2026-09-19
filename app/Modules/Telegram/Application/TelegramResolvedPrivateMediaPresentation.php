@@ -41,6 +41,7 @@ final class TelegramResolvedPrivateMediaPresentation implements JsonSerializable
             || $bytes === ''
             || strlen($bytes) !== $byteSize
             || $byteSize > 20_000_000
+            || ($contentType === 'photo' && $byteSize > 10_000_000)
             || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,126}\z/', $filename) !== 1
             || str_contains($filename, '..')
             || ! TelegramPrivateMediaContentValidator::isApprovedMime($detectedMime)
