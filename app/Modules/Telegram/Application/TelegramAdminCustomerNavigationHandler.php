@@ -102,6 +102,15 @@ final readonly class TelegramAdminCustomerNavigationHandler
         $selection = $this->selectionFromPayload($interaction->sessionPayload);
         $action = $this->actionForPrivateMedia($interaction);
 
+        if ($interaction->media->sourceKind === 'photo'
+            && $interaction->media->reportedFileSize !== null
+            && $interaction->media->reportedFileSize > 10_000_000) {
+            $target = $this->targets->resolve($interaction->userId, $interaction->botId, $selection);
+            $this->renderMessageCompose($action, $interaction->sessionVersion, $target, 'message_invalid');
+
+            return true;
+        }
+
         try {
             $media = $this->privateMedia->ingest(
                 $interaction->botId,
