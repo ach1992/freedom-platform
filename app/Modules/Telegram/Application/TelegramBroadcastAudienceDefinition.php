@@ -12,14 +12,14 @@ final readonly class TelegramBroadcastAudienceDefinition
     /**
      * All dimensions are ANDed. Values inside one list dimension are ORed.
      *
-     * @param list<string> $accountTypes
-     * @param list<string> $tierCodes
-     * @param list<string> $tagCodes
-     * @param list<string> $offeringCodes
-     * @param list<string> $categoryCodes
-     * @param list<string> $serverCodes
-     * @param list<string> $manualUserPublicIds
-     * @param list<int> $channelChatIds
+     * @param  list<string>  $accountTypes
+     * @param  list<string>  $tierCodes
+     * @param  list<string>  $tagCodes
+     * @param  list<string>  $offeringCodes
+     * @param  list<string>  $categoryCodes
+     * @param  list<string>  $serverCodes
+     * @param  list<string>  $manualUserPublicIds
+     * @param  list<int>  $channelChatIds
      */
     public function __construct(
         public array $accountTypes = [],
@@ -193,8 +193,8 @@ final readonly class TelegramBroadcastAudienceDefinition
     }
 
     /**
-     * @param list<string> $values
-     * @param list<string> $allowed
+     * @param  list<string>  $values
+     * @param  list<string>  $allowed
      */
     private function assertAllowedList(array $values, array $allowed, string $label): void
     {
@@ -208,7 +208,7 @@ final readonly class TelegramBroadcastAudienceDefinition
         }
     }
 
-    /** @param list<string> $values */
+    /** @param  list<string>  $values */
     private function assertCodeList(array $values, string $label): void
     {
         foreach ($values as $value) {
@@ -224,7 +224,7 @@ final readonly class TelegramBroadcastAudienceDefinition
         }
     }
 
-    /** @param list<string> $values */
+    /** @param  list<string>  $values */
     private function assertUlidList(array $values, string $label): void
     {
         foreach ($values as $value) {
@@ -237,7 +237,7 @@ final readonly class TelegramBroadcastAudienceDefinition
         }
     }
 
-    /** @param list<string> $allowed */
+    /** @param  list<string>  $allowed */
     private function assertOneOf(string $value, array $allowed, string $label): void
     {
         if (! in_array($value, $allowed, true)) {
@@ -246,7 +246,7 @@ final readonly class TelegramBroadcastAudienceDefinition
     }
 
     /**
-     * @param list<string> $values
+     * @param  list<string>  $values
      * @return list<string>
      */
     private function canonicalStrings(array $values): array
@@ -258,7 +258,7 @@ final readonly class TelegramBroadcastAudienceDefinition
     }
 
     /**
-     * @param list<int> $values
+     * @param  list<int>  $values
      * @return list<int>
      */
     private function canonicalIntegers(array $values): array
