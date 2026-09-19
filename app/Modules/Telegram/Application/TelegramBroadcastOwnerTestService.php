@@ -147,7 +147,7 @@ final readonly class TelegramBroadcastOwnerTestService
                 $context['telegram_user_id'],
                 $text,
                 'tg-broadcast-owner-test:'.$testPublicId,
-                $context['correlation_id'].':test',
+                'tgbt:'.$testPublicId,
                 $keyboard,
             );
 
