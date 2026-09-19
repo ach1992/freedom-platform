@@ -71,13 +71,15 @@ final readonly class TelegramInteractionDispatcher
 
         try {
             $privateMedia = $this->privateMediaFromMessage($message);
+            $privateMediaCaption = $privateMedia === null
+                ? null
+                : $this->privateMediaCaption($message, $privateMedia);
         } catch (TelegramPrivateMediaRejected) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
         }
         $text = $message['text'] ?? null;
         if ($privateMedia !== null) {
             if (is_string($text)
-                || array_key_exists('caption', $message)
                 || ! $this->isPrivateActorChat($message, (int) $account->telegram_user_id)) {
                 return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
             }
@@ -89,6 +91,7 @@ final readonly class TelegramInteractionDispatcher
                 $message,
                 (int) $account->id,
                 (int) $account->telegram_user_id,
+                $privateMediaCaption,
             );
         }
 
@@ -204,6 +207,7 @@ final readonly class TelegramInteractionDispatcher
         array $message,
         int $telegramAccountId,
         int $telegramUserId,
+        ?string $caption,
     ): TelegramInteractionDispatchResult {
         $messageTimestamp = $message['date'] ?? null;
         if (! is_int($messageTimestamp) || $messageTimestamp < 1) {
@@ -240,12 +244,37 @@ final readonly class TelegramInteractionDispatcher
             $media,
             new DateTimeImmutable('@'.$messageTimestamp),
             $binding->replayed,
+            $caption,
         ));
 
         return new TelegramInteractionDispatchResult(
             $handled ? TelegramInteractionDispatchStatus::Handled : TelegramInteractionDispatchStatus::Rejected,
             $binding->sessionPublicId,
         );
+    }
+
+    /** @param array<string,mixed> $message */
+    private function privateMediaCaption(
+        array $message,
+        TelegramPrivateMediaInput $media,
+    ): ?string {
+        if (array_key_exists('caption_entities', $message)) {
+            throw new TelegramPrivateMediaRejected('unsupported_media_caption_formatting');
+        }
+        if (! array_key_exists('caption', $message)) {
+            return null;
+        }
+
+        $caption = $message['caption'];
+        if (! is_string($caption)
+            || $media->sourceKind !== 'photo'
+            || ! mb_check_encoding($caption, 'UTF-8')
+            || str_contains($caption, "\0")
+            || mb_strlen($caption) > 1024) {
+            throw new TelegramPrivateMediaRejected('invalid_media_caption');
+        }
+
+        return $caption === '' ? null : $caption;
     }
 
     /** @param array<string, mixed> $callbackQuery */
