@@ -9,6 +9,7 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `main`. For substantive multi-commit work, open it as Draft by default.
 5. Keep the PR Draft while implementation/self-review corrections are still expected. **Ready means the current candidate is intended to consume acceptance CI.** Mark it Ready only after the implementation has converged and focused validation/self-review make a merge-gate run useful. If material correction work appears after Ready, convert back to Draft before further correction pushes; do not leave a changing candidate Ready and repeatedly pay for superseded broad CI.
+   With two independent WIP streams targeting `main`, normally advance only one into Ready/review/integration at a time if its merge would stale the other's evidence; keep the other Draft until the first target update is reconciled.
 6. Do not merge your own Worker PR.
 
 `main` is the default and primary integration branch. Normal product work reaches it through reviewed PRs rather than direct pushes. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
