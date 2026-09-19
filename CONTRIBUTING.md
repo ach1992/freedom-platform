@@ -43,7 +43,7 @@ A Task Issue represents its **whole meaningful outcome**, not merely the first P
 
 After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Exact commit/run identity belongs to native Git/PR/check state; do not create a comment ledger for every candidate or CI rerun. Use comments for material decisions/blockers/review results/approval boundaries/explicit pauses or a recovery summary that native state cannot express. An `Initial state` field remains historical contract input and does not need rewriting.
 
-Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
+Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood. The PR body is not a candidate ledger: GitHub already owns current base/head SHA, mergeability and check/run identity. Do not rewrite the body after every push/rerun merely to copy those fields; update it when scope/risk/acceptance/nonclaims or stable review-useful evidence materially changes.
 
 Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies intended ownership; actual merge enforcement depends on repository protection/rulesets. Verify live repository settings before relying on protection as an enforced fact.
 
