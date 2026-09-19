@@ -53,6 +53,10 @@ final readonly class TelegramAdministratorDirectMediaMessageService
 
     private const MAX_CAPTION_LENGTH = 1024;
 
+    private const MAX_PHOTO_BYTES = 10_000_000;
+
+    private const MAX_PRIVATE_MEDIA_BYTES = 20_000_000;
+
     public function __construct(
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
@@ -552,8 +556,9 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             || ! Str::isUlid($media->publicId)
             || ! TelegramPrivateMediaContentValidator::isApprovedMime($media->detectedMime)
             || $media->byteSize < 1
-            || $media->byteSize > 20_000_000
+            || $media->byteSize > self::MAX_PRIVATE_MEDIA_BYTES
             || preg_match('/\A[0-9a-f]{64}\z/', strtolower($media->contentSha256)) !== 1
+            || ($sourceKind === 'photo' && $media->byteSize > self::MAX_PHOTO_BYTES)
             || ($sourceKind === 'photo' && ! TelegramPrivateMediaContentValidator::isImageMime($media->detectedMime))
             || ($sourceKind === 'video' && $media->detectedMime !== 'video/mp4')) {
             throw new DomainException('Telegram administrator direct-media input is invalid.');
@@ -586,7 +591,8 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             && Str::isUlid($mediaPublicId)
             && TelegramPrivateMediaContentValidator::isApprovedMime($mime)
             && $byteSize >= 1
-            && $byteSize <= 20_000_000
+            && $byteSize <= self::MAX_PRIVATE_MEDIA_BYTES
+            && ($contentType !== 'photo' || $byteSize <= self::MAX_PHOTO_BYTES)
             && preg_match('/\A[0-9a-f]{64}\z/', $sha256) === 1
             && mb_check_encoding($caption, 'UTF-8')
             && ! str_contains($caption, "\0")
