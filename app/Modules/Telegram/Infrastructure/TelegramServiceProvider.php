@@ -27,6 +27,7 @@ use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
+use App\Modules\Telegram\Application\TelegramBroadcastNavigationHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
@@ -151,6 +152,7 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
+        $this->app->singleton(TelegramBroadcastNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);
         $this->app->singleton(TelegramSupportNavigationHandler::class);
