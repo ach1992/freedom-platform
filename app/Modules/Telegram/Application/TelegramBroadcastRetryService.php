@@ -11,6 +11,7 @@ use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use RuntimeException;
 use SensitiveParameter;
@@ -27,7 +28,7 @@ final readonly class TelegramBroadcastRetryService
      * Retry only recipients with definitive failed states. Uncertain recipients
      * are intentionally excluded because a previous provider effect may exist.
      *
-     * @param  list<string>  $recipientPublicIds Empty means all failed recipients.
+     * @param  list<string>  $recipientPublicIds  Empty means all failed recipients.
      *
      * @requirement COM-003 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004
      */
@@ -91,7 +92,7 @@ final readonly class TelegramBroadcastRetryService
                     $query->whereIn('public_id', $recipientPublicIds);
                 }
 
-                /** @var \Illuminate\Support\Collection<int,object{id:int|string,public_id:string,delivery_state:string}> $recipients */
+                /** @var Collection<int,object{id:int|string,public_id:string,delivery_state:string}> $recipients */
                 $recipients = $query
                     ->orderBy('id')
                     ->lockForUpdate()
@@ -209,7 +210,7 @@ final readonly class TelegramBroadcastRetryService
     }
 
     /** @param list<string> $recipientPublicIds
-     *  @return list<string>
+     * @return list<string>
      */
     private function canonicalRecipientIds(array $recipientPublicIds): array
     {
