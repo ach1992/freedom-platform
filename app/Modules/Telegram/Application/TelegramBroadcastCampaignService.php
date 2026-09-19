@@ -25,6 +25,7 @@ use SensitiveParameter;
  * @phpstan-type CampaignRow object{
  *     id:int|string,
  *     public_id:string,
+ *     bot_id:string,
  *     state:string,
  *     state_version:int|string,
  *     current_message_version:int|string,
@@ -65,6 +66,7 @@ final readonly class TelegramBroadcastCampaignService
         $connection = $this->database->connection();
         $campaignId = $connection->table('broadcast_campaigns')
             ->where('public_id', $campaignPublicId)
+            ->where('bot_id', $this->botId())
             ->value('id');
         if (! is_int($campaignId) && ! is_string($campaignId)) {
             throw new DomainException('Broadcast campaign is unavailable.');
@@ -97,6 +99,7 @@ final readonly class TelegramBroadcastCampaignService
                     ->on('message.version', '=', 'campaign.current_message_version');
             })
             ->where('campaign.public_id', $campaignPublicId)
+            ->where('campaign.bot_id', $this->botId())
             ->first([
                 'message.mode',
                 'message.source_kind',
@@ -360,6 +363,7 @@ final readonly class TelegramBroadcastCampaignService
         int $expectedAudienceVersion,
     ): int {
         $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $this->current($actorUserId, $campaignPublicId);
 
         return $this->audiences->estimate($campaignPublicId, $expectedAudienceVersion);
     }
@@ -497,6 +501,7 @@ final readonly class TelegramBroadcastCampaignService
         $connection = $this->database->connection();
         $campaign = $connection->table('broadcast_campaigns')
             ->where('public_id', $campaignPublicId)
+            ->where('bot_id', $this->botId())
             ->first(['id', 'public_id', 'state', 'state_version', 'recipient_count']);
         if ($campaign === null) {
             throw new DomainException('Broadcast campaign is unavailable.');
@@ -552,6 +557,7 @@ final readonly class TelegramBroadcastCampaignService
 
         $now = $this->timestamp();
         $rows = $this->database->connection()->table('broadcast_campaigns')
+            ->where('bot_id', $this->botId())
             ->where('state', TelegramBroadcastCampaignState::Scheduled->value)
             ->where('scheduled_at', '<=', $now)
             ->orderBy('scheduled_at')
@@ -666,6 +672,7 @@ final readonly class TelegramBroadcastCampaignService
 
         $preflight = $this->database->connection()->table('broadcast_campaigns')
             ->where('public_id', $campaignPublicId)
+            ->where('bot_id', $this->botId())
             ->first(['id', 'state', 'state_version', 'current_message_version', 'current_audience_version']);
         if ($preflight === null
             || (string) $preflight->state !== TelegramBroadcastCampaignState::Draft->value
@@ -873,6 +880,7 @@ final readonly class TelegramBroadcastCampaignService
             ->first([
                 'id',
                 'public_id',
+                'bot_id',
                 'state',
                 'state_version',
                 'current_message_version',
@@ -884,7 +892,9 @@ final readonly class TelegramBroadcastCampaignService
                 'completed_at',
                 'cancelled_at',
             ]);
-        if ($campaign === null) {
+        if ($campaign === null
+            || ! hash_equals((string) $campaign->bot_id, $this->botId())
+        ) {
             throw new DomainException('Broadcast campaign is unavailable.');
         }
 
