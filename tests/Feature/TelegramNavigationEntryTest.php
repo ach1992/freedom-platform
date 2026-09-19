@@ -5031,6 +5031,90 @@ SQL);
         );
     }
 
+    /** @requirement COM-001 ARCH-004 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_uncertain_result_is_not_sent_twice(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9789;
+        $targetTelegramId = 888777666565;
+        $adminUsername = 'admin_direct_media_uncertain';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99104);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7600,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_uncertain_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7606,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-uncertain',
+            'private-provider-unique-direct-media-uncertain',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7606);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->first(['public_id', 'correlation_id']);
+        self::assertNotNull($direct);
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $this->accept($this->callbackPayload(
+            7607,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $journey['processor']->process('123456789', 7607);
+
+        $linked = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->first(['delivery_operation_public_id', 'correlation_id']);
+        self::assertNotNull($linked);
+        self::assertIsString($linked->delivery_operation_public_id);
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $linked->delivery_operation_public_id)
+            ->first(['public_id', 'outbox_event_id']);
+        self::assertNotNull($operation);
+
+        $sender->uncertain = true;
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $linked->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $linked->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+
+        self::assertSame('uncertain', $first->state->value);
+        self::assertSame('uncertain', $second->state->value);
+        self::assertNull($first->messageId);
+        self::assertSame(1, $sender->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => (string) $operation->public_id,
+            'state' => 'uncertain',
+            'provider_attempts' => 1,
+            'result_code' => 'telegram_transport_uncertain',
+        ]);
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_text_message_is_confirmed_encrypted_and_exactly_once_on_replay(): void
     {
