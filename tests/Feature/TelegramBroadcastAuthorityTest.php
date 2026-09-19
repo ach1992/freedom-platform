@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
+use App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
 use App\Modules\Telegram\Application\TelegramBroadcastMessageDefinition;
@@ -403,7 +404,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         ];
     }
 
-    private function startedCampaign(array $actor, string $requestKey): \App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt
+    private function startedCampaign(array $actor, string $requestKey): TelegramBroadcastCampaignReceipt
     {
         $service = $this->app->make(TelegramBroadcastCampaignService::class);
         $created = $service->createDraft(
