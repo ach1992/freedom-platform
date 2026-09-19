@@ -1091,10 +1091,6 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $keyboard;
     }
 
-    /**
-     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
-     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string} $message
-     */
     private function releaseLockedClaim(
         Connection $connection,
         object $recipient,
@@ -1102,6 +1098,8 @@ final readonly class TelegramBroadcastDeliveryRunner
         bool $cancelled,
         string $resultCode,
     ): void {
+        /** @var object{id:int|string} $recipient */
+        /** @var object{id:int|string,state:string} $message */
         $now = $this->timestamp();
         if ($cancelled) {
             $connection->table('broadcast_recipient_messages')
@@ -1128,16 +1126,14 @@ final readonly class TelegramBroadcastDeliveryRunner
         }
     }
 
-    /**
-     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
-     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string} $message
-     */
     private function markLockedUncertain(
         Connection $connection,
         object $recipient,
         object $message,
         string $resultCode,
     ): void {
+        /** @var object{id:int|string} $recipient */
+        /** @var object{id:int|string,state:string} $message */
         $now = $this->timestamp();
         $connection->table('broadcast_recipient_messages')
             ->where('id', (int) $message->id)
@@ -1158,12 +1154,12 @@ final readonly class TelegramBroadcastDeliveryRunner
             ]);
     }
 
-    /** @param object{id:int|string} $recipient */
     private function releaseExpiredPrepared(
         Connection $connection,
         object $recipient,
         bool $cancelled,
     ): int {
+        /** @var object{id:int|string} $recipient */
         $updated = $connection->table('broadcast_recipients')
             ->where('id', (int) $recipient->id)
             ->update([
@@ -1177,10 +1173,6 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $updated === 1 ? 1 : 0;
     }
 
-    /**
-     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
-     * @param object{id:int|string,broadcast_recipient_id?:int|string,state:string} $message
-     */
     private function recoverExpiredSourceSending(
         Connection $connection,
         object $recipient,
@@ -1196,7 +1188,6 @@ final readonly class TelegramBroadcastDeliveryRunner
         return 1;
     }
 
-    /** @param object{id:int|string} $recipient */
     private function recoverTerminalRecipient(
         Connection $connection,
         object $recipient,
@@ -1204,6 +1195,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         mixed $messageId,
         mixed $resultCode,
     ): int {
+        /** @var object{id:int|string} $recipient */
         $messageId = $state === 'sent'
             ? $this->requiredMessageId($messageId)
             : null;
@@ -1226,10 +1218,6 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $updated === 1 ? 1 : 0;
     }
 
-    /**
-     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
-     * @param object{id:int|string,broadcast_recipient_id?:int|string,state:string} $message
-     */
     private function recoverExpiredUnknown(
         Connection $connection,
         object $recipient,
@@ -1245,18 +1233,18 @@ final readonly class TelegramBroadcastDeliveryRunner
         return 1;
     }
 
-    /**
-     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string}|null $recipient
-     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string}|null $message
-     */
     private function assertClaimRows(
         TelegramBroadcastRecipientClaim $claim,
         ?object $recipient,
         ?object $message,
     ): void {
-        if ($recipient === null
-            || $message === null
-            || (int) $message->broadcast_recipient_id !== (int) $recipient->id
+        if ($recipient === null || $message === null) {
+            throw new DomainException('Broadcast recipient claim is stale.');
+        }
+
+        /** @var object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient */
+        /** @var object{id:int|string,broadcast_recipient_id:int|string,state:string} $message */
+        if ((int) $message->broadcast_recipient_id !== (int) $recipient->id
             || (string) $recipient->delivery_state !== 'sending'
             || ! is_string($recipient->claim_token_hash)
             || ! hash_equals($recipient->claim_token_hash, $claim->claimTokenHash())
