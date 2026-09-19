@@ -4799,10 +4799,10 @@ SQL);
         self::assertSame(99101, $second->messageId);
         self::assertSame(1, $sender->attempts);
         self::assertCount(1, $sender->presentations);
-        self::assertSame('photo', $sender->presentations[0]->contentType);
-        self::assertSame($caption, $sender->presentations[0]->caption);
+        self::assertSame('photo', $sender->presentations[0]->contentType());
+        self::assertSame($caption, $sender->presentations[0]->captionForProvider());
         self::assertSame($png, $sender->presentations[0]->revealBytesForProvider());
-        self::assertSame(hash('sha256', $png), $sender->presentations[0]->contentSha256);
+        self::assertSame(hash('sha256', $png), $sender->presentations[0]->contentSha256());
         $this->assertDatabaseHas('telegram_delivery_operations', [
             'public_id' => (string) $operation->public_id,
             'state' => 'succeeded',
