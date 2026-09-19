@@ -33,7 +33,7 @@ final readonly class TelegramBroadcastAudienceParser
             throw new DomainException('Broadcast audience input is empty.');
         }
         if (strcasecmp($input, 'all') === 0) {
-            return new TelegramBroadcastAudienceDefinition();
+            return new TelegramBroadcastAudienceDefinition;
         }
         if (strlen($input) > 16_384 || ! mb_check_encoding($input, 'UTF-8') || str_contains($input, "\0")) {
             throw new DomainException('Broadcast audience input is invalid.');
