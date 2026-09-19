@@ -221,7 +221,7 @@ SQL);
                     'content_length' => 0,
                 ]));
         } finally {
-            DB::table('telegram_administrator_direct_messages')->where('public_id', $publicId)->delete();
+            $this->deleteTextDraftFixture($publicId);
             $this->restoreCurrentCompletionAuthority($migration);
         }
     }
@@ -334,7 +334,7 @@ SQL);
         } finally {
             DB::purge($connectionName);
             config(["database.connections.{$connectionName}" => null]);
-            DB::table('telegram_administrator_direct_messages')->where('public_id', $publicId)->delete();
+            $this->deleteTextDraftFixture($publicId);
             $this->restoreCurrentCompletionAuthority($migration);
         }
     }
@@ -393,7 +393,7 @@ SQL);
         $administratorId = (int) DB::table('administrators')->insertGetId([
             'user_id' => $userId,
             'status' => 'active',
-            'is_owner' => true,
+            'is_owner' => false,
             'permission_version' => 1,
             'last_authenticated_at' => $now,
             'created_at' => $now,
@@ -428,6 +428,24 @@ SQL);
         ]);
 
         return $publicId;
+    }
+
+    private function deleteTextDraftFixture(string $publicId): void
+    {
+        $administratorId = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $publicId)
+            ->value('actor_administrator_id');
+        $userId = is_numeric($administratorId)
+            ? DB::table('administrators')->where('id', (int) $administratorId)->value('user_id')
+            : null;
+
+        DB::table('telegram_administrator_direct_messages')->where('public_id', $publicId)->delete();
+        if (is_numeric($administratorId)) {
+            DB::table('administrators')->where('id', (int) $administratorId)->delete();
+        }
+        if (is_numeric($userId)) {
+            DB::table('users')->where('id', (int) $userId)->delete();
+        }
     }
 
     private function secondaryConnection(string $name): Connection
