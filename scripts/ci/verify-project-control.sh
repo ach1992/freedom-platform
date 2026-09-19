@@ -125,6 +125,20 @@ grep -F 'Bounded Low/Medium FAST-path work' .github/ISSUE_TEMPLATE/task.yml >/de
     || fail 'task template must state when a dedicated Issue is unnecessary'
 grep -F 'Do not create a ceremonial Issue' CONTRIBUTING.md >/dev/null \
     || fail 'contribution guide must preserve the bounded FAST path without ceremonial Issues'
+grep -F 'Substantive behavior alone does **not** force a new Issue' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep bounded Low/Medium product work eligible for FAST execution without a ceremonial Task Issue'
+grep -F 'minimum meaningful outcome' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must right-size Task Contracts to meaningful outcomes rather than implementation seams'
+grep -F 'Ready for review is an acceptance-CI signal' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep changing candidates Draft until acceptance CI is useful'
+grep -F 'one** PR in the Ready/acceptance/review/integration lane' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep parallel WIP from creating avoidable base-drift acceptance churn'
+grep -F 'Task lifecycle: this Issue owns the full meaningful outcome' .github/ISSUE_TEMPLATE/task.yml >/dev/null \
+    || fail 'task template must keep one meaningful outcome open across cohesive partial PRs'
+grep -F 'Use `Closes` only when this PR completes the **entire** owning Task Contract' .github/pull_request_template.md >/dev/null \
+    || fail 'PR template must not close a Task Contract for a partial implementation seam'
+grep -F 'bounded recovery event' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep Master/chat rotation from restarting broad project analysis'
 for heading in '## Authority / owning Issue' '## Summary' '## Risk / material impact' '## Verification' '## Review gates'; do
     grep -F "$heading" .github/pull_request_template.md >/dev/null \
         || fail "PR template lacks review-useful section: $heading"

@@ -11,6 +11,8 @@ body:
 
         Execution continuity: once the parent objective is authorized and this task is READY, normal reversible implementation/validation/review-preparation continues without another Owner checkpoint. Approval requirements are action-scoped; a "before merge/release" gate does not pause coding, testing, PR maintenance, or dependency-safe follow-on work.
 
+        Task lifecycle: this Issue owns the full meaningful outcome, not just the first PR. Keep it open across cohesive partial PRs while acceptance/dependency/risk/rollback/validation boundaries remain aligned. Partial PRs use Refs, not Closes. Use a Contract Revision for bounded in-outcome refinement; create a sibling Issue only when a material boundary actually changes or one contract would become unsafe/mixed-purpose/unreviewable.
+
   - type: textarea
     id: authority
     attributes:
@@ -69,7 +71,7 @@ body:
     id: risk
     attributes:
       label: Change risk
-      description: High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval for the gated merge/release/irreversible action unless already authorized; risk alone does not pause reversible development.
+      description: Classify the concrete change from blast radius, reversibility, data/security/privacy impact, external-effect uncertainty, compatibility and rollback; do not inherit a Phase risk label or mark High merely because a migration/provider/admin/queue surface is touched. High/Critical work still requires the applicable independent review and Owner gate; never downgrade to avoid them.
       options:
         - Low
         - Medium

@@ -18,11 +18,17 @@ The root `README.md` is deliberately user-facing: product overview, getting-star
 
 When two sources of the same kind conflict, correct the stale/lower source instead of maintaining both.
 
+Master/chat rotation is a **bounded recovery event**, not permission to restart project analysis. Recover current repository/target identity, Program #3, the active Phase cutline, current Task/PR when one exists, and only the canonical references needed for the next decision. If those authorities remain coherent, continue them. Do not replay closed Issue/PR history, reread the full root specification, rerun a phase-wide audit/cutline, or recreate READY/planning artifacts merely because the chat/Master changed; broaden recovery only when current evidence materially contradicts the retained state or the completion/dependency shape changed.
+
 ## Branch and PR model
 
 `main` is the only long-lived branch. It is both the GitHub default branch and the primary integration branch.
 
 Normal implementation/maintenance work uses a temporary task branch from the current `main` head and a PR targeting `main`. An active Phase may explicitly own one cumulative temporary implementation branch/PR; when it does, continue on that branch instead of creating parallel task branches.
+
+For substantive work expected to need multiple implementation/self-review commits, open and keep the PR as **Draft** while the candidate is still changing. Draft is the implementation/correction state; **Ready for review is an acceptance-CI signal**, not merely a visibility state. Mark Ready only when the intended implementation has converged, focused validation and self-review have completed far enough that the current candidate is expected to consume merge-gate CI, and no planned material correction remains. If material implementation or self-review work is discovered after Ready, convert the PR back to Draft before further correction pushes; return to Ready only after the candidate stabilizes again. This rule never permits skipping the final applicable CI/review gates.
+
+When WIP permits two independent workstreams against `main`, normally keep only **one** PR in the Ready/acceptance/review/integration lane when merging it would change the base assumptions of the other. The second workstream may continue implementation and focused validation as Draft, then refresh against the new `main` before entering acceptance. Two simultaneous Ready candidates are appropriate only when the repository's intentional stacking/queue model or current evidence proves that target movement will not invalidate required evidence. Parallelism must reduce wall-clock time, not create avoidable base-drift/revalidation churn.
 
 Merging normal work to `main` is integration, not a production release or deployment. Version/release acceptance and production actions remain separately gated by their owning Issues, release rules, and deployment controls.
 
@@ -49,7 +55,7 @@ Detailed development routing is in `CONTRIBUTING.md`; test/CI semantics are in `
 
 ## Task contract
 
-Persist a dedicated GitHub Task Contract Issue when it materially improves implementation, review, coordination, recovery, or risk control. It is required for substantive product behavior, High/Critical work, delegated or cross-session work, material dependency/decision sequencing, or work whose acceptance/state must remain independently recoverable.
+Persist a dedicated GitHub Task Contract Issue when it materially improves implementation, review, coordination, recovery, or risk control. It is required for High/Critical work, delegated or cross-session work, material dependency/decision sequencing, or a substantive product outcome whose acceptance/state cannot be represented safely by an existing requirement/Phase/Program authority plus one reviewable bounded FAST PR. Substantive behavior alone does **not** force a new Issue when the Low/Medium FAST criteria below are genuinely satisfied.
 
 Do **not** create a ceremonial Issue for bounded Low/Medium-risk self-executed FAST work when all of these are true:
 
@@ -58,7 +64,9 @@ Do **not** create a ceremonial Issue for bounded Low/Medium-risk self-executed F
 - the work is reversible and introduces no material schema, security/authorization, provider, deployment/release, secret, or production boundary;
 - no separate coordination state is needed beyond the PR/Git history.
 
-When a Task Contract Issue is warranted, keep it as small as correctness allows and record:
+When a Task Contract Issue is warranted, right-size it to the **minimum meaningful outcome**, not the smallest implementation seam. It must be no smaller than a coherent acceptance boundary and no larger than remains safely reviewable. A Task Contract stays open until its full accepted outcome is complete; integrating one partial PR does not justify closing the Issue and opening a mechanically similar sibling when the acceptance, dependency, ownership, risk, rollback/release, and validation boundaries remain aligned. Multiple cohesive PRs may reference one Task Contract when that improves reviewability; partial PRs use `Refs`, and only the PR that actually completes the contract uses `Closes`. Bounded refinements that remain inside the same outcome should update the existing contract/revision instead of manufacturing a new child Issue. Create a sibling Task only when a material boundary actually changes or continuing the same contract would become unsafe/mixed-purpose/unreviewable.
+
+When a Task Contract Issue is warranted, record:
 
 - parent/requirement or durable authority;
 - observable goal/outcome;
@@ -68,27 +76,31 @@ When a Task Contract Issue is warranted, keep it as small as correctness allows 
 - validation strategy;
 - change risk and initial state.
 
-Add protected areas, security/privacy, financial/provider, schema/migration, compatibility, runtime/operations, performance, or release constraints **only when they materially affect the task**. Do not require headings filled with `N/A`, repeated handoff prose, copied CI logs, or a separate completion report.
+Add protected areas, security/privacy, financial/provider, schema/migration, compatibility, runtime/operations, performance, or release constraints **only when they materially affect the task**. Keep the Task Issue contract-like, not an investigation/status diary: implementation discoveries stay in code/PR/review unless they materially change goal, scope, acceptance, dependency, risk, or validation. Increment a Contract Revision only for such material contract change, not for ordinary commits, self-review corrections, rebases, candidate SHAs, or CI reruns. Do not require headings filled with `N/A`, repeated handoff prose, copied CI logs, or a separate completion report.
 
 Every PR still names its authority and review boundary. When there is no dedicated Task Issue, the PR links the existing requirement/Phase/Program authority and carries the bounded scope, risk, and verification needed to review the change safely. PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not by itself prove branch/ruleset enforcement.
 
+Classify risk from the **actual change**, not from the Phase label or the mere presence of a keyword/surface. Touching a migration, administrator UI, provider abstraction, queue, or release-related module does not automatically make a task High/Critical. Additive/backward-compatible schema, bounded internal configuration, read-only provider/status presentation, or other clearly reversible changes may remain Low/Medium when blast radius, existing-data compatibility, privacy/security impact, external-effect uncertainty, and rollback are correspondingly bounded. High/Critical is reserved for materially dangerous integrity/security/privacy boundaries, uncertain or non-idempotent external effects, destructive/compatibility-sensitive data change, difficult rollback, release/production consequence, or equivalent blast radius. Never downgrade risk merely to avoid a required gate.
+
 High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge unless that exact action was explicitly pre-authorized. The applicable CI tier must pass on the final candidate; merge style never substitutes for review or validation.
+
+When one meaningful High/Critical outcome remains safely reviewable as one candidate and its acceptance/dependency/risk/rollback/validation boundaries are aligned, prefer one stabilized PR and one final independent-review/approval cycle over a sequence of mechanically similar High-risk PRs. Split only when a material boundary or reviewability reason actually requires it; never combine work merely to evade review.
 
 For this repository, required independent review is dispatched only by giving the Owner a ready-to-paste prompt for a fresh ChatGPT chat. Do not request GitHub/Copilot reviewers or dispatch independent review through any other tool, agent, service, or platform. The canonical relay contract is in `CONTRIBUTING.md`.
 
 ## Continuous execution
 
-When the current objective is authorized and a dependency-safe Task Contract is `READY`, the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review, corrections, and selecting or creating the next just-in-time READY task under the active phase.
+When the current objective is authorized and any required Task Contract is `READY` — or bounded FAST work has clear durable authority without a dedicated Task Issue — the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review and corrections. Continue the current meaningful outcome until its acceptance is actually satisfied; then select the next dependency-safe meaningful outcome. Create a new Task Contract only when no current contract properly owns that work and the persistence rules above require one.
 
 Delegate only when there is a concrete execution/review benefit. Worker availability is capacity, not a prerequisite for progress.
 
 A Master/agent stops only for a real boundary: an unresolved product/business-policy or architecture decision that cannot be derived safely, missing credentials/access/capability that blocks the required action, a material risk/scope escalation, destructive or irreversible action, production/deployment action, or an explicit merge/release approval gate. Historical Issue comments or handoff/checkpoint instructions that conflict with the current Program/Phase state are context only and must not create a new pause unless the live authoritative Issue still marks that gate active.
 
-Owner approval requirements in this repository are action-scoped. Unless an Issue explicitly says otherwise, an approval required **before merge/release/destructive action** does not block reversible implementation, testing, review preparation, or continuation to the next READY task.
+Owner approval requirements in this repository are action-scoped. Unless an Issue explicitly says otherwise, an approval required **before merge/release/destructive action** does not block reversible implementation, testing, review preparation, or continuation to other dependency-safe executable work.
 
 ## Scope, architecture, and correctness
 
-Work from the owning Issue and preserve accepted behavior outside scope.
+Work from the owning Task Issue when one is required/present; otherwise work from the existing requirement/Phase/Program authority that owns the bounded FAST outcome. Preserve accepted behavior outside scope.
 
 The architecture is a modular monolith optimized for future change:
 
@@ -122,14 +134,14 @@ Use prepared ORM/query-builder paths, validation, output escaping, least privile
 
 For every change:
 
-1. read the task Issue and only the canonical docs relevant to the decision;
+1. read the owning Task Issue when one is required/present, otherwise the existing requirement/Phase/Program authority, plus only the canonical docs relevant to the decision;
 2. inspect current implementation/tests before adding a concept;
-3. make the smallest reliable change;
+3. make the smallest reliable change **inside the accepted meaningful outcome**; do not use "smallest change" as a reason to split one coherent contract into seam-sized Issues/PRs;
 4. add behavior-focused success/failure/security/concurrency tests only where they provide signal;
 5. run the applicable checks from `docs/06-test-strategy.md` through a supported execution path from `docs/development/execution-infrastructure.md`;
 6. never weaken checks to manufacture a pass;
 7. keep live progress in GitHub, not new handoff/status/evidence/infrastructure-inventory documents;
-8. capture future-useful follow-up work as an actionable Issue rather than burying it in completion prose;
+8. reuse an existing parent/backlog authority for follow-up when it already fits; create a separate follow-up Issue only when the work is distinct, actionable, likely to be executed, and benefits from independent tracking — do not manufacture Issues for cosmetic/speculative/duplicate cleanup;
 9. verify the live GitHub object/ref after every repository mutation.
 
 ## CI
@@ -152,6 +164,8 @@ Reuse green evidence when the tested resulting tree has not materially changed. 
 Documentation topology and ownership are canonical in `docs/index.md`. One kind of durable truth has one owner; other files link to it instead of copying it.
 
 Do not create per-task handoff, overlay, current-state, risk, traceability, infrastructure-inventory, or evidence documents. Dynamic task/runner/CI state belongs in GitHub and operational systems; task history belongs in commits, PRs, Issues, reviews, and CI.
+
+Native Git/PR/check state owns exact commit and CI identities. Do not post a checkpoint comment for every pushed SHA, superseded CI run, self-review correction, or routine readiness refresh. Add/update durable GitHub prose only when it records a material contract/cutline change, blocker/decision, review result that must be reconciled, approval boundary, explicit pause/handoff, or a concise recovery summary that cannot be inferred from the owning PR/Issue/checks.
 
 `evidence/` is reserved for release-candidate/release records that have a real retention need.
 
