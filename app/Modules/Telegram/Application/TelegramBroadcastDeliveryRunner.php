@@ -371,7 +371,13 @@ final readonly class TelegramBroadcastDeliveryRunner
                 ->where('public_id', $claim->campaignPublicId)
                 ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
-                ->first(['id', 'state']);
+                ->first([
+                    'id',
+                    'public_id',
+                    'broadcast_message_version_id',
+                    'requested_by_administrator_id',
+                    'state',
+                ]);
             if ($campaign === null) {
                 throw new RuntimeException('Broadcast campaign disappeared before source provider boundary.');
             }
@@ -813,6 +819,8 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'recipient.delivery_state',
                     'recipient.delivery_operation_public_id',
                     'campaign.public_id as campaign_public_id',
+                    'campaign.state as campaign_state',
+                    'campaign.state_version as campaign_state_version',
                 ]);
             if ($recipient === null || $recipient->delivery_operation_public_id === null) {
                 return false;
@@ -823,6 +831,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                 ->where('public_id', (string) $recipient->delivery_operation_public_id)
                 ->first([
                     'state',
+                    'outbox_event_id',
                     'telegram_message_id',
                     'result_code',
                 ]);
@@ -841,6 +850,16 @@ final readonly class TelegramBroadcastDeliveryRunner
 
             $operationState = TelegramDeliveryOperationState::tryFrom((string) $operation->state)
                 ?? throw new RuntimeException('Broadcast linked Telegram delivery state is invalid.');
+
+            if ($operationState === TelegramDeliveryOperationState::Prepared
+                && $this->outboxRequiresReview($connection, (string) $operation->outbox_event_id)
+            ) {
+                return $this->reconcilePreEffectReview(
+                    $connection,
+                    $recipient,
+                    $message,
+                );
+            }
 
             if (in_array($operationState, [
                 TelegramDeliveryOperationState::Prepared,
@@ -871,9 +890,12 @@ final readonly class TelegramBroadcastDeliveryRunner
                     null,
                     $this->resultCode($operation->result_code, 'telegram_delivery_review_required'),
                 ],
-                TelegramDeliveryOperationState::FailedFinal => $this->failedFinalLinkedOutcome(
-                    $operation->result_code,
-                ),
+                TelegramDeliveryOperationState::FailedFinal => [
+                    'failed',
+                    'failed_permanent',
+                    null,
+                    $this->resultCode($operation->result_code, 'telegram_delivery_failed_final'),
+                ],
                 TelegramDeliveryOperationState::Uncertain => [
                     'uncertain',
                     'uncertain',
@@ -918,29 +940,180 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $changed;
     }
 
-    /**
-     * @return array{0:string,1:string,2:null,3:?string}
-     */
-    private function failedFinalLinkedOutcome(mixed $resultCode): array
+    private function outboxRequiresReview(Connection $connection, string $outboxEventId): bool
     {
-        if ($resultCode === TelegramBroadcastDeliveryEffectGuard::PAUSED_BEFORE_EFFECT) {
-            return ['retryable', 'queued', null, null];
-        }
-        if ($resultCode === TelegramBroadcastDeliveryEffectGuard::CANCELLED_BEFORE_EFFECT) {
-            return [
-                'skipped',
-                'skipped',
-                null,
-                TelegramBroadcastDeliveryEffectGuard::CANCELLED_BEFORE_EFFECT,
-            ];
+        return $connection->table('outbox_messages')
+            ->where('id', $outboxEventId)
+            ->whereNull('processed_at')
+            ->where('dispatch_state', 'review_required')
+            ->exists();
+    }
+
+    /**
+     * @param object{
+     *     id:int|string,
+     *     broadcast_campaign_id:int|string,
+     *     delivery_state:string,
+     *     delivery_operation_public_id:string,
+     *     campaign_public_id:string,
+     *     campaign_state:string,
+     *     campaign_state_version:int|string
+     * } $recipient
+     * @param object{
+     *     id:int|string,
+     *     public_id:string,
+     *     broadcast_message_version_id:int|string,
+     *     requested_by_administrator_id:int|string|null,
+     *     state:string
+     * } $message
+     */
+    private function reconcilePreEffectReview(
+        Connection $connection,
+        object $recipient,
+        object $message,
+    ): bool {
+        if ((string) $recipient->delivery_state !== 'sending'
+            || ! in_array((string) $message->state, ['prepared', 'queued'], true)
+        ) {
+            return false;
         }
 
-        return [
-            'failed',
-            'failed_permanent',
-            null,
-            $this->resultCode($resultCode, 'telegram_delivery_failed_final'),
-        ];
+        $campaignState = TelegramBroadcastCampaignState::tryFrom((string) $recipient->campaign_state)
+            ?? throw new RuntimeException('Broadcast campaign state is invalid during pre-effect reconciliation.');
+        $administratorId = $this->positiveNullableInt(
+            $message->requested_by_administrator_id,
+            'Broadcast delivery administrator ID',
+        );
+        $authorizationLost = false;
+        if ($campaignState === TelegramBroadcastCampaignState::Active) {
+            if ($administratorId === null) {
+                $authorizationLost = true;
+            } else {
+                try {
+                    $this->administrators->authorize(
+                        $administratorId,
+                        TelegramBroadcastCampaignService::PERMISSION,
+                    );
+                } catch (AuthorizationException) {
+                    $authorizationLost = true;
+                }
+            }
+        }
+
+        if ($authorizationLost) {
+            $version = $this->positiveInt(
+                $recipient->campaign_state_version,
+                'Broadcast campaign state version',
+            );
+            $updated = $connection->table('broadcast_campaigns')
+                ->where('id', (int) $recipient->broadcast_campaign_id)
+                ->where('state', TelegramBroadcastCampaignState::Active->value)
+                ->where('state_version', $version)
+                ->update([
+                    'state' => TelegramBroadcastCampaignState::Paused->value,
+                    'state_version' => $version + 1,
+                    'updated_at' => $this->timestamp(),
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Broadcast authorization-loss pause transition was lost.');
+            }
+            $campaignState = TelegramBroadcastCampaignState::Paused;
+        }
+
+        if ($campaignState === TelegramBroadcastCampaignState::Paused) {
+            $now = $this->timestamp();
+            $replacementPublicId = (string) Str::ulid();
+            $connection->table('broadcast_recipient_messages')->insert([
+                'public_id' => $replacementPublicId,
+                'broadcast_recipient_id' => (int) $recipient->id,
+                'broadcast_message_version_id' => (int) $message->broadcast_message_version_id,
+                'action' => 'retry',
+                'operation_group_public_id' => null,
+                'request_key_hash' => hash(
+                    'sha256',
+                    'telegram-broadcast-pre-effect-resume-v1|'.$message->public_id,
+                ),
+                'state' => 'prepared',
+                'delivery_operation_public_id' => null,
+                'telegram_message_id' => null,
+                'result_code' => null,
+                'retry_not_before' => null,
+                'provider_boundary_started_at' => null,
+                'provider_boundary_finished_at' => null,
+                'requested_by_administrator_id' => $administratorId,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $connection->table('broadcast_recipient_messages')
+                ->where('id', (int) $message->id)
+                ->update([
+                    'state' => 'failed',
+                    'result_code' => $authorizationLost
+                        ? TelegramBroadcastDeliveryEffectGuard::AUTHORIZATION_LOST
+                        : TelegramBroadcastDeliveryEffectGuard::PAUSED_BEFORE_EFFECT,
+                    'retry_not_before' => null,
+                    'updated_at' => $now,
+                ]);
+            $connection->table('broadcast_recipients')
+                ->where('id', (int) $recipient->id)
+                ->update([
+                    'delivery_state' => 'queued',
+                    'delivery_operation_public_id' => null,
+                    'failure_code' => null,
+                    'retry_not_before' => null,
+                    'claim_token_hash' => null,
+                    'claim_expires_at' => null,
+                    'updated_at' => $now,
+                ]);
+
+            return true;
+        }
+
+        if ($campaignState === TelegramBroadcastCampaignState::Cancelled) {
+            $now = $this->timestamp();
+            $connection->table('broadcast_recipient_messages')
+                ->where('id', (int) $message->id)
+                ->update([
+                    'state' => 'skipped',
+                    'result_code' => TelegramBroadcastDeliveryEffectGuard::CANCELLED_BEFORE_EFFECT,
+                    'retry_not_before' => null,
+                    'updated_at' => $now,
+                ]);
+            $connection->table('broadcast_recipients')
+                ->where('id', (int) $recipient->id)
+                ->update([
+                    'delivery_state' => 'skipped',
+                    'failure_code' => TelegramBroadcastDeliveryEffectGuard::CANCELLED_BEFORE_EFFECT,
+                    'retry_not_before' => null,
+                    'claim_token_hash' => null,
+                    'claim_expires_at' => null,
+                    'updated_at' => $now,
+                ]);
+
+            return true;
+        }
+
+        $now = $this->timestamp();
+        $connection->table('broadcast_recipient_messages')
+            ->where('id', (int) $message->id)
+            ->update([
+                'state' => 'failed',
+                'result_code' => 'telegram_broadcast_pre_effect_review_required',
+                'retry_not_before' => null,
+                'updated_at' => $now,
+            ]);
+        $connection->table('broadcast_recipients')
+            ->where('id', (int) $recipient->id)
+            ->update([
+                'delivery_state' => 'failed_permanent',
+                'failure_code' => 'telegram_broadcast_pre_effect_review_required',
+                'retry_not_before' => null,
+                'claim_token_hash' => null,
+                'claim_expires_at' => null,
+                'updated_at' => $now,
+            ]);
+
+        return true;
     }
 
     private function pauseForSafety(TelegramBroadcastRecipientClaim $claim, string $resultCode): void
@@ -1325,6 +1498,15 @@ final readonly class TelegramBroadcastDeliveryRunner
     private function requiredMessageId(mixed $value): int
     {
         return $this->positiveInt($value, 'Broadcast Telegram message ID');
+    }
+
+    private function positiveNullableInt(mixed $value, string $label): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        return $this->positiveInt($value, $label);
     }
 
     private function positiveInt(mixed $value, string $label): int
