@@ -129,10 +129,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         }
 
         if ($mode === TelegramBroadcastMessageMode::NewText
-            && in_array($action, [
-                TelegramBroadcastLifecycleAction::Edit,
-                TelegramBroadcastLifecycleAction::Buttons,
-            ], true)
+            && $action === TelegramBroadcastLifecycleAction::Edit
         ) {
             $this->queueDurableTextEdit($operationPublicId, $context);
 
@@ -248,8 +245,11 @@ final readonly class TelegramBroadcastLifecycleRunner
         array $context,
         TelegramBroadcastMessageMode $mode,
     ): TelegramBroadcastLifecycleMutationRequest {
-        if ($mode !== TelegramBroadcastMessageMode::Copy) {
-            throw new DomainException('Broadcast direct button mutation is limited to copied messages.');
+        if (! in_array($mode, [
+            TelegramBroadcastMessageMode::NewText,
+            TelegramBroadcastMessageMode::Copy,
+        ], true)) {
+            throw new DomainException('Broadcast direct button mutation is limited to editable text/copy messages.');
         }
 
         return TelegramBroadcastLifecycleMutationRequest::buttons(
