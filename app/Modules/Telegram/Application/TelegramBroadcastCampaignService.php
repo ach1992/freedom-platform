@@ -20,6 +20,22 @@ use Illuminate\Support\Str;
 use RuntimeException;
 use SensitiveParameter;
 
+/**
+ * @phpstan-type CampaignRow object{
+ *     id:int|string,
+ *     public_id:string,
+ *     state:string,
+ *     state_version:int|string,
+ *     current_message_version:int|string,
+ *     current_audience_version:int|string,
+ *     recipient_count:int|string,
+ *     audience_materialized_at:?string,
+ *     scheduled_at:?string,
+ *     started_at:?string,
+ *     completed_at:?string,
+ *     cancelled_at:?string
+ * }
+ */
 final readonly class TelegramBroadcastCampaignService
 {
     public const PERMISSION = 'telegram.broadcasts.manage';
@@ -701,6 +717,9 @@ final readonly class TelegramBroadcastCampaignService
         return $this->receiptById($connection, $campaignId, true);
     }
 
+    /**
+     * @param array<string,int> $values
+     */
     private function updateDraftVersion(
         Connection $connection,
         int $campaignId,
@@ -738,6 +757,7 @@ final readonly class TelegramBroadcastCampaignService
         }
     }
 
+    /** @param CampaignRow $campaign */
     private function assertDraftMutable(object $campaign): void
     {
         if ((string) $campaign->state !== TelegramBroadcastCampaignState::Draft->value
@@ -747,6 +767,7 @@ final readonly class TelegramBroadcastCampaignService
         }
     }
 
+    /** @return CampaignRow */
     private function lockedCampaign(Connection $connection, string $publicId): object
     {
         $campaign = $connection->table('broadcast_campaigns')
@@ -831,6 +852,7 @@ final readonly class TelegramBroadcastCampaignService
         return $state;
     }
 
+    /** @param CampaignRow $campaign */
     private function assertExpectedStateVersion(object $campaign, int $expectedStateVersion): void
     {
         if ((int) $campaign->state_version !== $expectedStateVersion) {
