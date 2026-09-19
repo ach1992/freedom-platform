@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
+use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use DomainException;
 use JsonException;
 use SensitiveParameter;
@@ -17,7 +18,9 @@ final readonly class TelegramBroadcastMessageDefinition
 
     private function __construct(
         public TelegramBroadcastMessageMode $mode,
+        public ?TelegramBroadcastSourceKind $sourceKind,
         public ?string $text,
+        public ?string $captionOverride,
         public ?int $sourceChatId,
         public ?int $sourceMessageId,
         public ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
@@ -29,18 +32,34 @@ final readonly class TelegramBroadcastMessageDefinition
                 || strlen($text) > self::MAX_TEXT_BYTES
                 || ! mb_check_encoding($text, 'UTF-8')
                 || str_contains($text, "\0")
+                || $sourceKind !== null
+                || $captionOverride !== null
                 || $sourceChatId !== null
                 || $sourceMessageId !== null
             ) {
                 throw new DomainException('Broadcast text content is invalid.');
             }
-        } elseif ($text !== null
+        } elseif ($sourceKind === null
+            || $text !== null
             || $sourceChatId === null
             || $sourceChatId < 1
             || $sourceMessageId === null
             || $sourceMessageId < 1
         ) {
             throw new DomainException('Broadcast source-message content is invalid.');
+        }
+
+        if ($captionOverride !== null) {
+            if ($mode !== TelegramBroadcastMessageMode::Copy
+                || $sourceKind === null
+                || ! $sourceKind->supportsCaption()
+                || mb_strlen($captionOverride) > 1024
+                || strlen($captionOverride) > 4096
+                || ! mb_check_encoding($captionOverride, 'UTF-8')
+                || str_contains($captionOverride, "\0")
+            ) {
+                throw new DomainException('Broadcast caption override is invalid.');
+            }
         }
 
         if (! $mode->supportsAuthoredInlineKeyboard() && $inlineKeyboard !== null) {
@@ -58,7 +77,9 @@ final readonly class TelegramBroadcastMessageDefinition
     ): self {
         return new self(
             TelegramBroadcastMessageMode::NewText,
+            null,
             $text,
+            null,
             null,
             null,
             $inlineKeyboard,
@@ -68,21 +89,30 @@ final readonly class TelegramBroadcastMessageDefinition
     public static function copy(
         int $sourceChatId,
         int $sourceMessageId,
+        TelegramBroadcastSourceKind $sourceKind,
+        ?string $captionOverride = null,
         ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): self {
         return new self(
             TelegramBroadcastMessageMode::Copy,
+            $sourceKind,
             null,
+            $captionOverride,
             $sourceChatId,
             $sourceMessageId,
             $inlineKeyboard,
         );
     }
 
-    public static function forward(int $sourceChatId, int $sourceMessageId): self
-    {
+    public static function forward(
+        int $sourceChatId,
+        int $sourceMessageId,
+        TelegramBroadcastSourceKind $sourceKind,
+    ): self {
         return new self(
             TelegramBroadcastMessageMode::Forward,
+            $sourceKind,
+            null,
             null,
             $sourceChatId,
             $sourceMessageId,
@@ -95,7 +125,9 @@ final readonly class TelegramBroadcastMessageDefinition
         try {
             $json = json_encode([
                 'mode' => $this->mode->value,
+                'source_kind' => $this->sourceKind?->value,
                 'text' => $this->text,
+                'caption_override' => $this->captionOverride,
                 'source_chat_id' => $this->sourceChatId,
                 'source_message_id' => $this->sourceMessageId,
                 'inline_keyboard_hash' => $this->inlineKeyboard?->hash(),
