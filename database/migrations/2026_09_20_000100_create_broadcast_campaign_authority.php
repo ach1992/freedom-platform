@@ -238,7 +238,7 @@ ALTER TABLE broadcast_message_versions
         inline_keyboard_snapshot IS NULL
         OR (
             JSON_VALID(inline_keyboard_snapshot)
-            AND JSON_TYPE(inline_keyboard_snapshot) = 'ARRAY'
+            AND JSON_TYPE(inline_keyboard_snapshot) = 'OBJECT'
             AND OCTET_LENGTH(inline_keyboard_snapshot) <= 16384
         )
     ),
