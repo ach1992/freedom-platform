@@ -74,6 +74,18 @@ final readonly class TelegramBroadcastOwnerTestService
                     return (string) $existing->public_id;
                 }
 
+                $retryWindowActive = $connection->table('broadcast_campaign_tests')
+                    ->where('broadcast_campaign_id', $context['campaign_id'])
+                    ->where('broadcast_message_version_id', $context['message_version_id'])
+                    ->where('telegram_account_id', $context['telegram_account_id'])
+                    ->where('state', 'failed')
+                    ->whereNotNull('retry_not_before')
+                    ->where('retry_not_before', '>', $this->timestamp())
+                    ->exists();
+                if ($retryWindowActive) {
+                    throw new DomainException('Broadcast Owner-test provider retry window has not elapsed.');
+                }
+
                 $publicId = (string) Str::ulid();
                 $now = $this->timestamp();
                 $connection->table('broadcast_campaign_tests')->insert([
@@ -87,6 +99,7 @@ final readonly class TelegramBroadcastOwnerTestService
                     'delivery_operation_public_id' => null,
                     'telegram_message_id' => null,
                     'result_code' => null,
+                    'retry_not_before' => null,
                     'provider_boundary_started_at' => null,
                     'provider_boundary_finished_at' => null,
                     'created_at' => $now,
@@ -234,6 +247,7 @@ final readonly class TelegramBroadcastOwnerTestService
                         ->update([
                             'state' => 'uncertain',
                             'result_code' => 'broadcast_owner_test_interrupted_source_effect',
+                            'retry_not_before' => null,
                             'provider_boundary_finished_at' => $now,
                             'updated_at' => $now,
                         ]);
@@ -246,6 +260,7 @@ final readonly class TelegramBroadcastOwnerTestService
             }
 
             $now = $this->timestamp();
+            $retryNotBefore = $this->retryNotBefore($result);
             $updated = $connection->table('broadcast_campaign_tests')
                 ->where('public_id', $testPublicId)
                 ->where('state', 'prepared')
@@ -316,6 +331,7 @@ final readonly class TelegramBroadcastOwnerTestService
                     'state' => $state,
                     'telegram_message_id' => $messageId,
                     'result_code' => $result->resultCode,
+                    'retry_not_before' => $retryNotBefore,
                     'provider_boundary_finished_at' => $now,
                     'updated_at' => $now,
                 ]);
@@ -441,6 +457,7 @@ final readonly class TelegramBroadcastOwnerTestService
                             'state' => $state,
                             'telegram_message_id' => $messageId,
                             'result_code' => $resultCode,
+                            'retry_not_before' => null,
                             'updated_at' => $this->timestamp(),
                         ]);
                     $row->state = $state;
@@ -614,6 +631,22 @@ final readonly class TelegramBroadcastOwnerTestService
         }
 
         return $keyboard;
+    }
+
+    private function retryNotBefore(TelegramMutationResult $result): ?string
+    {
+        if ($result->outcome !== TelegramMutationOutcome::RetryAfter) {
+            return null;
+        }
+
+        $seconds = $result->retryAfterSeconds;
+        if ($seconds === null) {
+            throw new RuntimeException('Broadcast Owner-test provider retry delay is unavailable.');
+        }
+
+        return $this->clock->now()
+            ->modify('+'.$seconds.' seconds')
+            ->format('Y-m-d H:i:s.u');
     }
 
     private function requestHash(string $requestKey): string
