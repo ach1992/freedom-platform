@@ -94,7 +94,7 @@ Delegate only when there is a concrete execution/review benefit. Worker availabi
 
 A Master/agent stops only for a real boundary: an unresolved product/business-policy or architecture decision that cannot be derived safely, missing credentials/access/capability that blocks the required action, a material risk/scope escalation, destructive or irreversible action, production/deployment action, or an explicit merge/release approval gate. Historical Issue comments or handoff/checkpoint instructions that conflict with the current Program/Phase state are context only and must not create a new pause unless the live authoritative Issue still marks that gate active.
 
-Owner approval requirements in this repository are action-scoped. Unless an Issue explicitly says otherwise, an approval required **before merge/release/destructive action** does not block reversible implementation, testing, review preparation, or continuation to the next READY task.
+Owner approval requirements in this repository are action-scoped. Unless an Issue explicitly says otherwise, an approval required **before merge/release/destructive action** does not block reversible implementation, testing, review preparation, or continuation to other dependency-safe executable work.
 
 ## Scope, architecture, and correctness
 
