@@ -293,6 +293,8 @@ final readonly class TelegramAdministratorDirectMediaMessageService
         string $publicId,
         ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertDirectMessageFacadeCaller();
+
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-media draft is unavailable.');

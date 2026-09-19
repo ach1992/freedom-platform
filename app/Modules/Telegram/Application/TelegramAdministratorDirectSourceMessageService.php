@@ -268,6 +268,8 @@ final readonly class TelegramAdministratorDirectSourceMessageService
         string $publicId,
         ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
+        TelegramSourceMessageDeliveryProvenanceGuard::assertDirectMessageFacadeCaller();
+
         $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
         if ($row === null) {
             throw new DomainException('Telegram administrator direct source-message draft is unavailable.');
@@ -404,6 +406,32 @@ final readonly class TelegramAdministratorDirectSourceMessageService
             throw new RuntimeException('Telegram administrator direct source-message mode is invalid.');
         }
 
+        $actorUserId = $this->actorUserIdForAdministrator($administratorId);
+        $authorizedAdministratorId = $this->administrators->authorizeUser(
+            $actorUserId,
+            TelegramAdministratorDirectMessageService::PERMISSION,
+        );
+        if ($authorizedAdministratorId !== $administratorId) {
+            throw new RuntimeException(
+                'Telegram administrator direct source-message actor changed before provider delivery.',
+            );
+        }
+        $this->assertSourceBoundToActor($actorUserId, (string) $row->bot_id, $draft->sourceChatId);
+        $target = $this->targets->resolve(
+            $actorUserId,
+            (string) $row->bot_id,
+            $this->selectionTokenForStoredTarget(
+                $actorUserId,
+                (string) $row->bot_id,
+                $draft->targetAccountPublicId,
+            ),
+        );
+        $this->assertTargetMatches(
+            $target,
+            $draft->targetAccountPublicId,
+            $draft->targetTelegramUserId,
+        );
+
         return new TelegramResolvedSourceMessagePresentation(
             $mode,
             $draft->sourceChatId,
@@ -538,6 +566,37 @@ final readonly class TelegramAdministratorDirectSourceMessageService
             null,
             $sourceChatId,
             $sourceMessageId,
+        );
+    }
+
+    private function actorUserIdForAdministrator(int $administratorId): int
+    {
+        $actorUserId = $this->database->connection()
+            ->table('administrators')
+            ->where('id', $administratorId)
+            ->value('user_id');
+        if ((! is_int($actorUserId) && ! is_string($actorUserId))
+            || filter_var($actorUserId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
+            throw new DomainException(
+                'Telegram administrator direct source-message actor is unavailable for provider delivery.',
+            );
+        }
+
+        return (int) $actorUserId;
+    }
+
+    private function selectionTokenForStoredTarget(
+        int $actorUserId,
+        string $botId,
+        string $targetAccountPublicId,
+    ): string {
+        return substr(
+            hash(
+                'sha256',
+                "telegram-admin-customer-target-v1:{$actorUserId}:{$botId}:{$targetAccountPublicId}",
+            ),
+            0,
+            40,
         );
     }
 

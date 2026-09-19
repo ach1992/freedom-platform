@@ -24,8 +24,10 @@ use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
+use App\Modules\Telegram\Application\TelegramAdministratorDirectMediaMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageButtonBuilder;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
+use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
@@ -54,6 +56,9 @@ use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDat
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
+use App\Modules\Telegram\Application\TelegramInlineHttpsUrlButton;
+use App\Modules\Telegram\Application\TelegramInlineHttpsUrlPurpose;
+use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
@@ -5086,6 +5091,290 @@ SQL);
         self::assertArrayNotHasKey('callback_data', $providerKeyboard['inline_keyboard'][0][0]);
     }
 
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_source_internal_confirm_cannot_bypass_facade_keyboard_authority(): void
+    {
+        $adminTelegramId = 98155;
+        $targetTelegramId = 888777666575;
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7760,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_source_guard_target',
+            'admin_direct_source_guard',
+        );
+        $directMessages = $this->app->make(TelegramAdministratorDirectMessageService::class);
+        $draft = $directMessages->createSourceMessageDraft(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            TelegramSourceMessageMode::Copy,
+            $adminTelegramId,
+            7767,
+            'direct-source-guard-copy',
+        );
+        $directMessages->acceptConfirmation(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            $draft->publicId,
+        );
+        $unreviewedKeyboard = new TelegramInlineKeyboardSnapshot([[
+            new TelegramInlineHttpsUrlButton(
+                'Pay',
+                'https://payment.zarinpal.com/pg/StartPay/A12345678901234567890',
+                TelegramInlineHttpsUrlPurpose::ZarinpalStartPay,
+            ),
+        ]]);
+
+        try {
+            $this->app->make(TelegramAdministratorDirectSourceMessageService::class)->confirm(
+                $journey['admin_user_id'],
+                '123456789',
+                $journey['selection'],
+                $draft->publicId,
+                $unreviewedKeyboard,
+            );
+            self::fail('Internal source confirmation must not bypass the administrator direct-message facade.');
+        } catch (\LogicException) {
+            self::assertNull(DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', $draft->publicId)
+                ->value('delivery_operation_public_id'));
+            self::assertSame(
+                $journey['target_delivery_count'],
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
+        }
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_source_revalidates_authority_target_and_source_before_provider_effect(): void
+    {
+        $adminTelegramId = 98165;
+        $targetTelegramId = 888777666576;
+        $driftedTargetTelegramId = 888777666676;
+        $driftedAdminTelegramId = 98265;
+        $sender = new TelegramNavigationSourceMessageSender($targetTelegramId, 99203);
+        $this->app->instance(TelegramSourceMessageSender::class, $sender);
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7780,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_source_boundary_target',
+            'admin_direct_source_boundary',
+        );
+        $directMessages = $this->app->make(TelegramAdministratorDirectMessageService::class);
+        $draft = $directMessages->createSourceMessageDraft(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            TelegramSourceMessageMode::Copy,
+            $adminTelegramId,
+            7787,
+            'direct-source-provider-boundary-copy',
+        );
+        $directMessages->acceptConfirmation(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            $draft->publicId,
+        );
+        $receipt = $directMessages->confirm(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            $draft->publicId,
+        );
+        self::assertSame('prepared', $receipt->state->value);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $draft->publicId)
+            ->first(['actor_administrator_id', 'delivery_operation_public_id', 'correlation_id']);
+        self::assertNotNull($direct);
+        self::assertIsString($direct->delivery_operation_public_id);
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['public_id', 'outbox_event_id']);
+        self::assertNotNull($operation);
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+
+        $assignment = DB::table('administrator_role_assignments')
+            ->where('administrator_id', (int) $direct->actor_administrator_id)
+            ->whereNull('revoked_at')
+            ->first(['id']);
+        self::assertNotNull($assignment);
+        self::assertSame(1, DB::table('administrator_role_assignments')
+            ->where('id', (int) $assignment->id)
+            ->update(['revoked_at' => now('UTC'), 'updated_at' => now('UTC')]));
+        try {
+            $executor->execute(
+                (string) $operation->public_id,
+                (string) $operation->outbox_event_id,
+                (string) $direct->correlation_id,
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+            );
+            self::fail('Revoked direct-message authority must block a queued source-message provider attempt.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, $sender->attempts);
+        }
+        self::assertSame(1, DB::table('administrator_role_assignments')
+            ->where('id', (int) $assignment->id)
+            ->update(['revoked_at' => null, 'updated_at' => now('UTC')]));
+
+        $targetAccountId = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $targetTelegramId)
+            ->value('id');
+        self::assertIsNumeric($targetAccountId);
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $targetSession = $sessions->activeForAccount((int) $targetAccountId);
+        if ($targetSession !== null) {
+            $sessions->cancel(
+                $targetSession->publicId,
+                $targetSession->version,
+                'direct-source-provider-target-drift:'.(string) $targetAccountId,
+            );
+        }
+        self::assertSame(1, DB::table('telegram_accounts')
+            ->where('id', (int) $targetAccountId)
+            ->update(['telegram_user_id' => $driftedTargetTelegramId, 'updated_at' => now('UTC')]));
+        try {
+            $executor->execute(
+                (string) $operation->public_id,
+                (string) $operation->outbox_event_id,
+                (string) $direct->correlation_id,
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+            );
+            self::fail('Target drift must block a queued source-message provider attempt.');
+        } catch (DomainException) {
+            self::assertSame(0, $sender->attempts);
+        }
+        self::assertSame(1, DB::table('telegram_accounts')
+            ->where('id', (int) $targetAccountId)
+            ->update(['telegram_user_id' => $targetTelegramId, 'updated_at' => now('UTC')]));
+
+        $adminSession = $sessions->activeForAccount($journey['admin_account_id']);
+        if ($adminSession !== null) {
+            $sessions->cancel(
+                $adminSession->publicId,
+                $adminSession->version,
+                'direct-source-provider-actor-drift:'.(string) $journey['admin_account_id'],
+            );
+        }
+        self::assertSame(1, DB::table('telegram_accounts')
+            ->where('id', $journey['admin_account_id'])
+            ->update(['telegram_user_id' => $driftedAdminTelegramId, 'updated_at' => now('UTC')]));
+        try {
+            $executor->execute(
+                (string) $operation->public_id,
+                (string) $operation->outbox_event_id,
+                (string) $direct->correlation_id,
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+            );
+            self::fail('Source/actor binding drift must block a queued source-message provider attempt.');
+        } catch (DomainException) {
+            self::assertSame(0, $sender->attempts);
+        }
+        self::assertSame(1, DB::table('telegram_accounts')
+            ->where('id', $journey['admin_account_id'])
+            ->update(['telegram_user_id' => $adminTelegramId, 'updated_at' => now('UTC')]));
+
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+
+        self::assertSame('succeeded', $first->state->value);
+        self::assertSame('succeeded', $second->state->value);
+        self::assertSame(1, $sender->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => (string) $operation->public_id,
+            'state' => 'succeeded',
+            'provider_attempts' => 1,
+        ]);
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_source_uncertain_result_is_not_revalidated_into_a_second_provider_attempt(): void
+    {
+        $adminTelegramId = 98175;
+        $targetTelegramId = 888777666577;
+        $sender = new TelegramNavigationSourceMessageSender($targetTelegramId, 99204);
+        $sender->uncertain = true;
+        $this->app->instance(TelegramSourceMessageSender::class, $sender);
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7800,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_source_uncertain_target',
+            'admin_direct_source_uncertain',
+        );
+        $directMessages = $this->app->make(TelegramAdministratorDirectMessageService::class);
+        $draft = $directMessages->createSourceMessageDraft(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            TelegramSourceMessageMode::Copy,
+            $adminTelegramId,
+            7807,
+            'direct-source-uncertain-copy',
+        );
+        $directMessages->acceptConfirmation(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            $draft->publicId,
+        );
+        $receipt = $directMessages->confirm(
+            $journey['admin_user_id'],
+            '123456789',
+            $journey['selection'],
+            $draft->publicId,
+        );
+        self::assertSame('prepared', $receipt->state->value);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $draft->publicId)
+            ->first(['delivery_operation_public_id', 'correlation_id']);
+        self::assertNotNull($direct);
+        self::assertIsString($direct->delivery_operation_public_id);
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['public_id', 'outbox_event_id']);
+        self::assertNotNull($operation);
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE,
+        );
+
+        self::assertSame('uncertain', $first->state->value);
+        self::assertSame('uncertain', $second->state->value);
+        self::assertSame(1, $sender->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => (string) $operation->public_id,
+            'state' => 'uncertain',
+            'provider_attempts' => 1,
+            'result_code' => 'telegram_source_message_transport_uncertain',
+        ]);
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 SEC-009 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_photo_is_private_confirmed_and_exactly_once_at_provider_boundary(): void
     {
@@ -5294,6 +5583,32 @@ SQL);
         $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
         foreach ([$fileId, $fileUniqueId, $caption, base64_encode($png)] as $secret) {
             self::assertStringNotContainsString($secret, $durableBeforeConfirm);
+        }
+
+        $unreviewedKeyboard = new TelegramInlineKeyboardSnapshot([[
+            new TelegramInlineHttpsUrlButton(
+                'Pay',
+                'https://payment.zarinpal.com/pg/StartPay/A12345678901234567890',
+                TelegramInlineHttpsUrlPurpose::ZarinpalStartPay,
+            ),
+        ]]);
+        try {
+            $this->app->make(TelegramAdministratorDirectMediaMessageService::class)->confirm(
+                $adminUserId,
+                '123456789',
+                $selection,
+                (string) $direct->public_id,
+                $unreviewedKeyboard,
+            );
+            self::fail('Internal media confirmation must not bypass the administrator direct-message facade.');
+        } catch (\LogicException) {
+            self::assertNull(DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->value('delivery_operation_public_id'));
+            self::assertSame(
+                $targetDeliveryCountBefore,
+                DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+            );
         }
 
         $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', $adminAccountId);

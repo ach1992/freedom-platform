@@ -1399,6 +1399,34 @@ PHP);
         self::assertSame([], $result['violations']);
     }
 
+    public function test_administrator_direct_source_and_media_services_are_not_general_application_authorities(): void
+    {
+        $path = 'app/Modules/Telegram/Application/UnsafeAdministratorDirectDeliveryBypass.php';
+        $this->write($path, <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final readonly class UnsafeAdministratorDirectDeliveryBypass
+{
+    public function __construct(
+        private TelegramAdministratorDirectSourceMessageService $sourceMessages,
+        private TelegramAdministratorDirectMediaMessageService $mediaMessages,
+    ) {}
+}
+PHP);
+
+        $result = $this->checker()->check();
+        $violations = implode("\n", $result['violations']);
+
+        self::assertStringContainsString(
+            'may not reference internal administrator direct-delivery authority TelegramAdministratorDirectSourceMessageService',
+            $violations,
+        );
+        self::assertStringContainsString(
+            'may not reference internal administrator direct-delivery authority TelegramAdministratorDirectMediaMessageService',
+            $violations,
+        );
+    }
+
     public function test_source_message_delivery_trampolines_are_internal_not_generic_reviewed_sources(): void
     {
         $this->write('app/Modules/Telegram/Application/TelegramAdministratorDirectSourceMessageService.php', <<<'PHP'
