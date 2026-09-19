@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Shared\Application\Clock;
@@ -36,6 +37,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
         private Clock $clock,
         private WalletSelfBalanceService $wallets,
         private TelegramMembershipLookup $membership,
+        private TelegramDeliveryRuntime $runtime,
     ) {}
 
     /** @requirement COM-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 */
@@ -208,6 +210,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
             ]);
 
         if ($row === null
+            || ! hash_equals((string) $row->bot_id, $this->runtime->botId())
             || (int) $row->current_audience_version !== $expectedAudienceVersion
             || (int) $row->audience_version !== $expectedAudienceVersion
         ) {
