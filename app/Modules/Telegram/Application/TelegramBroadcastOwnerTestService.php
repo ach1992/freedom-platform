@@ -260,7 +260,6 @@ final readonly class TelegramBroadcastOwnerTestService
             }
 
             $now = $this->timestamp();
-            $retryNotBefore = $this->retryNotBefore($result);
             $updated = $connection->table('broadcast_campaign_tests')
                 ->where('public_id', $testPublicId)
                 ->where('state', 'prepared')
@@ -324,6 +323,7 @@ final readonly class TelegramBroadcastOwnerTestService
                 TelegramMutationOutcome::DefinitiveFailure => ['failed', null],
             };
             $now = $this->timestamp();
+            $retryNotBefore = $this->retryNotBefore($result);
             $updated = $connection->table('broadcast_campaign_tests')
                 ->where('public_id', $testPublicId)
                 ->where('state', 'sending')
