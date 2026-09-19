@@ -125,6 +125,27 @@ final class TelegramPrivateMediaMessageSenderTest extends TestCase
         self::assertStringContainsString('true', $requests[1][0]->body());
     }
 
+    public function test_oversized_photo_cannot_reach_the_provider_boundary(): void
+    {
+        Http::fake();
+        $bytes = str_repeat('x', 10_000_001);
+
+        try {
+            new TelegramResolvedPrivateMediaPresentation(
+                'photo',
+                $bytes,
+                'admin-direct-photo.png',
+                '',
+                'image/png',
+                strlen($bytes),
+                hash('sha256', $bytes),
+            );
+            self::fail('A photo above Telegram sendPhoto multipart limit must fail before provider delivery.');
+        } catch (\InvalidArgumentException) {
+            Http::assertNothingSent();
+        }
+    }
+
     public function test_success_for_a_different_recipient_is_uncertain(): void
     {
         Http::fake([
