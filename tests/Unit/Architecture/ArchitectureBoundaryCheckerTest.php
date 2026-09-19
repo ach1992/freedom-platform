@@ -1353,6 +1353,25 @@ PHP);
         );
     }
 
+    public function test_private_media_delivery_provenance_guard_is_an_exact_internal_executor_seam(): void
+    {
+        $this->write('app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php', <<<'PHP'
+<?php
+namespace App\Modules\Telegram\Application;
+final class TelegramPrivateMediaDeliveryProvenanceGuard
+{
+    public function executorClass(): string
+    {
+        return TelegramDeliveryOperationExecutor::class;
+    }
+}
+PHP);
+
+        $result = $this->checker()->check();
+
+        self::assertSame([], $result['violations']);
+    }
+
     public function test_confidential_telegram_source_allowlist_rejects_non_telegram_and_stale_entries(): void
     {
         $result = $this->checker([], [], [
