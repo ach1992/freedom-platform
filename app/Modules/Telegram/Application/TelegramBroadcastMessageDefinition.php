@@ -46,6 +46,10 @@ final readonly class TelegramBroadcastMessageDefinition
         if (! $mode->supportsAuthoredInlineKeyboard() && $inlineKeyboard !== null) {
             throw new DomainException('Forwarded broadcast messages cannot add an authored inline keyboard.');
         }
+
+        if ($inlineKeyboard !== null && $inlineKeyboard->callbackPublicIds() !== []) {
+            throw new DomainException('Broadcast inline keyboards require recipient-independent HTTPS URL buttons.');
+        }
     }
 
     public static function newText(
