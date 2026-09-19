@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
@@ -24,6 +25,7 @@ final readonly class TelegramBroadcastLifecycleService
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
         private Clock $clock,
+        private TelegramDeliveryRuntime $runtime,
     ) {}
 
     /** @requirement COM-003 ACL-002 DAT-002 DAT-003 SEC-002 QUA-001 QUA-004 */
@@ -51,6 +53,7 @@ final readonly class TelegramBroadcastLifecycleService
             /** @var object{id:int|string,state:string,state_version:int|string,current_message_version:int|string}|null $campaign */
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first([
                     'id',
@@ -186,6 +189,7 @@ final readonly class TelegramBroadcastLifecycleService
             /** @var object{id:int|string,state:string,state_version:int|string,current_message_version:int|string}|null $campaign */
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first([
                     'id',
@@ -331,6 +335,7 @@ final readonly class TelegramBroadcastLifecycleService
             ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
             ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
             ->where('campaign.public_id', $campaignPublicId)
+            ->where('campaign.bot_id', $this->runtime->botId())
             ->where('operation.operation_group_public_id', $groupPublicId)
             ->selectRaw('operation.action, operation.state, COUNT(*) AS aggregate_count')
             ->groupBy('operation.action', 'operation.state')
