@@ -596,6 +596,7 @@ final readonly class TelegramAdministratorDirectMediaMessageService
             && ($contentType === 'photo' || $caption === '');
     }
 
+    /** @param DirectMediaRow $row */
     private function assertStoredActor(object $row, int $actorUserId): int
     {
         if ($actorUserId < 1) {
