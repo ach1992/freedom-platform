@@ -7,8 +7,8 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 1. Read `AGENTS.md`, Program Issue `#3`, and the owning Task Issue when one is required/present. For a bounded FAST-path change without a dedicated Task Issue, identify the existing requirement/Phase/Program authority in the PR.
 2. Confirm the relevant parent phase/dependencies and inspect the current `main` head from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
-4. Open the PR against `main`.
-5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
+4. Open the PR against `main`. For substantive multi-commit work, open it as Draft by default.
+5. Keep the PR Draft while implementation/self-review corrections are still expected. **Ready means the current candidate is intended to consume acceptance CI.** Mark it Ready only after the implementation has converged and focused validation/self-review make a merge-gate run useful. If material correction work appears after Ready, convert back to Draft before further correction pushes; do not leave a changing candidate Ready and repeatedly pay for superseded broad CI.
 6. Do not merge your own Worker PR.
 
 `main` is the default and primary integration branch. Normal product work reaches it through reviewed PRs rather than direct pushes. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
@@ -39,6 +39,8 @@ Task-contract persistence is owned by `AGENTS.md`. Use `.github/ISSUE_TEMPLATE/t
 
 When a Task Issue exists, keep it limited to the implementation/review facts required by `AGENTS.md`. Add security/data/financial/provider/schema/runtime/compatibility/protected-area detail only when it matters. Do not create fields or documents merely to say `N/A`, repeat GitHub state, or preserve test logs already available from CI.
 
+A Task Issue represents its **whole meaningful outcome**, not merely the first PR or first technical seam. Keep it open across cohesive partial PRs when the acceptance/dependency/risk/rollback/validation boundary remains the same. Use `Refs #...` for a partial PR and `Closes #...` only when that PR actually satisfies the full Task acceptance. Prefer updating the existing contract/revision for bounded in-outcome refinement over closing it and creating a mechanically similar sibling.
+
 After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Keep exact commit/run/review receipts in GitHub comments, PRs, and CI rather than copying them into repository status documents; an `Initial state` field remains historical contract input and does not need rewriting.
 
 Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
@@ -51,11 +53,12 @@ High/Critical work involving financial integrity, authorization, security contro
 
 When independent review is required, the permitted project dispatch mechanism is an **Owner-relayed fresh ChatGPT chat**.
 
-1. The authoring Master completes applicable exact-head validation and effective-diff self-review, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt.
+1. The authoring Master first lets implementation and effective-diff self-review converge, completes the applicable exact-head validation for that candidate, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt. Do not request independent review while planned implementation/self-review correction remains.
 2. The prompt identifies the repository/PR/change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and validation evidence tied to that exact candidate.
 3. The Owner opens a new ChatGPT chat and pastes the prompt. That fresh chat reviews read-only and returns the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
 4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or integrating.
 5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review; generate a new exact review packet rather than reusing a stale verdict.
+6. For remediation after `CHANGES_REQUIRED`, the fresh packet identifies the prior reviewed candidate and the exact delta to the corrected candidate. The new verdict always binds the current exact candidate, but unchanged prior analysis may be reused when its assumptions remain valid; the reviewer widens back to the full affected surface whenever the correction changes those assumptions. Do not force ceremonial whole-diff rediscovery solely because a bounded correction changed the SHA.
 
 ### Defensive review-packet formulation
 
