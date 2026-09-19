@@ -457,7 +457,10 @@ final readonly class TelegramBroadcastOwnerTestService
             ]);
         if ($row === null
             || ! hash_equals((string) $row->bot_id, $botId)
-            || (string) $row->state !== TelegramBroadcastCampaignState::Draft->value
+            || ! in_array((string) $row->state, [
+                TelegramBroadcastCampaignState::Draft->value,
+                TelegramBroadcastCampaignState::Completed->value,
+            ], true)
             || (int) $row->state_version !== $expectedStateVersion
         ) {
             throw new DomainException('Broadcast campaign is unavailable or changed before Owner test.');
