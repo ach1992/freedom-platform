@@ -52,6 +52,7 @@ return [
     'telegram_confidential_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
+        'app/Modules/Telegram/Application/TelegramBroadcastNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAgentNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
         'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusPresentation.php',
