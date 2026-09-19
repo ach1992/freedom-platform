@@ -203,7 +203,7 @@ for fragment in \
     'phpunit_args+=("${targeted_tests[@]}")' \
     'phpunit_args+=(--testsuite Feature)' \
     'bash scripts/ci/select-feature-shard.sh "$shard_count" "$shard_index"' \
-    'shard_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]' \
+    'shard_index: [0, 1, 2, 3, 4, 5, 6, 7]' \
     'bash scripts/ci/test-feature-integration-scope.sh' \
     'bash scripts/ci/test-feature-sharding.sh'; do
     grep -F "$fragment" "$ci_workflow" >/dev/null || fail "CI workflow missing focused integration contract: $fragment"
