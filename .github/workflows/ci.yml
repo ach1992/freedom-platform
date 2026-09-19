@@ -382,7 +382,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard_index: [0, 1, 2, 3]
+        shard_index: [0, 1, 2, 3, 4, 5, 6, 7]
     env:
       MARIADB_VERSION: '10.11'
       COMPOSE_PROJECT_NAME: freedom-platform-ci-${{ github.run_id }}-${{ matrix.shard_index }}
@@ -411,7 +411,7 @@ jobs:
             integration_scope=$(awk -F= '$1 == "scope" { print $2; exit }' "$plan")
             case "$integration_scope" in
               FULL)
-                shard_count=4
+                shard_count=8
                 ;;
               TARGETED)
                 ((shard_index == 0)) || run=false
