@@ -77,7 +77,9 @@ return new class extends Migration
                 ->restrictOnDelete();
             $table->unsignedInteger('version');
             $table->string('mode', 24);
+            $table->string('source_kind', 24)->nullable();
             $table->text('text')->nullable();
+            $table->text('caption_override')->nullable();
             $table->unsignedBigInteger('source_chat_id')->nullable();
             $table->unsignedBigInteger('source_message_id')->nullable();
             $table->json('inline_keyboard_snapshot')->nullable();
@@ -224,17 +226,30 @@ ALTER TABLE broadcast_message_versions
     ),
     ADD CONSTRAINT broadcast_message_version_chk CHECK (version >= 1),
     ADD CONSTRAINT broadcast_message_mode_chk CHECK (mode IN ('new_text','copy','forward')),
+    ADD CONSTRAINT broadcast_message_source_kind_chk CHECK (source_kind IS NULL OR source_kind IN ('text','photo','video','animation','audio','document')),
     ADD CONSTRAINT broadcast_message_shape_chk CHECK (
         (mode = 'new_text'
+            AND source_kind IS NULL
             AND text IS NOT NULL
             AND CHAR_LENGTH(text) BETWEEN 1 AND 4096
+            AND caption_override IS NULL
             AND source_chat_id IS NULL
             AND source_message_id IS NULL)
         OR
         (mode IN ('copy','forward')
+            AND source_kind IS NOT NULL
             AND text IS NULL
             AND source_chat_id IS NOT NULL
             AND source_message_id IS NOT NULL)
+    ),
+    ADD CONSTRAINT broadcast_message_caption_chk CHECK (
+        caption_override IS NULL
+        OR (
+            mode = 'copy'
+            AND source_kind <> 'text'
+            AND CHAR_LENGTH(caption_override) <= 1024
+            AND OCTET_LENGTH(caption_override) <= 4096
+        )
     ),
     ADD CONSTRAINT broadcast_message_keyboard_chk CHECK (
         inline_keyboard_snapshot IS NULL
