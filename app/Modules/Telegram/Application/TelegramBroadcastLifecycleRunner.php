@@ -734,7 +734,7 @@ final readonly class TelegramBroadcastLifecycleRunner
 
     private function correlationId(string $operationPublicId): string
     {
-        return 'tgbl:'.substr(hash('sha256', $operationPublicId), 0, 40);
+        return 'tgbl:'.$operationPublicId;
     }
 
     private function retryNotBefore(TelegramMutationResult $result): ?string
