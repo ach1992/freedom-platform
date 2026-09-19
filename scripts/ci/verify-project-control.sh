@@ -131,6 +131,8 @@ grep -F 'Substantive behavior alone does **not** force a new Issue' AGENTS.md >/
     || fail 'AGENTS.md must keep bounded Low/Medium product work eligible for FAST execution without a ceremonial Task Issue'
 grep -F 'minimum meaningful outcome' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must right-size Task Contracts to meaningful outcomes rather than implementation seams'
+grep -F 'Default the PR boundary to the **meaningful outcome**' AGENTS.md >/dev/null \
+    || fail 'AGENTS.md must keep PR sizing aligned with meaningful outcomes rather than technical seams'
 grep -F 'Ready for review is an acceptance-CI signal' AGENTS.md >/dev/null \
     || fail 'AGENTS.md must keep changing candidates Draft until acceptance CI is useful'
 grep -F 'one** PR in the Ready/acceptance/review/integration lane' AGENTS.md >/dev/null \
