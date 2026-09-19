@@ -26,7 +26,7 @@ while IFS= read -r -d '' path; do
     rel=${path#"$root/"}
     lines=$(wc -l < "$path")
     printf '%012d\t%s\n' "$lines" "$rel"
-done < <(find "$feature_root" -type f -name '*.php' -print0) | sort -nr -k1,1 -k2,2 > "$tmp"
+done < <(find "$feature_root" -type f -name '*Test.php' -print0) | sort -nr -k1,1 -k2,2 > "$tmp"
 
 [[ -s "$tmp" ]] || fail 'no Feature tests were found'
 
