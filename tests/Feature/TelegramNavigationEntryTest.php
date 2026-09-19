@@ -4849,6 +4849,14 @@ SQL);
             self::assertSame(0, $sender->attempts);
         }
 
+        try {
+            $this->app->make(\App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver::class)
+                ->resolveAdministratorDirectMessage((string) $media->public_id, (string) $direct->public_id);
+            self::fail('Private direct-media bytes must not resolve by bypassing the direct-message authority.');
+        } catch (\LogicException) {
+            self::assertSame(0, $sender->attempts);
+        }
+
         $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
         Storage::disk('telegram_private_media')->put((string) $media->storage_path, 'tampered-private-media');
         try {
