@@ -15,7 +15,7 @@ final readonly class TelegramBroadcastAudienceDefinition
      * @param list<string> $accountTypes
      * @param list<string> $tierCodes
      * @param list<string> $tagCodes
-     * @param list<string> $offeringPublicIds
+     * @param list<string> $offeringCodes
      * @param list<string> $categoryCodes
      * @param list<string> $serverCodes
      * @param list<string> $manualUserPublicIds
@@ -26,7 +26,7 @@ final readonly class TelegramBroadcastAudienceDefinition
         public array $tierCodes = [],
         public array $tagCodes = [],
         public string $purchaseState = 'any',
-        public array $offeringPublicIds = [],
+        public array $offeringCodes = [],
         public array $categoryCodes = [],
         public array $serverCodes = [],
         public string $serviceState = 'any',
@@ -41,7 +41,7 @@ final readonly class TelegramBroadcastAudienceDefinition
         $this->assertCodeList($tierCodes, 'Broadcast tier code');
         $this->assertCodeList($tagCodes, 'Broadcast tag code');
         $this->assertOneOf($purchaseState, ['any', 'with_successful', 'without_successful'], 'Broadcast purchase state');
-        $this->assertUlidList($offeringPublicIds, 'Broadcast offering public ID');
+        $this->assertCodeList($offeringCodes, 'Broadcast offering code');
         $this->assertCodeList($categoryCodes, 'Broadcast category code');
         $this->assertCodeList($serverCodes, 'Broadcast server code');
         $this->assertOneOf($serviceState, ['any', 'active', 'expired'], 'Broadcast service state');
@@ -88,7 +88,7 @@ final readonly class TelegramBroadcastAudienceDefinition
             && $this->tierCodes === []
             && $this->tagCodes === []
             && $this->purchaseState === 'any'
-            && $this->offeringPublicIds === []
+            && $this->offeringCodes === []
             && $this->categoryCodes === []
             && $this->serverCodes === []
             && $this->serviceState === 'any'
@@ -106,7 +106,7 @@ final readonly class TelegramBroadcastAudienceDefinition
             'tier_codes' => $this->canonicalStrings($this->tierCodes),
             'tag_codes' => $this->canonicalStrings($this->tagCodes),
             'purchase_state' => $this->purchaseState,
-            'offering_public_ids' => $this->canonicalStrings($this->offeringPublicIds),
+            'offering_codes' => $this->canonicalStrings($this->offeringCodes),
             'category_codes' => $this->canonicalStrings($this->categoryCodes),
             'server_codes' => $this->canonicalStrings($this->serverCodes),
             'service_state' => $this->serviceState,
@@ -153,7 +153,7 @@ final readonly class TelegramBroadcastAudienceDefinition
             'tier_codes',
             'tag_codes',
             'purchase_state',
-            'offering_public_ids',
+            'offering_codes',
             'category_codes',
             'server_codes',
             'service_state',
@@ -173,7 +173,7 @@ final readonly class TelegramBroadcastAudienceDefinition
             self::stringList($data['tier_codes']),
             self::stringList($data['tag_codes']),
             self::requiredString($data['purchase_state']),
-            self::stringList($data['offering_public_ids']),
+            self::stringList($data['offering_codes']),
             self::stringList($data['category_codes']),
             self::stringList($data['server_codes']),
             self::requiredString($data['service_state']),
