@@ -85,6 +85,16 @@ final readonly class TelegramBroadcastRetryService
                     (int) $campaign->current_message_version,
                 );
 
+                $pendingLifecycle = $connection->table('broadcast_recipient_messages as operation')
+                    ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+                    ->where('recipient.broadcast_campaign_id', (int) $campaign->id)
+                    ->whereIn('operation.action', ['edit', 'buttons', 'pin', 'unpin', 'delete'])
+                    ->whereIn('operation.state', ['prepared', 'queued', 'sending'])
+                    ->exists();
+                if ($pendingLifecycle) {
+                    throw new DomainException('Broadcast failed-recipient retry must wait for the current lifecycle mutation to finish.');
+                }
+
                 $query = $connection->table('broadcast_recipients')
                     ->where('broadcast_campaign_id', (int) $campaign->id)
                     ->whereIn('delivery_state', ['failed_transient', 'failed_permanent']);
