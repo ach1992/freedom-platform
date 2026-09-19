@@ -4999,6 +4999,16 @@ SQL);
             ->where('telegram_user_id', $targetTelegramId)
             ->value('id');
         self::assertIsNumeric($targetAccountId);
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $targetSession = $sessions->activeForAccount((int) $targetAccountId);
+        self::assertNotNull($targetSession);
+        $sessions->cancel(
+            $targetSession->publicId,
+            $targetSession->version,
+            'direct-media-target-drift-cancel:'.(string) $targetAccountId,
+        );
+        self::assertNull($sessions->activeForAccount((int) $targetAccountId));
+
         self::assertSame(1, DB::table('telegram_accounts')
             ->where('id', (int) $targetAccountId)
             ->update([
