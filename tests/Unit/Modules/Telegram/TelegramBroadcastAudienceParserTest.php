@@ -13,14 +13,14 @@ final class TelegramBroadcastAudienceParserTest extends TestCase
 {
     public function test_parser_accepts_all_as_unbounded_audience(): void
     {
-        $audience = (new TelegramBroadcastAudienceParser())->parse('all');
+        $audience = (new TelegramBroadcastAudienceParser)->parse('all');
 
         self::assertTrue($audience->isUnbounded());
     }
 
     public function test_parser_maps_all_supported_filter_dimensions(): void
     {
-        $audience = (new TelegramBroadcastAudienceParser())->parse(<<<'FILTERS'
+        $audience = (new TelegramBroadcastAudienceParser)->parse(<<<'FILTERS'
 accounts=customer,agent
 tiers=gold,silver
 tags=vip,beta
@@ -49,10 +49,10 @@ FILTERS);
 
     public function test_parser_rejects_unknown_and_duplicate_keys(): void
     {
-        $parser = new TelegramBroadcastAudienceParser();
+        $parser = new TelegramBroadcastAudienceParser;
 
         try {
-            $parser->parse("unknown=value");
+            $parser->parse('unknown=value');
             self::fail('Unknown broadcast audience key should fail.');
         } catch (DomainException $exception) {
             self::assertStringContainsString('not supported', $exception->getMessage());
