@@ -4,22 +4,22 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
-use App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
+use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
+use App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt;
+use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
 use App\Modules\Telegram\Application\TelegramBroadcastDeliveryRunner;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleMutationRequest;
-use App\Modules\Telegram\Application\TelegramMutationOutcome;
-use App\Modules\Telegram\Application\TelegramMutationResult;
-use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
-use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
-use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleRunner;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
 use App\Modules\Telegram\Application\TelegramBroadcastMessageDefinition;
 use App\Modules\Telegram\Application\TelegramBroadcastOwnerTestService;
 use App\Modules\Telegram\Application\TelegramBroadcastRetryService;
+use App\Modules\Telegram\Application\TelegramMutationOutcome;
+use App\Modules\Telegram\Application\TelegramMutationResult;
+use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
+use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
@@ -238,8 +238,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->where('public_id', $campaign->publicId)
             ->update([
                 'bot_id' => '987654321',
-                'scheduled_at' => now('UTC')->subMinute(),
-                'updated_at' => now('UTC'),
+                'scheduled_at' => DB::raw('created_at'),
             ]);
 
         try {
