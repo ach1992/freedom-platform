@@ -29,6 +29,14 @@ final class TelegramPrivateMediaDeliveryProvenanceGuard
         );
     }
 
+    public static function assertDirectMediaAuthorityCaller(): void
+    {
+        self::assertExactInternalCaller(
+            TelegramAdministratorDirectMediaMessageService::class,
+            __DIR__.'/TelegramAdministratorDirectMediaMessageService.php',
+        );
+    }
+
     private static function assertExactInternalCaller(string $expectedClass, string $expectedFile): void
     {
         $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
