@@ -4590,6 +4590,233 @@ SQL);
         ]);
     }
 
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 SEC-009 CNT-001 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_photo_is_private_confirmed_and_exactly_once_at_provider_boundary(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9786;
+        $targetTelegramId = 888777666561;
+        $targetUsername = 'direct_media_target';
+        $adminUsername = 'admin_direct_media_operator';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99101);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7480,
+            $adminTelegramId,
+            $targetTelegramId,
+            $targetUsername,
+            $adminUsername,
+        );
+        $processor = $journey['processor'];
+        $adminAccountId = $journey['admin_account_id'];
+        $adminUserId = $journey['admin_user_id'];
+        $selection = $journey['selection'];
+        $targetDeliveryCountBefore = $journey['target_delivery_count'];
+
+        $invalid = $this->photoMediaPayload(
+            7486,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-invalid',
+            'private-provider-unique-direct-media-invalid',
+            strlen($png),
+            'formatted caption must fail closed',
+        );
+        $invalid['message']['caption_entities'] = [[
+            'type' => 'bold',
+            'offset' => 0,
+            'length' => 9,
+        ]];
+        $this->accept($invalid);
+        $processor->process('123456789', 7486);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(0, DB::table('telegram_administrator_direct_messages')->count());
+        self::assertSame(
+            'admin_customer_message_compose',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+
+        $fileId = 'private-provider-file-direct-media-valid';
+        $fileUniqueId = 'private-provider-unique-direct-media-valid';
+        $caption = 'safe private photo caption';
+        $this->accept($this->photoMediaPayload(
+            7487,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $fileId,
+            $fileUniqueId,
+            strlen($png),
+            $caption,
+        ));
+        $processor->process('123456789', 7487);
+        $processor->process('123456789', 7487);
+
+        self::assertSame(1, $fetcher->calls);
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $confirmPayload = json_decode((string) $confirmSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['draft', 'selection'], array_keys($confirmPayload));
+        self::assertSame($selection, $confirmPayload['selection']);
+        self::assertIsString($confirmPayload['draft']);
+        self::assertMatchesRegularExpression('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $confirmPayload['draft']);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $confirmPayload['draft'])
+            ->first();
+        self::assertNotNull($direct);
+        self::assertSame('photo', (string) $direct->content_type);
+        self::assertSame($targetTelegramId, (int) $direct->target_telegram_user_id);
+        self::assertSame(strlen($png), (int) $direct->media_byte_size);
+        self::assertSame('image/png', (string) $direct->media_detected_mime);
+        self::assertSame(hash('sha256', $png), (string) $direct->media_content_sha256);
+        self::assertIsString($direct->media_public_id);
+        self::assertNull($direct->delivery_operation_public_id);
+        self::assertNotSame($caption, (string) $direct->content_ciphertext);
+        self::assertStringNotContainsString($caption, (string) $direct->content_ciphertext);
+        self::assertSame(
+            $caption,
+            $this->app->make(StringEncrypter::class)->decryptString((string) $direct->content_ciphertext),
+        );
+
+        $media = DB::table('telegram_private_media')->first();
+        self::assertNotNull($media);
+        self::assertSame('associated', (string) $media->state);
+        self::assertSame('administrator_direct_message', (string) $media->association_type);
+        self::assertSame((string) $direct->public_id, (string) $media->association_public_id);
+        self::assertSame((string) $direct->media_public_id, (string) $media->public_id);
+        self::assertStringNotContainsString($fileId, (string) $media->encrypted_file_id);
+        self::assertStringNotContainsString($fileUniqueId, (string) $media->encrypted_file_unique_id);
+        Storage::disk('telegram_private_media')->assertExists((string) $media->storage_path);
+
+        $confirmation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('تأیید نهایی پیام مستقیم', $confirmation);
+        self::assertStringContainsString('عکس', $confirmation);
+        self::assertStringContainsString('image/png', $confirmation);
+        self::assertStringContainsString($caption, $confirmation);
+        self::assertStringContainsString((string) $targetTelegramId, $confirmation);
+
+        $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
+        foreach ([$fileId, $fileUniqueId, $caption, base64_encode($png)] as $secret) {
+            self::assertStringNotContainsString($secret, $durableBeforeConfirm);
+        }
+
+        $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', $adminAccountId);
+        $this->accept($this->callbackPayload(
+            7488,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $processor->process('123456789', 7488);
+        $processor->process('123456789', 7488);
+
+        $finalSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['state', 'payload']);
+        self::assertNotNull($finalSession);
+        self::assertSame('admin_customer_preview', (string) $finalSession->state);
+        self::assertSame(
+            ['selection' => $selection],
+            json_decode((string) $finalSession->payload, true, 512, JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(
+            $targetDeliveryCountBefore + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $confirmPayload['draft'])
+            ->first(['public_id', 'delivery_operation_public_id', 'correlation_id', 'queued_at']);
+        self::assertNotNull($direct);
+        self::assertIsString($direct->delivery_operation_public_id);
+        self::assertNotNull($direct->queued_at);
+
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['public_id', 'recipient_chat_id', 'presentation_text', 'correlation_id', 'state']);
+        self::assertNotNull($operation);
+        self::assertSame($targetTelegramId, (int) $operation->recipient_chat_id);
+        self::assertSame(
+            '[PRIVATE_TELEGRAM_MEDIA_REFERENCE:v1:administrator_direct_message:'.(string) $direct->public_id.']',
+            (string) $operation->presentation_text,
+        );
+        self::assertSame((string) $direct->correlation_id, (string) $operation->correlation_id);
+        self::assertSame('prepared', (string) $operation->state);
+
+        $outbox = DB::table('outbox_messages')
+            ->where('aggregate_id', (string) $operation->public_id)
+            ->first(['id', 'payload', 'contract_version']);
+        self::assertNotNull($outbox);
+        self::assertSame(
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+            (int) $outbox->contract_version,
+        );
+        self::assertSame(
+            '{"telegram_delivery_operation_public_id":"'.(string) $operation->public_id.'"}',
+            (string) $outbox->payload,
+        );
+
+        $ordinaryCustomerEvidence = json_encode([
+            'operation' => (array) $operation,
+            'outbox' => (array) $outbox,
+            'session' => (array) $finalSession,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        foreach ([$fileId, $fileUniqueId, $caption, base64_encode($png), (string) $media->storage_path] as $secret) {
+            self::assertStringNotContainsString($secret, $ordinaryCustomerEvidence);
+        }
+
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+
+        self::assertSame('succeeded', $first->state->value);
+        self::assertSame('succeeded', $second->state->value);
+        self::assertSame(99101, $first->messageId);
+        self::assertSame(99101, $second->messageId);
+        self::assertSame(1, $sender->attempts);
+        self::assertCount(1, $sender->presentations);
+        self::assertSame('photo', $sender->presentations[0]->contentType);
+        self::assertSame($caption, $sender->presentations[0]->caption);
+        self::assertSame($png, $sender->presentations[0]->revealBytesForProvider());
+        self::assertSame(hash('sha256', $png), $sender->presentations[0]->contentSha256);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => (string) $operation->public_id,
+            'state' => 'succeeded',
+            'message_id' => 99101,
+            'provider_attempts' => 1,
+        ]);
+
+        $deliveryResult = $this->app
+            ->make(TelegramAdministratorDirectMessageService::class)
+            ->deliveryResultForSender($adminUserId, (string) $direct->public_id);
+        self::assertSame('succeeded', $deliveryResult->state->value);
+        self::assertSame(99101, $deliveryResult->messageId);
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_text_message_is_confirmed_encrypted_and_exactly_once_on_replay(): void
     {
