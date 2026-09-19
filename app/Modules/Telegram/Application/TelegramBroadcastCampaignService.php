@@ -770,7 +770,8 @@ final readonly class TelegramBroadcastCampaignService
     /** @return CampaignRow */
     private function lockedCampaign(Connection $connection, string $publicId): object
     {
-        $campaign = $connection->table('broadcast_campaigns')
+        /** @var CampaignRow|null $campaign */
+$campaign = $connection->table('broadcast_campaigns')
             ->where('public_id', $publicId)
             ->lockForUpdate()
             ->first([
@@ -844,6 +845,7 @@ final readonly class TelegramBroadcastCampaignService
 
     private function campaignState(object $row): TelegramBroadcastCampaignState
     {
+        /** @var object{state:string} $row */
         $state = TelegramBroadcastCampaignState::tryFrom((string) $row->state);
         if ($state === null) {
             throw new RuntimeException('Broadcast campaign state is invalid.');
