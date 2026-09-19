@@ -268,7 +268,12 @@ final readonly class TelegramBroadcastOwnerTestService
 
         $result = $this->sourceMessages->send(
             $context['telegram_user_id'],
-            new TelegramResolvedSourceMessagePresentation($sourceMode, $sourceChatId, $sourceMessageId),
+            new TelegramResolvedSourceMessagePresentation(
+                $sourceMode,
+                $sourceChatId,
+                $sourceMessageId,
+                $context['caption_override'],
+            ),
             $resolvedKeyboard,
         );
 
@@ -441,7 +446,9 @@ final readonly class TelegramBroadcastOwnerTestService
                 'campaign.current_message_version',
                 'message.id as message_version_id',
                 'message.mode',
+                'message.source_kind',
                 'message.text',
+                'message.caption_override',
                 'message.source_chat_id',
                 'message.source_message_id',
                 'message.inline_keyboard_snapshot',
@@ -465,7 +472,9 @@ final readonly class TelegramBroadcastOwnerTestService
             'correlation_id' => (string) $row->correlation_id,
             'message_version_id' => $this->positiveInt($row->message_version_id, 'Broadcast message version ID'),
             'mode' => (string) $row->mode,
+            'source_kind' => $row->source_kind === null ? null : (string) $row->source_kind,
             'text' => $row->text === null ? null : (string) $row->text,
+            'caption_override' => $row->caption_override === null ? null : (string) $row->caption_override,
             'source_chat_id' => $row->source_chat_id === null ? null : $this->positiveInt($row->source_chat_id, 'Broadcast source chat ID'),
             'source_message_id' => $row->source_message_id === null ? null : $this->positiveInt($row->source_message_id, 'Broadcast source message ID'),
             'inline_keyboard_snapshot' => $row->inline_keyboard_snapshot === null ? null : (string) $row->inline_keyboard_snapshot,
