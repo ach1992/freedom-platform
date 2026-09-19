@@ -124,14 +124,16 @@ final class SupportTicketFoundationTest extends TestCase
     public function test_close_sets_default_72_hour_window_and_customer_reopen_fails_after_expiry(): void
     {
         $this->seed(SupportTicketCategorySeeder::class);
-        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $closedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $clock = new MutableSupportClock($closedAt);
         $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
         $user = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest($user, 'other', 'Reopen', 'Need help', 'create:reopen'));
+        $expectedReopenUntil = $closedAt->modify('+72 hours')->format('Y-m-d H:i:s.u');
 
         $service->transition($ticket->id, SupportTicketState::Resolved, $user, 'support_resolved');
         $closed = $service->closeForCustomer($ticket->id, $user, 'Solved');
-        self::assertSame('2026-09-19 00:00:00.000000', $closed->reopenUntil);
+        self::assertSame($expectedReopenUntil, $closed->reopenUntil);
         self::assertNotNull(DB::table('support_tickets')->where('id', $ticket->id)->value('resolved_at'));
 
         $support = $this->user();
@@ -150,15 +152,15 @@ final class SupportTicketFoundationTest extends TestCase
             'support_closed',
             'Solved by support',
         );
-        self::assertSame('2026-09-19 00:00:00.000000', $operatorClosed->reopenUntil);
+        self::assertSame($expectedReopenUntil, $operatorClosed->reopenUntil);
 
-        $clock->set(new DateTimeImmutable('2026-09-18T23:59:59+00:00'));
+        $clock->set($closedAt->modify('+71 hours 59 minutes 59 seconds'));
         $reopened = $service->reopenForCustomer($ticket->id, $user);
         self::assertSame(SupportTicketState::AwaitingSupport, $reopened->state);
         self::assertNull(DB::table('support_tickets')->where('id', $ticket->id)->value('resolved_at'));
 
         $service->closeForCustomer($ticket->id, $user, 'Solved again');
-        $clock->set(new DateTimeImmutable('2026-09-22T00:00:00+00:00'));
+        $clock->set($closedAt->modify('+8 days'));
 
         $this->expectException(DomainException::class);
         $service->reopenForCustomer($ticket->id, $user);
