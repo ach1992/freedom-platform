@@ -1496,11 +1496,15 @@ final readonly class TelegramBroadcastNavigationHandler
         try {
             $current = $this->campaigns->current($action->userId, $campaignId);
             $message = $this->campaigns->currentMessage($action->userId, $campaignId);
-            $test = $this->ownerTests->reconcileCurrent($action->userId, $campaignId);
         } catch (AuthorizationException|DomainException) {
             $this->showHome($action);
 
             return;
+        }
+        try {
+            $test = $this->ownerTests->reconcileCurrent($action->userId, $campaignId);
+        } catch (AuthorizationException|DomainException) {
+            $test = null;
         }
 
         $preview = $this->messagePreview($message, $locale);
@@ -1677,11 +1681,15 @@ final readonly class TelegramBroadcastNavigationHandler
         $locale = $this->locale($action->userId);
         try {
             $current = $this->campaigns->current($action->userId, $campaignId);
-            $test = $this->ownerTests->reconcileCurrent($action->userId, $campaignId);
         } catch (AuthorizationException|DomainException) {
             $this->showHome($action);
 
             return;
+        }
+        try {
+            $test = $this->ownerTests->reconcileCurrent($action->userId, $campaignId);
+        } catch (AuthorizationException|DomainException) {
+            $test = null;
         }
 
         $text = $this->translation('telegram.broadcast.lifecycle_review', $locale, [
