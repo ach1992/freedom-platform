@@ -360,6 +360,8 @@ final readonly class TelegramBroadcastOwnerTestService
                     'test.delivery_operation_public_id',
                     'test.telegram_message_id',
                     'test.result_code',
+                    'test.provider_boundary_started_at',
+                    'test.provider_boundary_finished_at',
                     'message.version as tested_message_version',
                     'campaign.current_message_version',
                 ]);
@@ -370,6 +372,37 @@ final readonly class TelegramBroadcastOwnerTestService
             $deliveryPublicId = $row->delivery_operation_public_id === null
                 ? null
                 : (string) $row->delivery_operation_public_id;
+
+            if ($deliveryPublicId === null
+                && (string) $row->state === 'sending'
+                && $row->provider_boundary_finished_at === null
+            ) {
+                $staleBefore = $this->clock->now()
+                    ->modify('-'.self::SOURCE_BOUNDARY_RECOVERY_MINUTES.' minutes')
+                    ->format('Y-m-d H:i:s.u');
+                if (is_string($row->provider_boundary_started_at)
+                    && $row->provider_boundary_started_at <= $staleBefore
+                ) {
+                    $now = $this->timestamp();
+                    $updated = $connection->table('broadcast_campaign_tests')
+                        ->where('id', (int) $row->id)
+                        ->where('state', 'sending')
+                        ->where('provider_boundary_started_at', '<=', $staleBefore)
+                        ->whereNull('provider_boundary_finished_at')
+                        ->update([
+                            'state' => 'uncertain',
+                            'result_code' => 'broadcast_owner_test_interrupted_source_effect',
+                            'provider_boundary_finished_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                    if ($updated === 1) {
+                        $row->state = 'uncertain';
+                        $row->result_code = 'broadcast_owner_test_interrupted_source_effect';
+                        $row->provider_boundary_finished_at = $now;
+                    }
+                }
+            }
+
             if ($deliveryPublicId !== null && in_array((string) $row->state, ['queued', 'sending'], true)) {
                 $operation = $connection->table('telegram_delivery_operations')
                     ->where('public_id', $deliveryPublicId)
