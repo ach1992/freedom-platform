@@ -2798,6 +2798,7 @@ final class ArchitectureBoundaryChecker
                 'app/Modules/Telegram/Application/TelegramDeliveryOutboxHandler.php',
                 'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
                 'app/Modules/Telegram/Application/TelegramPresentationProvenanceGuard.php',
+                'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
                 'app/Modules/Telegram/Infrastructure/TelegramServiceProvider.php',
             ],
             'TelegramConfidentialDeliveryOutboxHandler' => [
