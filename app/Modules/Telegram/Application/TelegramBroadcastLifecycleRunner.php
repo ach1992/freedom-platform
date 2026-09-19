@@ -6,6 +6,7 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
@@ -29,6 +30,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         private AdministratorPermissionAuthorizer $administrators,
         private TelegramBroadcastTextDeliveryGateway $textDelivery,
         private TelegramBroadcastLifecycleTransport $transport,
+        private TelegramDeliveryRuntime $runtime,
     ) {}
 
     /** @requirement COM-003 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
@@ -70,12 +72,15 @@ final readonly class TelegramBroadcastLifecycleRunner
     {
         return $this->database->connection()->transaction(function (Connection $connection): ?string {
             /** @var object{public_id:string}|null $row */
-            $row = $connection->table('broadcast_recipient_messages')
-                ->whereIn('action', ['edit', 'buttons', 'pin', 'unpin', 'delete'])
-                ->where('state', 'prepared')
-                ->orderBy('id')
+            $row = $connection->table('broadcast_recipient_messages as operation')
+                ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+                ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+                ->where('campaign.bot_id', $this->runtime->botId())
+                ->whereIn('operation.action', ['edit', 'buttons', 'pin', 'unpin', 'delete'])
+                ->where('operation.state', 'prepared')
+                ->orderBy('operation.id')
                 ->lockForUpdate()
-                ->first(['public_id']);
+                ->first(['operation.public_id']);
 
             return $row?->public_id;
         }, 3);
@@ -401,13 +406,16 @@ final readonly class TelegramBroadcastLifecycleRunner
     private function reconcileLinkedDeliveries(int $limit): int
     {
         /** @var Collection<int,object{public_id:string}> $rows */
-        $rows = $this->database->connection()->table('broadcast_recipient_messages')
-            ->whereIn('action', ['edit', 'buttons', 'delete'])
-            ->where('state', 'queued')
-            ->whereNotNull('delivery_operation_public_id')
-            ->orderBy('id')
+        $rows = $this->database->connection()->table('broadcast_recipient_messages as operation')
+            ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+            ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+            ->where('campaign.bot_id', $this->runtime->botId())
+            ->whereIn('operation.action', ['edit', 'buttons', 'delete'])
+            ->where('operation.state', 'queued')
+            ->whereNotNull('operation.delivery_operation_public_id')
+            ->orderBy('operation.id')
             ->limit($limit)
-            ->get(['public_id']);
+            ->get(['operation.public_id']);
 
         $changed = 0;
         foreach ($rows as $row) {
@@ -505,20 +513,23 @@ final readonly class TelegramBroadcastLifecycleRunner
     private function recoverInterruptedDirectMutations(int $limit): int
     {
         /** @var Collection<int,object{id:int|string}> $rows */
-        $rows = $this->database->connection()->table('broadcast_recipient_messages')
-            ->whereIn('action', ['edit', 'buttons', 'pin', 'unpin'])
-            ->where('state', 'sending')
-            ->whereNull('delivery_operation_public_id')
-            ->whereNotNull('provider_boundary_started_at')
+        $rows = $this->database->connection()->table('broadcast_recipient_messages as operation')
+            ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+            ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+            ->where('campaign.bot_id', $this->runtime->botId())
+            ->whereIn('operation.action', ['edit', 'buttons', 'pin', 'unpin'])
+            ->where('operation.state', 'sending')
+            ->whereNull('operation.delivery_operation_public_id')
+            ->whereNotNull('operation.provider_boundary_started_at')
             ->whereRaw(
-                'provider_boundary_started_at <= DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL '.
+                'operation.provider_boundary_started_at <= DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL '.
                 self::DIRECT_BOUNDARY_RECOVERY_MINUTES.
                 ' MINUTE)',
             )
-            ->orderBy('provider_boundary_started_at')
-            ->orderBy('id')
+            ->orderBy('operation.provider_boundary_started_at')
+            ->orderBy('operation.id')
             ->limit($limit)
-            ->get(['id']);
+            ->get(['operation.id']);
 
         $changed = 0;
         foreach ($rows as $row) {
@@ -626,6 +637,7 @@ final readonly class TelegramBroadcastLifecycleRunner
             ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
             ->join('broadcast_message_versions as message', 'message.id', '=', 'operation.broadcast_message_version_id')
             ->where('operation.public_id', $operationPublicId)
+            ->where('campaign.bot_id', $this->runtime->botId())
             ->where('operation.state', 'prepared')
             ->first([
                 'campaign.id as campaign_id',
