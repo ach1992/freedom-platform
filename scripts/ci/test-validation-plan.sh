@@ -170,7 +170,7 @@ if 'PUSH_BEFORE_SHA' in text:
 
 require('  preflight:\n    name: Validation plan and repository control\n', 'early preflight job must not satisfy the required final status context')
 require('  integration_shards:\n', 'parallel real-engine shard job is missing')
-require('        shard_index: [0, 1]\n', 'normal FULL integration must retain the two-shard matrix')
+require('        shard_index: [0, 1, 2, 3]\n', 'normal FULL integration must retain the four-shard matrix')
 require('  integration:\n    name: MariaDB 10.11 and Redis tests\n', 'stable aggregate integration gate is missing')
 require('          SHARD_RESULT: ${{ needs.integration_shards.result }}\n', 'aggregate integration gate must consume every shard result')
 require('  required:\n    name: Repository preflight\n', 'final aggregate required gate is missing')
