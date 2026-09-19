@@ -13,34 +13,15 @@ fail() {
 }
 
 all="$tmpdir/all"
-one="$tmpdir/one"
-zero="$tmpdir/zero"
-two="$tmpdir/two"
-union="$tmpdir/union"
-ordered_union="$tmpdir/ordered-union"
-overlap="$tmpdir/overlap"
-
 find "$root/tests/Feature" -type f -name '*Test.php' -printf '%P\n' | sed 's#^#tests/Feature/#' | sort > "$all"
 [[ -s "$all" ]] || fail 'repository has no Feature tests'
 if grep -Ev 'Test\.php$' "$all" >/dev/null; then
     fail 'sharding input must contain PHPUnit test entry files only'
 fi
 
+one="$tmpdir/one"
 bash "$selector" 1 0 > "$one"
 cmp -s "$all" "$one" || fail '1/1 shard must contain the complete Feature suite'
-
-bash "$selector" 2 0 > "$zero"
-bash "$selector" 2 1 > "$two"
-[[ -s "$zero" && -s "$two" ]] || fail 'both 2-way shards must be non-empty'
-
-cat "$zero" "$two" | sort > "$union"
-cmp -s "$all" "$union" || fail '2-way shard union must contain every Feature file exactly once'
-
-cat "$zero" "$two" > "$ordered_union"
-cmp -s "$all" "$ordered_union" || fail '2-way shards must preserve contiguous Feature-suite file order'
-
-comm -12 "$zero" "$two" > "$overlap"
-[[ ! -s "$overlap" ]] || fail '2-way shards overlap'
 
 weight_for() {
     local list=$1
@@ -54,25 +35,47 @@ weight_for() {
     printf '%s\n' "$total"
 }
 
-weight_zero=$(weight_for "$zero")
-weight_two=$(weight_for "$two")
-min_weight=$weight_zero
-max_weight=$weight_two
-if ((weight_zero > weight_two)); then
-    min_weight=$weight_two
-    max_weight=$weight_zero
-fi
-((min_weight > 0)) || fail 'shard static weight must be positive'
-# Greedy line-count balancing is only a static proxy for runtime, but a gross
-# imbalance would make the parallel route predictably ineffective.
-((max_weight * 100 <= min_weight * 115)) \
-    || fail "2-way shard static weights are imbalanced: $weight_zero vs $weight_two"
+verify_shards() {
+    local count=$1
+    local ordered="$tmpdir/ordered-$count"
+    : > "$ordered"
+
+    local min_weight=0
+    local max_weight=0
+    local weights=()
+    local index
+    for ((index = 0; index < count; index++)); do
+        local shard="$tmpdir/shard-$count-$index"
+        bash "$selector" "$count" "$index" > "$shard"
+        [[ -s "$shard" ]] || fail "$count-way shard $index must be non-empty"
+        cat "$shard" >> "$ordered"
+
+        local weight
+        weight=$(weight_for "$shard")
+        weights+=("$weight")
+        if ((index == 0 || weight < min_weight)); then
+            min_weight=$weight
+        fi
+        if ((weight > max_weight)); then
+            max_weight=$weight
+        fi
+    done
+
+    cmp -s "$all" "$ordered" \
+        || fail "$count-way shards must cover every Feature test exactly once in contiguous suite order"
+    ((min_weight > 0)) || fail 'shard static weight must be positive'
+    ((max_weight * 100 <= min_weight * 115)) \
+        || fail "$count-way shard static weights are imbalanced: ${weights[*]}"
+
+    printf 'Feature $s-way sharding invariants passed: weights %s\n' "$count" "${weights[*]}"
+}
+
+verify_shards 2
+verify_shards 4
 
 if bash "$selector" 0 0 >/dev/null 2>&1; then
     fail 'zero shard count must be rejected'
 fi
-if bash "$selector" 2 2 >/dev/null 2>&1; then
+if bash "$selector" 4 4 >/dev/null 2>&1; then
     fail 'out-of-range shard index must be rejected'
 fi
-
-printf 'Feature sharding invariants passed: shard weights %s / %s lines.\n' "$weight_zero" "$weight_two"
