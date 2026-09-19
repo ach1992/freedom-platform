@@ -14,6 +14,7 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Collection;
 use RuntimeException;
 use Throwable;
 
@@ -29,45 +30,83 @@ final readonly class TelegramBroadcastNavigationHandler
     public const ACTION_ENTRY = 'navigation.admin.broadcast';
 
     private const STATE_HOME = 'admin_broadcast_home';
+
     private const STATE_CONTENT_MODE = 'admin_broadcast_content_mode';
+
     private const STATE_TEXT_INPUT = 'admin_broadcast_text_input';
+
     private const STATE_SOURCE_KIND = 'admin_broadcast_source_kind';
+
     private const STATE_SOURCE_WAIT = 'admin_broadcast_source_wait';
+
     private const STATE_AUDIENCE = 'admin_broadcast_audience';
+
     private const STATE_AUDIENCE_INPUT = 'admin_broadcast_audience_input';
+
     private const STATE_REVIEW = 'admin_broadcast_review';
+
     private const STATE_BUTTONS_INPUT = 'admin_broadcast_buttons_input';
+
     private const STATE_SCHEDULE_INPUT = 'admin_broadcast_schedule_input';
+
     private const STATE_MANAGE = 'admin_broadcast_manage';
+
     private const STATE_EDIT_INPUT = 'admin_broadcast_edit_input';
+
     private const STATE_LIFECYCLE_BUTTONS_INPUT = 'admin_broadcast_lifecycle_buttons_input';
+
     private const STATE_LIFECYCLE_REVIEW = 'admin_broadcast_lifecycle_review';
 
     private const ACTION_NEW = 'navigation.admin.broadcast.new';
+
     private const ACTION_MANAGE = 'navigation.admin.broadcast.manage';
+
     private const ACTION_CONTENT_TEXT = 'navigation.admin.broadcast.content.text';
+
     private const ACTION_CONTENT_COPY = 'navigation.admin.broadcast.content.copy';
+
     private const ACTION_CONTENT_FORWARD = 'navigation.admin.broadcast.content.forward';
+
     private const ACTION_SOURCE_KIND = 'navigation.admin.broadcast.source_kind';
+
     private const ACTION_AUDIENCE = 'navigation.admin.broadcast.audience';
+
     private const ACTION_AUDIENCE_ALL = 'navigation.admin.broadcast.audience.all';
+
     private const ACTION_AUDIENCE_CUSTOM = 'navigation.admin.broadcast.audience.custom';
+
     private const ACTION_BUTTONS = 'navigation.admin.broadcast.buttons';
+
     private const ACTION_OWNER_TEST = 'navigation.admin.broadcast.owner_test';
+
     private const ACTION_OWNER_REFRESH = 'navigation.admin.broadcast.owner_refresh';
+
     private const ACTION_START = 'navigation.admin.broadcast.start';
+
     private const ACTION_SCHEDULE = 'navigation.admin.broadcast.schedule';
+
     private const ACTION_REFRESH = 'navigation.admin.broadcast.refresh';
+
     private const ACTION_PAUSE = 'navigation.admin.broadcast.pause';
+
     private const ACTION_RESUME = 'navigation.admin.broadcast.resume';
+
     private const ACTION_CANCEL = 'navigation.admin.broadcast.cancel';
+
     private const ACTION_RETRY = 'navigation.admin.broadcast.retry';
+
     private const ACTION_EDIT = 'navigation.admin.broadcast.edit';
+
     private const ACTION_LIFECYCLE_BUTTONS = 'navigation.admin.broadcast.lifecycle.buttons';
+
     private const ACTION_PIN = 'navigation.admin.broadcast.pin';
+
     private const ACTION_UNPIN = 'navigation.admin.broadcast.unpin';
+
     private const ACTION_DELETE = 'navigation.admin.broadcast.delete';
+
     private const ACTION_APPLY_LIFECYCLE = 'navigation.admin.broadcast.lifecycle.apply';
+
     private const ACTION_BACK = 'navigation.back';
 
     public function __construct(
@@ -171,7 +210,7 @@ final readonly class TelegramBroadcastNavigationHandler
             $campaign = $this->campaigns->createDraft(
                 $interaction->userId,
                 $message,
-                new TelegramBroadcastAudienceDefinition(),
+                new TelegramBroadcastAudienceDefinition,
                 $interaction->requestKey,
             );
             $session = $this->sessions->transition(
@@ -323,7 +362,7 @@ final readonly class TelegramBroadcastNavigationHandler
             $campaign = $this->campaigns->createDraft(
                 $action->userId,
                 TelegramBroadcastMessageDefinition::newText($action->messageText),
-                new TelegramBroadcastAudienceDefinition(),
+                new TelegramBroadcastAudienceDefinition,
                 $action->requestKey,
             );
             $session = $this->sessions->transition(
@@ -455,7 +494,7 @@ final readonly class TelegramBroadcastNavigationHandler
             if ($action->callbackAction === self::ACTION_AUDIENCE_ALL) {
                 try {
                     $current = $this->campaigns->current($action->userId, $campaignId);
-                    $definition = new TelegramBroadcastAudienceDefinition();
+                    $definition = new TelegramBroadcastAudienceDefinition;
                     if ($current->audienceVersion > 1) {
                         $current = $this->campaigns->replaceDraftAudience(
                             $action->userId,
@@ -1309,7 +1348,7 @@ final readonly class TelegramBroadcastNavigationHandler
             ),
         ]];
 
-        /** @var \Illuminate\Support\Collection<int,object{public_id:string,state:string}> $campaigns */
+        /** @var Collection<int,object{public_id:string,state:string}> $campaigns */
         $campaigns = $this->database->connection()->table('broadcast_campaigns')
             ->orderByDesc('id')
             ->limit(5)
