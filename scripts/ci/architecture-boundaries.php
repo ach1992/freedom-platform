@@ -72,6 +72,8 @@ return [
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
+        'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryQueue.php',
+        'app/Modules/Telegram/Application/TelegramPrivateMediaReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramNavigationEntryGateway.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',
