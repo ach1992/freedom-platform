@@ -346,7 +346,7 @@ final readonly class TelegramBroadcastLifecycleService
     }
 
     /**
-     * @param object{mode:string,source_kind:?string,caption_override:?string} $message
+     * @param  object{mode:string,source_kind:?string,caption_override:?string}  $message
      */
     private function assertActionCompatible(object $message, TelegramBroadcastLifecycleAction $action): void
     {
