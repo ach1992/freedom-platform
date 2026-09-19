@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Shared\Application\RestrictedValue;
+use DomainException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Filesystem\FilesystemManager;
@@ -81,7 +82,7 @@ final readonly class TelegramPrivateMediaDeliveryResolver
         string $directMessagePublicId,
     ): TelegramPrivateMediaDeliveryPayload {
         if (! Str::isUlid($mediaPublicId) || ! Str::isUlid($directMessagePublicId)) {
-            throw new RuntimeException('Administrator direct-message private-media identity is invalid.');
+            throw new DomainException('Administrator direct-message private-media identity is invalid.');
         }
         $mediaPublicId = strtoupper($mediaPublicId);
         $directMessagePublicId = strtoupper($directMessagePublicId);
@@ -98,12 +99,12 @@ final readonly class TelegramPrivateMediaDeliveryResolver
             || ! is_string($row->detected_mime)
             || ! is_string($row->content_sha256)
             || $row->byte_size === null) {
-            throw new RuntimeException('Administrator direct-message private media is unavailable.');
+            throw new DomainException('Administrator direct-message private media is unavailable.');
         }
 
         $expectedPath = $this->storagePath($mediaPublicId);
         if (! hash_equals($expectedPath, $row->storage_path)) {
-            throw new RuntimeException('Administrator direct-message private-media storage identity is invalid.');
+            throw new DomainException('Administrator direct-message private-media storage identity is invalid.');
         }
 
         $disk = $this->disk();
@@ -115,7 +116,7 @@ final readonly class TelegramPrivateMediaDeliveryResolver
         if ($mime !== $row->detected_mime
             || $size !== (int) $row->byte_size
             || ! hash_equals(strtolower((string) $row->content_sha256), $hash)) {
-            throw new RuntimeException('Administrator direct-message private-media bytes failed integrity verification.');
+            throw new DomainException('Administrator direct-message private-media bytes failed integrity verification.');
         }
 
         return new TelegramPrivateMediaDeliveryPayload($contents, $mime, $size);
