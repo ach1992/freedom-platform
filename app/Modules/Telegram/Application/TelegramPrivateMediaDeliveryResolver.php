@@ -81,6 +81,8 @@ final readonly class TelegramPrivateMediaDeliveryResolver
         string $mediaPublicId,
         string $directMessagePublicId,
     ): TelegramPrivateMediaDeliveryPayload {
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertDirectMediaAuthorityCaller();
+
         if (! Str::isUlid($mediaPublicId) || ! Str::isUlid($directMessagePublicId)) {
             throw new DomainException('Administrator direct-message private-media identity is invalid.');
         }
