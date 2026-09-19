@@ -49,6 +49,14 @@ final class TelegramPrivateMediaMessageSenderTest extends TestCase
         self::assertSame(TelegramMutationOutcome::Success, $result->outcome);
         self::assertSame(8801, $result->messageId);
         self::assertSame('[RESOLVED_PRIVATE_TELEGRAM_MEDIA_PRESENTATION]', (string) $presentation);
+        self::assertSame(
+            ['redacted' => true, 'type' => 'photo', 'mime' => 'image/png', 'size' => strlen($bytes)],
+            $presentation->__debugInfo(),
+        );
+        $encoded = json_encode($presentation, JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('"redacted":true', $encoded);
+        self::assertStringNotContainsString('safe photo caption', $encoded);
+        self::assertStringNotContainsString(hash('sha256', $bytes), $encoded);
         Http::assertSentCount(1);
         Http::assertSent(function (Request $request): bool {
             $body = $request->body();
