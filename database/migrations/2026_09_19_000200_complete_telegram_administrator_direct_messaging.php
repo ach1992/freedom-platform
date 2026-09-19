@@ -23,6 +23,8 @@ return new class extends Migration
 
     private const CONSTRAINT_KEYBOARD = 'tg_admin_direct_message_keyboard_chk';
 
+    private const CONSTRAINT_ROLLBACK_FENCE = 'tg_admin_direct_message_rollback_fence_chk';
+
     /** @requirement COM-001 DAT-002 DAT-003 SEC-002 SEC-003 QUA-004 */
     public function up(): void
     {
@@ -40,27 +42,21 @@ return new class extends Migration
 
         $this->reconcileCheckConstraints($this->currentCheckConstraints());
         $this->upgradeInteractivePresentationTrigger();
+        $this->removeRollbackFence();
     }
 
     public function down(): void
     {
-        if (DB::table(self::TABLE)
-            ->whereIn('content_type', ['forward', 'copy'])
-            ->exists()
-            || $this->keyboardHistoryExists()) {
-            throw new RuntimeException(
-                'Administrator direct-message source/button history must be retained; rollback requires no source/button records.',
-            );
-        }
-
         if (DB::connection()->getDriverName() === 'mysql') {
             $this->assertRecognizedKeyboardColumns($this->keyboardColumnMetadata());
             $this->assertRecognizedCheckConstraintState($this->completionCheckConstraints());
             $this->assertRecognizedInteractivePresentationAuthority();
-            $this->restoreInteractivePresentationTrigger();
-            $this->reconcileCheckConstraints($this->legacyCheckConstraints());
+            $this->rollbackMysql();
+
+            return;
         }
 
+        $this->assertNoSourceOrKeyboardHistory();
         $this->dropKeyboardColumns();
     }
 
@@ -104,16 +100,28 @@ return new class extends Migration
             [self::KEYBOARD_HASH, self::KEYBOARD_CIPHERTEXT],
             static fn (string $column): bool => isset($columns[$column]),
         ));
-        if ($present === []) {
-            return;
-        }
 
         if (DB::connection()->getDriverName() === 'mysql') {
-            DB::statement('ALTER TABLE '.self::TABLE."\n    ".implode(",\n    ", array_map(
-                static fn (string $column): string => 'DROP COLUMN '.$column,
-                $present,
-            )));
-        } else {
+            $existing = $this->completionCheckConstraints();
+            $this->assertRecognizedCheckConstraintState($existing);
+            $fence = $existing[self::CONSTRAINT_ROLLBACK_FENCE] ?? null;
+            $expectedFence = $this->rollbackFenceClause($columns);
+            if (! is_string($fence)
+                || ! hash_equals(
+                    $this->normalizeCheckClause($expectedFence),
+                    $this->normalizeCheckClause($fence),
+                )) {
+                throw new RuntimeException(
+                    'Telegram direct-message rollback requires the exact durable write fence before removing keyboard columns.',
+                );
+            }
+
+            $parts = ['DROP CONSTRAINT '.self::CONSTRAINT_ROLLBACK_FENCE];
+            foreach ($present as $column) {
+                $parts[] = 'DROP COLUMN '.$column;
+            }
+            DB::statement('ALTER TABLE '.self::TABLE."\n    ".implode(",\n    ", $parts));
+        } elseif ($present !== []) {
             Schema::table(self::TABLE, function ($table) use ($present): void {
                 $table->dropColumn($present);
             });
@@ -123,6 +131,12 @@ return new class extends Migration
         if ($remaining !== []) {
             throw new RuntimeException(
                 'Telegram direct-message rollback did not remove keyboard columns exactly.',
+            );
+        }
+        if (DB::connection()->getDriverName() === 'mysql'
+            && isset($this->completionCheckConstraints()[self::CONSTRAINT_ROLLBACK_FENCE])) {
+            throw new RuntimeException(
+                'Telegram direct-message rollback did not remove the durable write fence exactly.',
             );
         }
     }
@@ -215,6 +229,107 @@ SQL, [self::TABLE, self::KEYBOARD_CIPHERTEXT, self::KEYBOARD_HASH]);
         return false;
     }
 
+    private function assertNoSourceOrKeyboardHistory(): void
+    {
+        if (DB::table(self::TABLE)
+            ->whereIn('content_type', ['forward', 'copy'])
+            ->exists()
+            || $this->keyboardHistoryExists()) {
+            throw new RuntimeException(
+                'Administrator direct-message source/button history must be retained; rollback requires no source/button records.',
+            );
+        }
+    }
+
+    /** @param null|Closure():void $afterInitialEligibility */
+    private function rollbackMysql(?Closure $afterInitialEligibility = null): void
+    {
+        $this->assertNoSourceOrKeyboardHistory();
+        if ($afterInitialEligibility !== null) {
+            $afterInitialEligibility();
+        }
+
+        // Installing this CHECK is the durable rollback transition. MariaDB validates
+        // existing rows while acquiring the DDL metadata lock: a writer that commits
+        // first makes the ALTER fail without mutation, while a later writer is rejected.
+        $this->establishRollbackFence();
+        $this->assertNoSourceOrKeyboardHistory();
+        $this->restoreInteractivePresentationTrigger();
+        $this->reconcileCheckConstraints($this->legacyCheckConstraints());
+        $this->dropKeyboardColumns();
+    }
+
+    private function establishRollbackFence(): void
+    {
+        $columns = $this->keyboardColumnMetadata();
+        $this->assertRecognizedKeyboardColumns($columns);
+        $existing = $this->completionCheckConstraints();
+        $this->assertRecognizedCheckConstraintState($existing);
+        $expected = $this->rollbackFenceClause($columns);
+        $present = $existing[self::CONSTRAINT_ROLLBACK_FENCE] ?? null;
+        if (is_string($present)) {
+            if (! hash_equals(
+                $this->normalizeCheckClause($expected),
+                $this->normalizeCheckClause($present),
+            )) {
+                throw new RuntimeException(
+                    'Telegram direct-message rollback found an incompatible durable write fence.',
+                );
+            }
+
+            return;
+        }
+
+        DB::statement(
+            'ALTER TABLE '.self::TABLE
+            .' ADD CONSTRAINT '.self::CONSTRAINT_ROLLBACK_FENCE
+            .' CHECK ('.$expected.')',
+        );
+
+        $after = $this->completionCheckConstraints()[self::CONSTRAINT_ROLLBACK_FENCE] ?? null;
+        if (! is_string($after)
+            || ! hash_equals(
+                $this->normalizeCheckClause($expected),
+                $this->normalizeCheckClause($after),
+            )) {
+            throw new RuntimeException(
+                'Telegram direct-message rollback did not establish the exact durable write fence.',
+            );
+        }
+    }
+
+    private function removeRollbackFence(): void
+    {
+        $existing = $this->completionCheckConstraints();
+        $this->assertRecognizedCheckConstraintState($existing);
+        if (! isset($existing[self::CONSTRAINT_ROLLBACK_FENCE])) {
+            return;
+        }
+
+        DB::statement(
+            'ALTER TABLE '.self::TABLE.' DROP CONSTRAINT '.self::CONSTRAINT_ROLLBACK_FENCE,
+        );
+        if (isset($this->completionCheckConstraints()[self::CONSTRAINT_ROLLBACK_FENCE])) {
+            throw new RuntimeException(
+                'Telegram direct-message completion did not remove the rollback write fence exactly.',
+            );
+        }
+    }
+
+    /** @param array<string,array{data_type:string,nullable:string,length:int|null}> $columns */
+    private function rollbackFenceClause(array $columns): string
+    {
+        $parts = ["content_type <> 'forward' AND content_type <> 'copy'"];
+        if (isset($columns[self::KEYBOARD_CIPHERTEXT])) {
+            $parts[] = self::KEYBOARD_CIPHERTEXT.' IS NULL';
+        }
+        if (isset($columns[self::KEYBOARD_HASH])) {
+            $parts[] = self::KEYBOARD_HASH.' IS NULL';
+        }
+
+        return implode(' AND ', $parts);
+    }
+
     /** @param array<string,string> $desired */
     private function reconcileCheckConstraints(array $desired): void
     {
@@ -227,7 +342,8 @@ SQL, [self::TABLE, self::KEYBOARD_CIPHERTEXT, self::KEYBOARD_HASH]);
 
         foreach ($desired as $name => $clause) {
             $violations = DB::selectOne(
-                'SELECT COUNT(*) AS aggregate FROM '.self::TABLE.' WHERE NOT ('.$clause.')',
+                'SELECT COUNT(*) AS aggregate FROM '.self::TABLE
+                .' WHERE COALESCE(('.$clause.'), 0) = 0',
             );
             if ($violations === null || (int) $violations->aggregate !== 0) {
                 throw new RuntimeException(
@@ -236,7 +352,7 @@ SQL, [self::TABLE, self::KEYBOARD_CIPHERTEXT, self::KEYBOARD_HASH]);
             }
         }
 
-        $relevantNames = array_keys($this->knownCheckClauses());
+        $relevantNames = $this->managedCheckConstraintNames();
         $parts = [];
         foreach ($relevantNames as $name) {
             if (isset($existing[$name])) {
@@ -313,7 +429,7 @@ SQL, [self::TABLE]);
      */
     private function constraintsMatchDesiredState(array $existing, array $desired): bool
     {
-        foreach ($this->knownCheckClauses() as $name => $_known) {
+        foreach ($this->managedCheckConstraintNames() as $name) {
             if (! isset($desired[$name])) {
                 if (isset($existing[$name])) {
                     return false;
@@ -333,6 +449,17 @@ SQL, [self::TABLE]);
         return true;
     }
 
+    /** @return list<string> */
+    private function managedCheckConstraintNames(): array
+    {
+        return [
+            self::CONSTRAINT_TYPE,
+            self::CONSTRAINT_LENGTH,
+            self::CONSTRAINT_MEDIA,
+            self::CONSTRAINT_KEYBOARD,
+        ];
+    }
+
     /** @return array<string,list<string>> */
     private function knownCheckClauses(): array
     {
@@ -345,8 +472,33 @@ SQL, [self::TABLE]);
                 $legacy[$name] ?? null,
             ], static fn (?string $clause): bool => $clause !== null)));
         }
+        $known[self::CONSTRAINT_KEYBOARD][] = $this->previousKeyboardCheckConstraint();
+        $known[self::CONSTRAINT_KEYBOARD] = array_values(array_unique($known[self::CONSTRAINT_KEYBOARD]));
+        $known[self::CONSTRAINT_ROLLBACK_FENCE] = $this->rollbackFenceClauses();
 
         return $known;
+    }
+
+    private function previousKeyboardCheckConstraint(): string
+    {
+        return <<<'SQL'
+inline_keyboard_ciphertext IS NULL AND inline_keyboard_hash IS NULL
+OR content_type <> 'forward'
+    AND inline_keyboard_ciphertext IS NOT NULL
+    AND OCTET_LENGTH(inline_keyboard_ciphertext) BETWEEN 1 AND 65536
+    AND inline_keyboard_hash REGEXP '^[0-9a-f]{64}$'
+SQL;
+    }
+
+    /** @return list<string> */
+    private function rollbackFenceClauses(): array
+    {
+        return [
+            "content_type <> 'forward' AND content_type <> 'copy'",
+            "content_type <> 'forward' AND content_type <> 'copy' AND inline_keyboard_ciphertext IS NULL",
+            "content_type <> 'forward' AND content_type <> 'copy' AND inline_keyboard_hash IS NULL",
+            "content_type <> 'forward' AND content_type <> 'copy' AND inline_keyboard_ciphertext IS NULL AND inline_keyboard_hash IS NULL",
+        ];
     }
 
     /** @return array<string,string> */
@@ -385,6 +537,7 @@ inline_keyboard_ciphertext IS NULL AND inline_keyboard_hash IS NULL
 OR content_type <> 'forward'
     AND inline_keyboard_ciphertext IS NOT NULL
     AND OCTET_LENGTH(inline_keyboard_ciphertext) BETWEEN 1 AND 65536
+    AND inline_keyboard_hash IS NOT NULL
     AND inline_keyboard_hash REGEXP '^[0-9a-f]{64}$'
 SQL,
         ];
