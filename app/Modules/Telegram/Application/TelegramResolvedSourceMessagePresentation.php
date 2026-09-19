@@ -15,9 +15,19 @@ final readonly class TelegramResolvedSourceMessagePresentation implements JsonSe
         public TelegramSourceMessageMode $mode,
         public int $sourceChatId,
         public int $sourceMessageId,
+        public ?string $captionOverride = null,
     ) {
         if ($sourceChatId < 1 || $sourceMessageId < 1) {
             throw new InvalidArgumentException('Resolved Telegram source-message presentation is invalid.');
+        }
+        if ($captionOverride !== null
+            && ($mode !== TelegramSourceMessageMode::Copy
+                || mb_strlen($captionOverride) > 1024
+                || strlen($captionOverride) > 4096
+                || ! mb_check_encoding($captionOverride, 'UTF-8')
+                || str_contains($captionOverride, "\0"))
+        ) {
+            throw new InvalidArgumentException('Resolved Telegram source-message caption override is invalid.');
         }
     }
 
