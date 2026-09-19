@@ -22,7 +22,6 @@ final class TelegramPrivateMediaDeliveryProvenanceGuard
     private const QUEUE_INTERNAL_AUTHORITY_FILES = [
         'app/Modules/Telegram/Application/TelegramDeliveryDatabaseCapability.php',
         'app/Modules/Telegram/Application/TelegramDeliveryQueueService.php',
-        'app/Modules/Telegram/Application/TelegramMutationRequest.php',
         'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryProvenanceGuard.php',
         'app/Modules/Telegram/Application/TelegramPrivateMediaDeliveryQueue.php',
     ];
