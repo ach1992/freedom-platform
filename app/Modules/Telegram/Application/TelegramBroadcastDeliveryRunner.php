@@ -1287,11 +1287,7 @@ final readonly class TelegramBroadcastDeliveryRunner
 
     private function deliveryCorrelationId(TelegramBroadcastRecipientClaim $claim): string
     {
-        return 'tgb:'.substr(
-            hash('sha256', $claim->campaignPublicId.'|'.$claim->recipientPublicId),
-            0,
-            40,
-        );
+        return 'tgb:'.$claim->recipientMessagePublicId;
     }
 
     private function timestamp(): string
