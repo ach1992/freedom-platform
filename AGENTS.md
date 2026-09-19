@@ -18,6 +18,8 @@ The root `README.md` is deliberately user-facing: product overview, getting-star
 
 When two sources of the same kind conflict, correct the stale/lower source instead of maintaining both.
 
+Master/chat rotation is a **bounded recovery event**, not permission to restart project analysis. Recover current repository/target identity, Program #3, the active Phase cutline, current Task/PR when one exists, and only the canonical references needed for the next decision. If those authorities remain coherent, continue them. Do not replay closed Issue/PR history, reread the full root specification, rerun a phase-wide audit/cutline, or recreate READY/planning artifacts merely because the chat/Master changed; broaden recovery only when current evidence materially contradicts the retained state or the completion/dependency shape changed.
+
 ## Branch and PR model
 
 `main` is the only long-lived branch. It is both the GitHub default branch and the primary integration branch.
@@ -76,7 +78,11 @@ Add protected areas, security/privacy, financial/provider, schema/migration, com
 
 Every PR still names its authority and review boundary. When there is no dedicated Task Issue, the PR links the existing requirement/Phase/Program authority and carries the bounded scope, risk, and verification needed to review the change safely. PRs use `.github/pull_request_template.md`. Sensitive paths are assigned in `.github/CODEOWNERS`; CODEOWNERS expresses intended ownership but does not by itself prove branch/ruleset enforcement.
 
+Classify risk from the **actual change**, not from the Phase label or the mere presence of a keyword/surface. Touching a migration, administrator UI, provider abstraction, queue, or release-related module does not automatically make a task High/Critical. Additive/backward-compatible schema, bounded internal configuration, read-only provider/status presentation, or other clearly reversible changes may remain Low/Medium when blast radius, existing-data compatibility, privacy/security impact, external-effect uncertainty, and rollback are correspondingly bounded. High/Critical is reserved for materially dangerous integrity/security/privacy boundaries, uncertain or non-idempotent external effects, destructive/compatibility-sensitive data change, difficult rollback, release/production consequence, or equivalent blast radius. Never downgrade risk merely to avoid a required gate.
+
 High/Critical financial, authorization, security, provider, schema, deployment/release, secret, or irreversible work requires independent review and explicit Owner approval before merge unless that exact action was explicitly pre-authorized. The applicable CI tier must pass on the final candidate; merge style never substitutes for review or validation.
+
+When one meaningful High/Critical outcome remains safely reviewable as one candidate and its acceptance/dependency/risk/rollback/validation boundaries are aligned, prefer one stabilized PR and one final independent-review/approval cycle over a sequence of mechanically similar High-risk PRs. Split only when a material boundary or reviewability reason actually requires it; never combine work merely to evade review.
 
 For this repository, required independent review is dispatched only by giving the Owner a ready-to-paste prompt for a fresh ChatGPT chat. Do not request GitHub/Copilot reviewers or dispatch independent review through any other tool, agent, service, or platform. The canonical relay contract is in `CONTRIBUTING.md`.
 
@@ -156,6 +162,8 @@ Reuse green evidence when the tested resulting tree has not materially changed. 
 Documentation topology and ownership are canonical in `docs/index.md`. One kind of durable truth has one owner; other files link to it instead of copying it.
 
 Do not create per-task handoff, overlay, current-state, risk, traceability, infrastructure-inventory, or evidence documents. Dynamic task/runner/CI state belongs in GitHub and operational systems; task history belongs in commits, PRs, Issues, reviews, and CI.
+
+Native Git/PR/check state owns exact commit and CI identities. Do not post a checkpoint comment for every pushed SHA, superseded CI run, self-review correction, or routine readiness refresh. Add/update durable GitHub prose only when it records a material contract/cutline change, blocker/decision, review result that must be reconciled, approval boundary, explicit pause/handoff, or a concise recovery summary that cannot be inferred from the owning PR/Issue/checks.
 
 `evidence/` is reserved for release-candidate/release records that have a real retention need.
 
