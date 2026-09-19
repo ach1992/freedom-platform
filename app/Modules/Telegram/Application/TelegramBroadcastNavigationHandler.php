@@ -1723,7 +1723,7 @@ final readonly class TelegramBroadcastNavigationHandler
         ]);
     }
 
-    /** @param array<string,mixed> $payload */
+    /** @param  array<string,mixed>  $payload */
     private function button(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -1787,13 +1787,13 @@ final readonly class TelegramBroadcastNavigationHandler
         );
     }
 
-    /** @param array<string,mixed> $payload */
+    /** @param  array<string,mixed>  $payload */
     private function campaignFromCallback(array $payload): string
     {
         return $this->campaignPayload($payload);
     }
 
-    /** @param array<string,mixed> $payload */
+    /** @param  array<string,mixed>  $payload */
     private function campaignPayload(array $payload): string
     {
         if (array_keys($payload) !== ['campaign']
@@ -1807,7 +1807,7 @@ final readonly class TelegramBroadcastNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{0:string,1:?string}
      */
     private function managePayload(array $payload): array
@@ -1827,7 +1827,7 @@ final readonly class TelegramBroadcastNavigationHandler
         return [$payload['campaign'], $payload['group']];
     }
 
-    /** @param array<string,mixed> $payload */
+    /** @param  array<string,mixed>  $payload */
     private function sourceModePayload(array $payload): TelegramBroadcastMessageMode
     {
         if (array_keys($payload) !== ['mode'] || ! is_string($payload['mode'] ?? null)) {
@@ -1842,7 +1842,7 @@ final readonly class TelegramBroadcastNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{0:TelegramBroadcastMessageMode,1:TelegramBroadcastSourceKind}
      */
     private function sourcePayload(array $payload): array
@@ -1865,7 +1865,7 @@ final readonly class TelegramBroadcastNavigationHandler
         return [$mode, $sourceKind];
     }
 
-    /** @param array<string,mixed> $payload */
+    /** @param  array<string,mixed>  $payload */
     private function sourceKindFromCallback(array $payload): TelegramBroadcastSourceKind
     {
         if (array_keys($payload) !== ['source_kind']
@@ -1879,7 +1879,7 @@ final readonly class TelegramBroadcastNavigationHandler
     }
 
     /**
-     * @param array<string,mixed> $payload
+     * @param  array<string,mixed>  $payload
      * @return array{0:string,1:TelegramBroadcastLifecycleAction}
      */
     private function lifecycleReviewPayload(array $payload): array
