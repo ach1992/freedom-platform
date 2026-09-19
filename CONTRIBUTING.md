@@ -4,7 +4,7 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 
 ## Workflow
 
-1. Read `AGENTS.md`, Program Issue `#3`, and the owning Task Issue when one is required/present. For a bounded FAST-path change without a dedicated Task Issue, identify the existing requirement/Phase/Program authority in the PR.
+1. On first ownership, Master/chat rotation, or Phase transition, recover `AGENTS.md`, Program Issue `#3`, the active Phase, and any current Task/PR. During continuous work under an unchanged recovered Phase/cutline, retain that baseline and refresh only decision-relevant deltas; do not reread unchanged Program/closed history for every task. For the active change, read the owning Task Issue when one is required/present; for bounded FAST work, identify the existing requirement/Phase/Program authority in the PR.
 2. Confirm the relevant parent phase/dependencies and inspect the current `main` head from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
 4. Open the PR against `main`. For substantive multi-commit work, open it as Draft by default.
