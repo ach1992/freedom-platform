@@ -4645,11 +4645,33 @@ SQL);
                 ->value('state'),
         );
 
+        $oversized = $this->photoMediaPayload(
+            7487,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-oversized',
+            'private-provider-unique-direct-media-oversized',
+            10_000_001,
+        );
+        $this->accept($oversized);
+        $processor->process('123456789', 7487);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(0, DB::table('telegram_administrator_direct_messages')->count());
+        self::assertSame(
+            'admin_customer_message_compose',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+
         $fileId = 'private-provider-file-direct-media-valid';
         $fileUniqueId = 'private-provider-unique-direct-media-valid';
         $caption = 'safe private photo caption';
         $this->accept($this->photoMediaPayload(
-            7487,
+            7488,
             $adminTelegramId,
             $adminUsername,
             'fa',
@@ -4658,8 +4680,8 @@ SQL);
             strlen($png),
             $caption,
         ));
-        $processor->process('123456789', 7487);
-        $processor->process('123456789', 7487);
+        $processor->process('123456789', 7488);
+        $processor->process('123456789', 7488);
 
         self::assertSame(1, $fetcher->calls);
         $confirmSession = DB::table('telegram_interaction_sessions')
@@ -4715,14 +4737,14 @@ SQL);
 
         $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', $adminAccountId);
         $this->accept($this->callbackPayload(
-            7488,
+            7489,
             $adminTelegramId,
             $adminUsername,
             'fa',
             $confirmToken,
         ));
-        $processor->process('123456789', 7488);
-        $processor->process('123456789', 7488);
+        $processor->process('123456789', 7489);
+        $processor->process('123456789', 7489);
 
         $finalSession = DB::table('telegram_interaction_sessions')
             ->where('telegram_account_id', $adminAccountId)
