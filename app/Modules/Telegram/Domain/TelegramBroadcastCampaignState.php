@@ -18,7 +18,7 @@ enum TelegramBroadcastCampaignState: string
     {
         return match ($this) {
             self::Draft => [self::Scheduled, self::Active, self::Cancelled],
-            self::Scheduled => [self::Active, self::Paused, self::Cancelled],
+            self::Scheduled => [self::Active, self::Cancelled],
             self::Active => [self::Paused, self::Completed, self::Cancelled],
             self::Paused => [self::Active, self::Cancelled],
             self::Completed, self::Cancelled => [],
