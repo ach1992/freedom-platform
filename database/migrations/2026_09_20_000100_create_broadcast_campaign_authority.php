@@ -105,6 +105,7 @@ return new class extends Migration
                 ->restrictOnDelete();
             $table->unsignedBigInteger('telegram_user_id');
             $table->string('delivery_state', 24)->default('queued');
+            $table->string('lifecycle_state', 24)->default('none');
             $table->unsignedInteger('attempt_count')->default(0);
             $table->char('claim_token_hash', 64)->nullable();
             $table->dateTime('claim_expires_at', 6)->nullable();
@@ -272,6 +273,9 @@ ALTER TABLE broadcast_recipients
     ),
     ADD CONSTRAINT broadcast_recipient_delivery_state_chk CHECK (
         delivery_state IN ('queued','sending','sent','failed_transient','failed_permanent','skipped','uncertain')
+    ),
+    ADD CONSTRAINT broadcast_recipient_lifecycle_state_chk CHECK (
+        lifecycle_state IN ('none','edited','buttons','pinned','unpinned','deleted')
     ),
     ADD CONSTRAINT broadcast_recipient_claim_chk CHECK (
         (claim_token_hash IS NULL AND claim_expires_at IS NULL)
