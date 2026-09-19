@@ -275,7 +275,6 @@ final readonly class TelegramBroadcastDeliveryRunner
             }
 
             $now = $this->timestamp();
-            $retryNotBefore = $this->retryNotBefore($result);
             $messageUpdated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $message->id)
                 ->where('state', 'prepared')
@@ -504,6 +503,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             };
 
             $now = $this->timestamp();
+            $retryNotBefore = $this->retryNotBefore($result);
             $messageUpdated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $message->id)
                 ->where('state', 'sending')
