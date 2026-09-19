@@ -435,17 +435,15 @@ SQL);
         $administratorId = DB::table('telegram_administrator_direct_messages')
             ->where('public_id', $publicId)
             ->value('actor_administrator_id');
-        $userId = is_numeric($administratorId)
-            ? DB::table('administrators')->where('id', (int) $administratorId)->value('user_id')
-            : null;
 
         DB::table('telegram_administrator_direct_messages')->where('public_id', $publicId)->delete();
         if (is_numeric($administratorId)) {
             DB::table('administrators')->where('id', (int) $administratorId)->delete();
         }
-        if (is_numeric($userId)) {
-            DB::table('users')->where('id', (int) $userId)->delete();
-        }
+
+        // User creation installs an immutable referral identity through the
+        // repository's database trigger, so the fixture must not attempt to
+        // delete that user and violate the durable referral authority.
     }
 
     private function secondaryConnection(string $name): Connection
