@@ -300,7 +300,7 @@ final readonly class TelegramBroadcastDeliveryRunner
     }
 
     /**
-     * @param array<string,mixed> $context
+     * @param  array<string,mixed>  $context
      */
     private function dispatchSourceMessage(
         TelegramBroadcastRecipientClaim $claim,
@@ -1056,7 +1056,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         ];
     }
 
-    /** @param array<string,mixed> $context */
+    /** @param  array<string,mixed>  $context */
     private function sourceStillBoundToCreator(array $context): bool
     {
         $sourceChatId = $context['source_chat_id'] ?? null;
