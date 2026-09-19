@@ -4841,6 +4841,14 @@ SQL);
             self::assertStringNotContainsString($secret, $ordinaryCustomerEvidence);
         }
 
+        try {
+            $this->app->make(TelegramAdministratorDirectMessageService::class)
+                ->mediaPresentationForDelivery((string) $direct->public_id, $targetTelegramId);
+            self::fail('Private direct-media bytes must not resolve outside the canonical delivery executor.');
+        } catch (\LogicException) {
+            self::assertSame(0, $sender->attempts);
+        }
+
         $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
         Storage::disk('telegram_private_media')->put((string) $media->storage_path, 'tampered-private-media');
         try {
