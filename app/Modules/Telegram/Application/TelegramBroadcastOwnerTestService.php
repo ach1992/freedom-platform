@@ -187,6 +187,7 @@ final readonly class TelegramBroadcastOwnerTestService
             ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'test.broadcast_campaign_id')
             ->join('broadcast_message_versions as message', 'message.id', '=', 'test.broadcast_message_version_id')
             ->where('campaign.public_id', $campaignPublicId)
+            ->where('campaign.bot_id', $this->runtime->botId())
             ->whereColumn('message.version', 'campaign.current_message_version')
             ->orderByDesc('test.id')
             ->first(['test.public_id']);
@@ -349,6 +350,7 @@ final readonly class TelegramBroadcastOwnerTestService
                 ->join('broadcast_message_versions as message', 'message.id', '=', 'test.broadcast_message_version_id')
                 ->where('test.public_id', $testPublicId)
                 ->where('campaign.public_id', $campaignPublicId)
+                ->where('campaign.bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first([
                     'test.id',
