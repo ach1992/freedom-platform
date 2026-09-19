@@ -33,7 +33,8 @@ ALTER TABLE telegram_administrator_direct_messages
     ),
     ADD CONSTRAINT tg_admin_direct_message_length_chk CHECK (
         (content_type = 'text' AND content_length BETWEEN 1 AND 3500)
-        OR (content_type IN ('photo','video','document') AND content_length BETWEEN 0 AND 1024)
+        OR (content_type = 'photo' AND content_length BETWEEN 0 AND 1024)
+        OR (content_type IN ('video','document') AND content_length = 0)
     ),
     ADD CONSTRAINT tg_admin_direct_message_media_shape_chk CHECK (
         (content_type = 'text'
