@@ -15,6 +15,7 @@ use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Collection;
 use RuntimeException;
 use Throwable;
 
@@ -141,7 +142,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         $this->directMutation($operationPublicId, $context, $action, $mode);
     }
 
-    /** @param array<string,mixed> $context */
+    /** @param  array<string,mixed>  $context */
     private function queueDurableTextEdit(string $operationPublicId, array $context): void
     {
         $text = $context['message_text'];
@@ -162,7 +163,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         $this->reconcileOperation($operationPublicId);
     }
 
-    /** @param array<string,mixed> $context */
+    /** @param  array<string,mixed>  $context */
     private function queueDurableDelete(string $operationPublicId, array $context): void
     {
         $receipt = $this->textDelivery->queueDelete(
@@ -177,7 +178,7 @@ final readonly class TelegramBroadcastLifecycleRunner
     }
 
     /**
-     * @param array<string,mixed> $context
+     * @param  array<string,mixed>  $context
      */
     private function directMutation(
         string $operationPublicId,
@@ -217,7 +218,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         $this->finalizeDirectResult($operationPublicId, $action, $result);
     }
 
-    /** @param array<string,mixed> $context */
+    /** @param  array<string,mixed>  $context */
     private function captionEditRequest(
         array $context,
         TelegramBroadcastMessageMode $mode,
@@ -242,7 +243,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         );
     }
 
-    /** @param array<string,mixed> $context */
+    /** @param  array<string,mixed>  $context */
     private function buttonsRequest(
         array $context,
         TelegramBroadcastMessageMode $mode,
@@ -403,7 +404,7 @@ final readonly class TelegramBroadcastLifecycleRunner
 
     private function reconcileLinkedDeliveries(int $limit): int
     {
-        /** @var \Illuminate\Support\Collection<int,object{public_id:string}> $rows */
+        /** @var Collection<int,object{public_id:string}> $rows */
         $rows = $this->database->connection()->table('broadcast_recipient_messages')
             ->whereIn('action', ['edit', 'buttons', 'delete'])
             ->where('state', 'queued')
@@ -508,7 +509,7 @@ final readonly class TelegramBroadcastLifecycleRunner
 
     private function recoverInterruptedDirectMutations(int $limit): int
     {
-        /** @var \Illuminate\Support\Collection<int,object{id:int|string}> $rows */
+        /** @var Collection<int,object{id:int|string}> $rows */
         $rows = $this->database->connection()->table('broadcast_recipient_messages')
             ->whereIn('action', ['edit', 'buttons', 'pin', 'unpin'])
             ->where('state', 'sending')
