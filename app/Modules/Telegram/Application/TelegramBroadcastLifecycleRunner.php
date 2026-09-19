@@ -285,6 +285,7 @@ final readonly class TelegramBroadcastLifecycleRunner
             }
 
             $now = $this->timestamp();
+            $retryNotBefore = $this->retryNotBefore($result);
             $updated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $operation->id)
                 ->where('state', 'prepared')
@@ -342,6 +343,7 @@ final readonly class TelegramBroadcastLifecycleRunner
                 ->update([
                     'state' => $state,
                     'result_code' => $result->resultCode,
+                    'retry_not_before' => $retryNotBefore,
                     'provider_boundary_finished_at' => $now,
                     'updated_at' => $now,
                 ]);
@@ -495,6 +497,7 @@ final readonly class TelegramBroadcastLifecycleRunner
                 ->update([
                     'state' => $state,
                     'result_code' => $resultCode,
+                    'retry_not_before' => null,
                     'updated_at' => $now,
                 ]);
 
@@ -610,6 +613,7 @@ final readonly class TelegramBroadcastLifecycleRunner
             ->update([
                 'state' => 'uncertain',
                 'result_code' => $resultCode,
+                'retry_not_before' => null,
                 'provider_boundary_finished_at' => $now,
                 'updated_at' => $now,
             ]);
@@ -731,6 +735,22 @@ final readonly class TelegramBroadcastLifecycleRunner
     private function correlationId(string $operationPublicId): string
     {
         return 'tgbl:'.substr(hash('sha256', $operationPublicId), 0, 40);
+    }
+
+    private function retryNotBefore(TelegramMutationResult $result): ?string
+    {
+        if ($result->outcome !== TelegramMutationOutcome::RetryAfter) {
+            return null;
+        }
+
+        $seconds = $result->retryAfterSeconds;
+        if ($seconds === null) {
+            throw new RuntimeException('Broadcast lifecycle provider retry delay is unavailable.');
+        }
+
+        return $this->clock->now()
+            ->modify('+'.$seconds.' seconds')
+            ->format('Y-m-d H:i:s.u');
     }
 
     private function resultCode(mixed $value, string $fallback): string
