@@ -1510,7 +1510,7 @@ final readonly class TelegramBroadcastNavigationHandler
             $this->translation('telegram.broadcast.campaign_id', $locale, ['id' => $campaignId])."\n".
             $preview."\n".
             $this->translation('telegram.broadcast.owner_test_state', $locale, [
-                'state' => $test?->state ?? 'none',
+                'state' => $test->state ?? 'none',
             ]);
 
         $rows = [
@@ -1689,7 +1689,7 @@ final readonly class TelegramBroadcastNavigationHandler
             'version' => (string) $current->messageVersion,
         ])."\n".
             $this->translation('telegram.broadcast.owner_test_state', $locale, [
-                'state' => $test?->state ?? 'none',
+                'state' => $test->state ?? 'none',
             ]);
 
         $rows = [
@@ -1718,11 +1718,12 @@ final readonly class TelegramBroadcastNavigationHandler
 
         return $this->translation('telegram.broadcast.preview_source', $locale, [
             'mode' => $this->translation('telegram.broadcast.content_'.$message->mode->value, $locale),
-            'kind' => $this->translation('telegram.broadcast.source_kinds.'.($message->sourceKind?->value ?? 'text'), $locale),
+            'kind' => $this->translation('telegram.broadcast.source_kinds.'.$message->sourceKind->value, $locale),
             'message_id' => (string) ($message->sourceMessageId ?? 0),
         ]);
     }
 
+    /** @param array<string,mixed> $payload */
     private function button(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -1786,11 +1787,13 @@ final readonly class TelegramBroadcastNavigationHandler
         );
     }
 
+    /** @param array<string,mixed> $payload */
     private function campaignFromCallback(array $payload): string
     {
         return $this->campaignPayload($payload);
     }
 
+    /** @param array<string,mixed> $payload */
     private function campaignPayload(array $payload): string
     {
         if (array_keys($payload) !== ['campaign']
@@ -1803,7 +1806,10 @@ final readonly class TelegramBroadcastNavigationHandler
         return $payload['campaign'];
     }
 
-    /** @return array{0:string,1:?string} */
+    /**
+     * @param array<string,mixed> $payload
+     * @return array{0:string,1:?string}
+     */
     private function managePayload(array $payload): array
     {
         if (array_keys($payload) === ['campaign']) {
@@ -1821,6 +1827,7 @@ final readonly class TelegramBroadcastNavigationHandler
         return [$payload['campaign'], $payload['group']];
     }
 
+    /** @param array<string,mixed> $payload */
     private function sourceModePayload(array $payload): TelegramBroadcastMessageMode
     {
         if (array_keys($payload) !== ['mode'] || ! is_string($payload['mode'] ?? null)) {
@@ -1834,7 +1841,10 @@ final readonly class TelegramBroadcastNavigationHandler
         return $mode;
     }
 
-    /** @return array{0:TelegramBroadcastMessageMode,1:TelegramBroadcastSourceKind} */
+    /**
+     * @param array<string,mixed> $payload
+     * @return array{0:TelegramBroadcastMessageMode,1:TelegramBroadcastSourceKind}
+     */
     private function sourcePayload(array $payload): array
     {
         if (array_keys($payload) !== ['mode', 'source_kind']
@@ -1855,6 +1865,7 @@ final readonly class TelegramBroadcastNavigationHandler
         return [$mode, $sourceKind];
     }
 
+    /** @param array<string,mixed> $payload */
     private function sourceKindFromCallback(array $payload): TelegramBroadcastSourceKind
     {
         if (array_keys($payload) !== ['source_kind']
@@ -1867,7 +1878,10 @@ final readonly class TelegramBroadcastNavigationHandler
             ?? throw new RuntimeException('Telegram broadcast source-kind callback is invalid.');
     }
 
-    /** @return array{0:string,1:TelegramBroadcastLifecycleAction} */
+    /**
+     * @param array<string,mixed> $payload
+     * @return array{0:string,1:TelegramBroadcastLifecycleAction}
+     */
     private function lifecycleReviewPayload(array $payload): array
     {
         if (array_keys($payload) !== ['action', 'campaign']
