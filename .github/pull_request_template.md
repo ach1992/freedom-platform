@@ -33,7 +33,7 @@ Focused commands/tests/results or applicable CI reference:
 ...
 ```
 
-If prior green evidence is being reused, state only why the tested resulting tree remains materially unchanged. Do not copy CI logs into the PR.
+If prior green evidence is being reused, state only why the tested resulting tree remains materially unchanged. Do not copy CI logs into the PR. Do not mirror the current PR head/base SHA or every workflow run ID; native PR/check state owns those identities.
 
 ## Review gates
 
