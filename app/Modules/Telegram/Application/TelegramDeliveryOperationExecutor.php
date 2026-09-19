@@ -238,21 +238,9 @@ final readonly class TelegramDeliveryOperationExecutor
                 $request,
             );
             if ($rejectionCode !== null) {
-                return [
-                    'row' => $this->transition(
-                        $connection,
-                        $row,
-                        TelegramDeliveryOperationState::FailedFinal,
-                        $rejectionCode,
-                        null,
-                        null,
-                    ),
-                    'boundary_entered' => false,
-                    'request' => null,
-                    'protected_presentation' => null,
-                    'private_media_presentation' => null,
-                    'source_message_presentation' => null,
-                ];
+                throw new DomainException(
+                    'Telegram delivery effect rejected before provider boundary: '.$rejectionCode,
+                );
             }
 
             return [
