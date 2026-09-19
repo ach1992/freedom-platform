@@ -513,6 +513,41 @@ SQL);
         Http::assertSentCount(2);
     }
 
+    public function test_c2c_photo_caption_remains_rejected_before_private_media_effect(): void
+    {
+        $telegramUserId = 9829;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $paymentIntentPublicId = strtoupper((string) Str::ulid());
+        $reservationPublicId = strtoupper((string) Str::ulid());
+        $this->moveToC2cInstructions($accountId, $sessionPublicId, $paymentIntentPublicId, $reservationPublicId);
+
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($this->onePixelPng());
+        $submission = new TelegramPrivateMediaDispatchSubmission($paymentIntentPublicId, $reservationPublicId);
+        $this->bindMediaDependencies($fetcher, $submission);
+
+        $payload = $this->photoPayload(
+            89012,
+            $telegramUserId,
+            'c2c-caption-file-id',
+            'c2c-caption-unique-id',
+            68,
+        );
+        $payload['message']['caption'] = 'caption is not accepted in card-to-card receipt flow';
+        $this->accept($payload);
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 89012);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame([], $submission->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(
+            'purchase_card_to_card_instructions',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $accountId)
+                ->where('status', 'active')
+                ->value('state'),
+        );
+    }
+
     public function test_group_or_non_owner_media_is_rejected_before_private_file_or_submission_effect(): void
     {
         $telegramUserId = 9822;
