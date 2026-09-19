@@ -611,22 +611,37 @@ final readonly class TelegramBroadcastCampaignService
                     $campaign->recipient_count,
                     'Broadcast recipient count',
                 );
-                $nextState = $recipientCount === 0
-                    ? TelegramBroadcastCampaignState::Completed
-                    : TelegramBroadcastCampaignState::Active;
                 $updated = $connection->table('broadcast_campaigns')
                     ->where('id', (int) $campaign->id)
                     ->where('state', TelegramBroadcastCampaignState::Scheduled->value)
                     ->where('state_version', $version)
                     ->update([
-                        'state' => $nextState->value,
+                        'state' => TelegramBroadcastCampaignState::Active->value,
                         'state_version' => $version + 1,
                         'started_at' => $now,
-                        'completed_at' => $recipientCount === 0 ? $now : null,
                         'updated_at' => $now,
                     ]);
+                if ($updated !== 1) {
+                    return 0;
+                }
 
-                return $updated === 1 ? 1 : 0;
+                if ($recipientCount === 0) {
+                    $completed = $connection->table('broadcast_campaigns')
+                        ->where('id', (int) $campaign->id)
+                        ->where('state', TelegramBroadcastCampaignState::Active->value)
+                        ->where('state_version', $version + 1)
+                        ->update([
+                            'state' => TelegramBroadcastCampaignState::Completed->value,
+                            'state_version' => $version + 2,
+                            'completed_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                    if ($completed !== 1) {
+                        throw new RuntimeException('Empty scheduled broadcast completion transition failed.');
+                    }
+                }
+
+                return 1;
             }, 3);
         }
 
@@ -731,17 +746,14 @@ final readonly class TelegramBroadcastCampaignService
                 $campaign->recipient_count,
                 'Broadcast recipient count',
             );
-            $state = match (true) {
-                $scheduledAt !== null => TelegramBroadcastCampaignState::Scheduled,
-                $recipientCount === 0 => TelegramBroadcastCampaignState::Completed,
-                default => TelegramBroadcastCampaignState::Active,
-            };
+            $state = $scheduledAt === null
+                ? TelegramBroadcastCampaignState::Active
+                : TelegramBroadcastCampaignState::Scheduled;
             $values = [
                 'state' => $state->value,
                 'state_version' => $expectedStateVersion + 1,
                 'scheduled_at' => $scheduledAt?->format('Y-m-d H:i:s.u'),
                 'started_at' => $scheduledAt === null ? $now : null,
-                'completed_at' => $scheduledAt === null && $recipientCount === 0 ? $now : null,
                 'updated_at' => $now,
             ];
 
@@ -752,6 +764,22 @@ final readonly class TelegramBroadcastCampaignService
                 ->update($values);
             if ($updated !== 1) {
                 throw new DomainException('Broadcast campaign changed before launch completed.');
+            }
+
+            if ($scheduledAt === null && $recipientCount === 0) {
+                $completed = $connection->table('broadcast_campaigns')
+                    ->where('id', (int) $campaign->id)
+                    ->where('state', TelegramBroadcastCampaignState::Active->value)
+                    ->where('state_version', $expectedStateVersion + 1)
+                    ->update([
+                        'state' => TelegramBroadcastCampaignState::Completed->value,
+                        'state_version' => $expectedStateVersion + 2,
+                        'completed_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                if ($completed !== 1) {
+                    throw new RuntimeException('Empty broadcast completion transition failed.');
+                }
             }
 
             return $this->receiptById($connection, (int) $campaign->id, false);
