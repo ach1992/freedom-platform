@@ -195,6 +195,7 @@ final readonly class TelegramBroadcastOwnerTestService
         return $this->reconcile($actorUserId, $campaignPublicId, (string) $row->public_id, true);
     }
 
+    /** @param array<string,mixed> $context */
     private function sendSourceMessage(
         int $actorUserId,
         string $campaignPublicId,
@@ -473,6 +474,15 @@ final readonly class TelegramBroadcastOwnerTestService
         ];
     }
 
+    /**
+     * @param object{
+     *     broadcast_campaign_id:int|string,
+     *     broadcast_message_version_id:int|string,
+     *     owner_administrator_id:int|string,
+     *     telegram_account_id:int|string
+     * } $row
+     * @param array<string,mixed> $context
+     */
     private function assertReplayMatches(object $row, array $context): void
     {
         if ((int) $row->broadcast_campaign_id !== $context['campaign_id']
