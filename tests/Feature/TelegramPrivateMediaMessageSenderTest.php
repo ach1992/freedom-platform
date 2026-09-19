@@ -125,6 +125,27 @@ final class TelegramPrivateMediaMessageSenderTest extends TestCase
         self::assertStringContainsString('true', $requests[1][0]->body());
     }
 
+    public function test_non_photo_caption_cannot_reach_the_provider_boundary(): void
+    {
+        Http::fake();
+        $bytes = 'validated-private-video';
+
+        try {
+            new TelegramResolvedPrivateMediaPresentation(
+                'video',
+                $bytes,
+                'admin-direct-video.mp4',
+                'caption outside the accepted direct-media contract',
+                'video/mp4',
+                strlen($bytes),
+                hash('sha256', $bytes),
+            );
+            self::fail('A non-photo caption must fail before provider delivery.');
+        } catch (\InvalidArgumentException) {
+            Http::assertNothingSent();
+        }
+    }
+
     public function test_oversized_photo_cannot_reach_the_provider_boundary(): void
     {
         Http::fake();
