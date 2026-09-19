@@ -71,11 +71,6 @@ final readonly class TelegramBroadcastLifecycleService
                 throw new DomainException('Broadcast campaign state version is stale.');
             }
             $this->assertNoPendingLifecycleActions($connection, (int) $campaign->id);
-            $this->assertProviderRetryWindowElapsed(
-                $connection,
-                (int) $campaign->id,
-                $recipientPublicIds,
-            );
 
             /** @var object{
              *     id:int|string,
@@ -212,6 +207,11 @@ final readonly class TelegramBroadcastLifecycleService
                 throw new DomainException('Broadcast campaign state version is stale.');
             }
             $this->assertNoPendingLifecycleActions($connection, (int) $campaign->id);
+            $this->assertProviderRetryWindowElapsed(
+                $connection,
+                (int) $campaign->id,
+                $recipientPublicIds,
+            );
 
             /** @var object{
              *     id:int|string,
