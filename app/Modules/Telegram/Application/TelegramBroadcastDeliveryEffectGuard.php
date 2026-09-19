@@ -87,7 +87,7 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
          *     telegram_user_id:int|string,
          *     campaign_state:string,
          *     current_message_version:int|string,
-         *     bot_id:string
+         *     bot_id:int|string
          * }|null $row
          */
         $row = $connection->table('broadcast_recipient_messages as operation')
@@ -114,7 +114,7 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             || (int) $row->telegram_user_id !== $request->recipientChatId
             || $request->action !== TelegramDeliveryAction::Send
             || $request->targetMessageId !== null
-            || ! hash_equals($this->runtime->botId(), $row->bot_id)
+            || ! hash_equals($this->runtime->botId(), (string) $row->bot_id)
         ) {
             return self::STALE_BEFORE_EFFECT;
         }
@@ -155,11 +155,14 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
          *     creator_administrator_id:int|string,
          *     owner_status:string,
          *     owner_is_owner:int|bool,
+         *     owner_user_id:int|string,
+         *     account_user_id:int|string,
+         *     account_is_bot:int|bool,
          *     telegram_user_id:int|string,
-         *     account_bot_id:string,
+         *     account_bot_id:int|string,
          *     campaign_state:string,
          *     current_message_version:int|string,
-         *     campaign_bot_id:string
+         *     campaign_bot_id:int|string
          * }|null $row
          */
         $row = $connection->table('broadcast_campaign_tests as test')
@@ -175,6 +178,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
                 'campaign.actor_administrator_id as creator_administrator_id',
                 'owner.status as owner_status',
                 'owner.is_owner as owner_is_owner',
+                'owner.user_id as owner_user_id',
+                'account.user_id as account_user_id',
+                'account.is_bot as account_is_bot',
                 'account.telegram_user_id',
                 'account.bot_id as account_bot_id',
                 'campaign.state as campaign_state',
@@ -262,7 +268,7 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             || $row->lifecycle_state === 'deleted'
             || (int) $row->telegram_user_id !== $request->recipientChatId
             || (int) ($row->telegram_message_id ?? 0) !== (int) ($request->targetMessageId ?? 0)
-            || ! hash_equals($this->runtime->botId(), $row->bot_id)
+            || ! hash_equals($this->runtime->botId(), (string) $row->bot_id)
         ) {
             return self::STALE_BEFORE_EFFECT;
         }
