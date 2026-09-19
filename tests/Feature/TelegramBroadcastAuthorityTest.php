@@ -13,6 +13,8 @@ use App\Modules\Telegram\Application\TelegramBroadcastRetryService;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
+use DateTimeImmutable;
+use DateTimeZone;
 use DomainException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -136,6 +138,116 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->where('delivery_state', 'skipped')
             ->where('failure_code', 'broadcast_cancelled_before_effect')
             ->count());
+    }
+
+    public function test_empty_audience_completes_without_waiting_for_a_delivery_worker(): void
+    {
+        $actor = $this->owner(910051);
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        $audience = new TelegramBroadcastAudienceDefinition(
+            manualUserPublicIds: [(string) Str::ulid()],
+        );
+
+        $immediate = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::newText('empty immediate audience'),
+            $audience,
+            'broadcast-empty-immediate',
+        );
+        $this->successfulOwnerTest($immediate->publicId, $actor);
+
+        $completed = $service->startNow(
+            $actor['user_id'],
+            $immediate->publicId,
+            $immediate->stateVersion,
+        );
+
+        self::assertSame(TelegramBroadcastCampaignState::Completed, $completed->state);
+        self::assertSame(0, $completed->recipientCount);
+        self::assertSame(0, DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $this->campaignId($immediate->publicId))
+            ->count());
+        self::assertNotNull(DB::table('broadcast_campaigns')
+            ->where('public_id', $immediate->publicId)
+            ->value('completed_at'));
+
+        $scheduled = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::newText('empty scheduled audience'),
+            $audience,
+            'broadcast-empty-scheduled',
+        );
+        $this->successfulOwnerTest($scheduled->publicId, $actor);
+        $scheduledReceipt = $service->schedule(
+            $actor['user_id'],
+            $scheduled->publicId,
+            $scheduled->stateVersion,
+            new DateTimeImmutable('+10 minutes', new DateTimeZone('UTC')),
+        );
+        self::assertSame(TelegramBroadcastCampaignState::Scheduled, $scheduledReceipt->state);
+
+        DB::table('broadcast_campaigns')
+            ->where('public_id', $scheduled->publicId)
+            ->update([
+                'scheduled_at' => now('UTC')->subMinute(),
+                'updated_at' => now('UTC'),
+            ]);
+
+        self::assertSame(1, $service->activateDueCampaigns());
+        $scheduledCompleted = $service->current($actor['user_id'], $scheduled->publicId);
+        self::assertSame(TelegramBroadcastCampaignState::Completed, $scheduledCompleted->state);
+        self::assertSame(0, $scheduledCompleted->recipientCount);
+        self::assertNotNull(DB::table('broadcast_campaigns')
+            ->where('public_id', $scheduled->publicId)
+            ->value('started_at'));
+        self::assertNotNull(DB::table('broadcast_campaigns')
+            ->where('public_id', $scheduled->publicId)
+            ->value('completed_at'));
+    }
+
+    public function test_campaign_reads_and_scheduled_worker_are_scoped_to_runtime_bot(): void
+    {
+        $actor = $this->owner(910061);
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        $audience = new TelegramBroadcastAudienceDefinition(
+            manualUserPublicIds: [(string) Str::ulid()],
+        );
+        $campaign = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::newText('other bot campaign'),
+            $audience,
+            'broadcast-other-bot',
+        );
+        $this->successfulOwnerTest($campaign->publicId, $actor);
+        $scheduled = $service->schedule(
+            $actor['user_id'],
+            $campaign->publicId,
+            $campaign->stateVersion,
+            new DateTimeImmutable('+10 minutes', new DateTimeZone('UTC')),
+        );
+        self::assertSame(TelegramBroadcastCampaignState::Scheduled, $scheduled->state);
+
+        DB::table('broadcast_campaigns')
+            ->where('public_id', $campaign->publicId)
+            ->update([
+                'bot_id' => '987654321',
+                'scheduled_at' => now('UTC')->subMinute(),
+                'updated_at' => now('UTC'),
+            ]);
+
+        try {
+            $service->current($actor['user_id'], $campaign->publicId);
+            self::fail('A campaign owned by another Telegram bot must not be readable in this runtime.');
+        } catch (DomainException) {
+            self::assertSame(0, $service->activateDueCampaigns());
+        }
+
+        self::assertSame(
+            TelegramBroadcastCampaignState::Scheduled->value,
+            DB::table('broadcast_campaigns')
+                ->where('public_id', $campaign->publicId)
+                ->value('state'),
+        );
     }
 
     public function test_source_message_is_bound_to_authorized_creator_chat(): void
