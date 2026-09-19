@@ -42,6 +42,9 @@ final readonly class HttpTelegramSourceMessageSender implements TelegramSourceMe
             'from_chat_id' => $source->sourceChatId,
             'message_id' => $source->sourceMessageId,
         ];
+        if ($source->captionOverride !== null) {
+            $payload['caption'] = $source->captionOverride;
+        }
         if ($inlineKeyboard !== null) {
             $payload['reply_markup'] = $inlineKeyboard->providerPayload();
         }
