@@ -52,6 +52,8 @@ required_files=(
     scripts/ci/test-integration.sh
     scripts/ci/classify-validation-plan.sh
     scripts/ci/test-validation-plan.sh
+    scripts/ci/select-feature-shard.sh
+    scripts/ci/test-feature-sharding.sh
     scripts/ci/verify-readonly-staging-workflow.sh
     scripts/ci/scan-git-secrets.sh
     scripts/ci/test-secret-scan.sh
@@ -330,9 +332,17 @@ grep -F 'needs.preflight.outputs.operations == ' "$ci" >/dev/null \
     || fail 'operational validation must be independently gated by the validation plan'
 grep -F "MARIADB_VERSION: '10.11'" "$ci" >/dev/null \
     || fail 'applicable integration CI must use MariaDB 10.11'
-if grep -Eq 'matrix:|mariadb_version:.*11\.4|MARIADB_VERSION:.*11\.4' "$ci"; then
+if grep -Eq 'mariadb_version:.*11\.4|MARIADB_VERSION:.*11\.4' "$ci"; then
     fail 'normal CI must not require a MariaDB compatibility matrix on every PR'
 fi
+grep -F 'shard_index: [0, 1]' "$ci" >/dev/null \
+    || fail 'normal FULL Feature acceptance must retain exactly two isolated shards'
+grep -F 'bash scripts/ci/select-feature-shard.sh "$shard_count" "$shard_index"' "$ci" >/dev/null \
+    || fail 'normal FULL Feature acceptance must use the deterministic shard selector'
+grep -F 'SHARD_RESULT: ${{ needs.integration_shards.result }}' "$ci" >/dev/null \
+    || fail 'stable integration gate must aggregate every matrix shard result'
+bash scripts/ci/test-feature-sharding.sh >/dev/null \
+    || fail 'Feature sharding completeness/balance regression tests failed'
 if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KAVENEGAR)' "$ci"; then
     fail 'generic CI references protected provider/staging/runtime secrets'
 fi
