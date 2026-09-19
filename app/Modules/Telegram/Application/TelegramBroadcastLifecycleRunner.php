@@ -480,7 +480,6 @@ final readonly class TelegramBroadcastLifecycleRunner
                     'uncertain',
                     $this->resultCode($delivery->result_code, 'telegram_lifecycle_uncertain'),
                 ],
-                default => throw new RuntimeException('Broadcast lifecycle delivery state mapping is incomplete.'),
             };
 
             $now = $this->timestamp();
