@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryEffectGuard;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
@@ -27,6 +28,7 @@ use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
+use App\Modules\Telegram\Application\TelegramBroadcastDeliveryEffectGuard;
 use App\Modules\Telegram\Application\TelegramBroadcastNavigationHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
@@ -272,6 +274,10 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(Factory::class),
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
+        );
+        $this->app->singleton(
+            TelegramDeliveryEffectGuard::class,
+            TelegramBroadcastDeliveryEffectGuard::class,
         );
         $this->app->bind(
             TelegramAdministratorDirectMessageService::class,
