@@ -6,6 +6,14 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt;
+use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
+use App\Modules\Telegram\Application\TelegramBroadcastDeliveryRunner;
+use App\Modules\Telegram\Application\TelegramBroadcastLifecycleMutationRequest;
+use App\Modules\Telegram\Application\TelegramMutationOutcome;
+use App\Modules\Telegram\Application\TelegramMutationResult;
+use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
+use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
 use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleRunner;
 use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
@@ -423,6 +431,187 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertSame($actor['telegram_user_id'], (int) DB::table('broadcast_message_versions')
             ->where('broadcast_campaign_id', $this->campaignId($accepted->publicId))
             ->value('source_chat_id'));
+    }
+
+    public function test_source_retry_after_is_persisted_and_blocks_failed_recipient_retry_until_due(): void
+    {
+        $actor = $this->owner(910181);
+        $target = $this->telegramUser(910182);
+        $targetPublicId = DB::table('users')->where('id', $target['user_id'])->value('public_id');
+        self::assertIsString($targetPublicId);
+
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        $created = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::copy(
+                $actor['telegram_user_id'],
+                81001,
+                TelegramBroadcastSourceKind::Text,
+            ),
+            new TelegramBroadcastAudienceDefinition(manualUserPublicIds: [$targetPublicId]),
+            'broadcast-source-retry-window',
+        );
+        $this->successfulOwnerTest($created->publicId, $actor);
+        $started = $service->startNow(
+            $actor['user_id'],
+            $created->publicId,
+            $created->stateVersion,
+        );
+        self::assertSame(1, $started->recipientCount);
+
+        $this->app->instance(TelegramSourceMessageSender::class, new class implements TelegramSourceMessageSender
+        {
+            public function send(
+                int $recipientChatId,
+                TelegramResolvedSourceMessagePresentation $source,
+                ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
+            ): TelegramMutationResult {
+                return new TelegramMutationResult(
+                    TelegramMutationOutcome::RetryAfter,
+                    'telegram_source_message_retry_after',
+                    retryAfterSeconds: 120,
+                );
+            }
+        });
+
+        $runner = $this->app->make(TelegramBroadcastDeliveryRunner::class);
+        self::assertSame(1, $runner->processBatch(1));
+
+        $recipient = DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
+            ->first(['id', 'delivery_state', 'retry_not_before']);
+        self::assertNotNull($recipient);
+        self::assertSame('failed_transient', $recipient->delivery_state);
+        self::assertIsString($recipient->retry_not_before);
+        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $recipient->retry_not_before);
+        self::assertSame(
+            TelegramBroadcastCampaignState::Completed,
+            $service->current($actor['user_id'], $created->publicId)->state,
+        );
+
+        $retry = $this->app->make(TelegramBroadcastRetryService::class);
+        $completed = $service->current($actor['user_id'], $created->publicId);
+        try {
+            $retry->retryFailed(
+                $actor['user_id'],
+                $created->publicId,
+                $completed->stateVersion,
+                'broadcast-source-retry-too-early',
+            );
+            self::fail('Provider-directed retry window must block an early broadcast retry.');
+        } catch (DomainException) {
+            self::assertSame('failed_transient', DB::table('broadcast_recipients')
+                ->where('id', (int) $recipient->id)
+                ->value('delivery_state'));
+        }
+
+        DB::table('broadcast_recipients')
+            ->where('id', (int) $recipient->id)
+            ->update(['retry_not_before' => null]);
+
+        self::assertSame(1, $retry->retryFailed(
+            $actor['user_id'],
+            $created->publicId,
+            $completed->stateVersion,
+            'broadcast-source-retry-after-window',
+        ));
+    }
+
+    public function test_lifecycle_retry_after_blocks_new_mutation_for_same_recipient_until_due(): void
+    {
+        $actor = $this->owner(910191);
+        $this->telegramUser(910192);
+        $campaign = $this->startedCampaign($actor, 'broadcast-lifecycle-retry-window');
+        $campaignId = $this->campaignId($campaign->publicId);
+        $now = now('UTC');
+
+        $recipients = DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $campaignId)
+            ->orderBy('id')
+            ->get(['id', 'public_id']);
+        self::assertNotEmpty($recipients);
+        foreach ($recipients as $index => $recipient) {
+            DB::table('broadcast_recipients')->where('id', (int) $recipient->id)->update([
+                'delivery_state' => 'sent',
+                'telegram_message_id' => 8300 + $index,
+                'failure_code' => null,
+                'retry_not_before' => null,
+                'sent_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        self::assertTrue($service->completeIfFinished($campaign->publicId));
+        $completed = $service->current($actor['user_id'], $campaign->publicId);
+        $recipientPublicId = (string) $recipients[0]->public_id;
+
+        $lifecycle = $this->app->make(TelegramBroadcastLifecycleService::class);
+        $batch = $lifecycle->queueAction(
+            $actor['user_id'],
+            $campaign->publicId,
+            $completed->stateVersion,
+            TelegramBroadcastLifecycleAction::Pin,
+            'broadcast-lifecycle-retry-window-pin',
+            [$recipientPublicId],
+        );
+
+        $this->app->instance(
+            TelegramBroadcastLifecycleTransport::class,
+            new class implements TelegramBroadcastLifecycleTransport
+            {
+                public function mutate(
+                    TelegramBroadcastLifecycleMutationRequest $request,
+                ): TelegramMutationResult {
+                    return new TelegramMutationResult(
+                        TelegramMutationOutcome::RetryAfter,
+                        'tg_broadcast_lifecycle_retry_after',
+                        retryAfterSeconds: 90,
+                    );
+                }
+            },
+        );
+
+        $runner = $this->app->make(TelegramBroadcastLifecycleRunner::class);
+        self::assertSame(1, $runner->processBatch(1));
+
+        $operation = DB::table('broadcast_recipient_messages')
+            ->where('operation_group_public_id', $batch->groupPublicId)
+            ->first(['id', 'state', 'retry_not_before']);
+        self::assertNotNull($operation);
+        self::assertSame('retryable', $operation->state);
+        self::assertIsString($operation->retry_not_before);
+        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $operation->retry_not_before);
+
+        try {
+            $lifecycle->queueAction(
+                $actor['user_id'],
+                $campaign->publicId,
+                $batch->stateVersion,
+                TelegramBroadcastLifecycleAction::Unpin,
+                'broadcast-lifecycle-retry-window-unpin-too-early',
+                [$recipientPublicId],
+            );
+            self::fail('Provider-directed lifecycle retry window must block a new mutation.');
+        } catch (DomainException) {
+            self::assertSame('retryable', DB::table('broadcast_recipient_messages')
+                ->where('id', (int) $operation->id)
+                ->value('state'));
+        }
+
+        DB::table('broadcast_recipient_messages')
+            ->where('id', (int) $operation->id)
+            ->update(['retry_not_before' => null]);
+
+        $next = $lifecycle->queueAction(
+            $actor['user_id'],
+            $campaign->publicId,
+            $batch->stateVersion,
+            TelegramBroadcastLifecycleAction::Unpin,
+            'broadcast-lifecycle-retry-window-unpin-due',
+            [$recipientPublicId],
+        );
+        self::assertSame(1, $next->recipientCount);
     }
 
     public function test_retry_never_requeues_uncertain_recipient_and_reopens_only_definitive_failure(): void
