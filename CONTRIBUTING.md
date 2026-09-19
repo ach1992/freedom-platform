@@ -50,14 +50,14 @@ Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies inte
 
 High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to other dependency-safe executable work.
 
-## Independent review relay
+## Independent review
 
-When independent review is required, the permitted project dispatch mechanism is an **Owner-relayed fresh ChatGPT chat**.
+When independent review is required, use a reviewer context that is genuinely independent from the authoring Master. Prefer direct dispatch to a fresh independent reviewer capability when the current tool/runtime supports that separation and exact evidence envelope. If no such direct route exists, use an **Owner-relayed fresh ChatGPT chat**. The review result contract and freshness requirements are identical either way.
 
-1. The authoring Master first lets implementation and effective-diff self-review converge, completes the applicable exact-head validation for that candidate, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt. Do not request independent review while planned implementation/self-review correction remains.
-2. The prompt identifies the repository/PR/change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and validation evidence tied to that exact candidate.
-3. The Owner opens a new ChatGPT chat and pastes the prompt. That fresh chat reviews read-only and returns the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
-4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or integrating.
+1. The authoring Master first lets implementation and effective-diff self-review converge and freezes the candidate. Start the applicable exact-head CI and independent review **concurrently** when neither depends on the other's result. Do not request independent review while planned implementation/self-review correction remains.
+2. The review envelope identifies the repository/PR/change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and current validation/CI evidence identifiers. CI may be marked `pending` when the same exact candidate is already running; a reviewer never treats pending CI as passed evidence.
+3. If a direct independent-review capability is available, dispatch the same bounded read-only envelope there. Otherwise the Owner opens a fresh ChatGPT chat with the ready-to-paste `INDEPENDENT REVIEW CHAT` prompt. The reviewer returns the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
+4. The Master reconciles the complete review result and exact-head CI independently. Integration readiness requires both a current acceptable review and all applicable green CI/checks for the same candidate/target envelope.
 5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review; generate a new exact review packet rather than reusing a stale verdict.
 6. For remediation after `CHANGES_REQUIRED`, the fresh packet identifies the prior reviewed candidate and the exact delta to the corrected candidate. The new verdict always binds the current exact candidate, but unchanged prior analysis may be reused when its assumptions remain valid; the reviewer widens back to the full affected surface whenever the correction changes those assumptions. Do not force ceremonial whole-diff rediscovery solely because a bounded correction changed the SHA.
 
@@ -71,7 +71,7 @@ Independent-review packets are defensive software-assurance artifacts. Preserve 
 - A platform refusal, hidden response, or safety limitation is not review evidence and never satisfies an independent-review gate. Reformulate the same exact review envelope using bounded defensive/property-based language and the same Owner-relayed fresh ChatGPT mechanism; keep the material scope unchanged.
 - Do not evade or defeat platform safety controls. If an equivalent compliant review packet still cannot be reviewed, surface the missing review capability/gate instead of substituting self-review, weakening the contract, or manufacturing approval.
 
-Do not request GitHub/Copilot reviewers or dispatch independent review through another agent/service merely to satisfy this repository rule. If repository/platform protection independently requires a native approval object, treat that as a separate integration gate and surface it without fabricating or bypassing it.
+Do not use GitHub/Copilot or another agent/service merely to manufacture an approval object or to replace the required independence/evidence contract. A directly dispatchable reviewer is valid only when it is genuinely separate from the authoring context and can perform the same bounded evidence-based review. If repository/platform protection independently requires a native approval object, treat that as a separate integration gate and surface it without fabricating or bypassing it.
 
 ## Merge method
 
