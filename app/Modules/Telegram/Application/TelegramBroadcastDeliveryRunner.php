@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
@@ -29,6 +30,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         private TelegramBroadcastTextDeliveryGateway $textDelivery,
         private TelegramSourceMessageSender $sourceMessages,
         private TelegramBroadcastCampaignService $campaigns,
+        private TelegramDeliveryRuntime $runtime,
     ) {}
 
     /** @requirement COM-002 DAT-002 DAT-003 DAT-004 ACL-002 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
@@ -72,6 +74,7 @@ final readonly class TelegramBroadcastDeliveryRunner
     {
         return $this->database->connection()->transaction(function (Connection $connection): ?TelegramBroadcastRecipientClaim {
             $campaign = $connection->table('broadcast_campaigns')
+                ->where('bot_id', $this->runtime->botId())
                 ->where('state', TelegramBroadcastCampaignState::Active->value)
                 ->whereExists(function ($query): void {
                     $query->selectRaw('1')
@@ -232,6 +235,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         ): void {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first(['id']);
             if ($campaign === null) {
@@ -365,6 +369,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $this->database->connection()->transaction(function (Connection $connection) use ($claim): bool {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first(['id', 'state']);
             if ($campaign === null) {
@@ -440,6 +445,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         $this->database->connection()->transaction(function (Connection $connection) use ($claim, $result): void {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first(['id']);
             if ($campaign === null) {
@@ -535,6 +541,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         $this->database->connection()->transaction(function (Connection $connection) use ($claim, $resultCode): void {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first(['id']);
             if ($campaign === null) {
@@ -630,15 +637,17 @@ final readonly class TelegramBroadcastDeliveryRunner
     /** @requirement COM-002 DAT-003 DAT-004 OPS-003 QUA-004 */
     private function recoverExpiredClaims(int $limit): int
     {
-        $rows = $this->database->connection()->table('broadcast_recipients')
-            ->where('delivery_state', 'sending')
-            ->whereNotNull('claim_token_hash')
-            ->whereNotNull('claim_expires_at')
-            ->whereRaw('claim_expires_at <= CURRENT_TIMESTAMP(6)')
-            ->orderBy('claim_expires_at')
-            ->orderBy('id')
+        $rows = $this->database->connection()->table('broadcast_recipients as recipient')
+            ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+            ->where('campaign.bot_id', $this->runtime->botId())
+            ->where('recipient.delivery_state', 'sending')
+            ->whereNotNull('recipient.claim_token_hash')
+            ->whereNotNull('recipient.claim_expires_at')
+            ->whereRaw('recipient.claim_expires_at <= CURRENT_TIMESTAMP(6)')
+            ->orderBy('recipient.claim_expires_at')
+            ->orderBy('recipient.id')
             ->limit($limit)
-            ->get(['id', 'broadcast_campaign_id']);
+            ->get(['recipient.id', 'recipient.broadcast_campaign_id']);
 
         $recovered = 0;
         foreach ($rows as $candidate) {
@@ -763,12 +772,14 @@ final readonly class TelegramBroadcastDeliveryRunner
     /** @requirement COM-002 DAT-003 DAT-004 OPS-003 QUA-004 */
     private function reconcileLinkedDeliveries(int $limit): int
     {
-        $recipients = $this->database->connection()->table('broadcast_recipients')
-            ->where('delivery_state', 'sending')
-            ->whereNotNull('delivery_operation_public_id')
-            ->orderBy('id')
+        $recipients = $this->database->connection()->table('broadcast_recipients as recipient')
+            ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+            ->where('campaign.bot_id', $this->runtime->botId())
+            ->where('recipient.delivery_state', 'sending')
+            ->whereNotNull('recipient.delivery_operation_public_id')
+            ->orderBy('recipient.id')
             ->limit($limit)
-            ->get(['public_id']);
+            ->get(['recipient.public_id']);
 
         $reconciled = 0;
         foreach ($recipients as $recipient) {
@@ -905,6 +916,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         $this->database->connection()->transaction(function (Connection $connection) use ($claim, $resultCode): void {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first(['id', 'state', 'state_version']);
             if ($campaign === null) {
@@ -952,6 +964,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         $this->database->connection()->transaction(function (Connection $connection) use ($claim, $resultCode): void {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
+                ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first(['id', 'state']);
             if ($campaign === null) {
@@ -992,6 +1005,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
             ->where('recipient.public_id', $claim->recipientPublicId)
             ->where('campaign.public_id', $claim->campaignPublicId)
+            ->where('campaign.bot_id', $this->runtime->botId())
             ->first([
                 'campaign.state',
                 'recipient.delivery_state',
@@ -1021,6 +1035,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             ->join('broadcast_message_versions as message', 'message.id', '=', 'recipient_message.broadcast_message_version_id')
             ->where('recipient.public_id', $claim->recipientPublicId)
             ->where('campaign.public_id', $claim->campaignPublicId)
+            ->where('campaign.bot_id', $this->runtime->botId())
             ->first([
                 'campaign.state as campaign_state',
                 'campaign.actor_administrator_id as creator_administrator_id',
