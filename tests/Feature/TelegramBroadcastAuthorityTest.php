@@ -18,7 +18,6 @@ use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
 use App\Modules\Telegram\Application\TelegramBroadcastMessageDefinition;
 use App\Modules\Telegram\Application\TelegramBroadcastOwnerTestService;
 use App\Modules\Telegram\Application\TelegramBroadcastRetryService;
-use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
@@ -27,7 +26,9 @@ use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
-use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessageRouter;
+use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -502,16 +503,21 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         );
         self::assertSame(TelegramBroadcastCampaignState::Paused, $paused->state);
 
-        $receipt = $this->app->make(TelegramDeliveryOperationExecutor::class)->execute(
-            $firstOperationPublicId,
-            $operation->outbox_event_id,
-            $operation->correlation_id,
+        $dispatch = $this->app->make(DatabaseOutboxDispatcher::class)->dispatchOne(
+            $this->app->make(OutboxMessageRouter::class),
         );
-        self::assertSame(TelegramDeliveryOperationState::FailedFinal, $receipt->state);
-        self::assertSame(
-            TelegramBroadcastDeliveryEffectGuard::PAUSED_BEFORE_EFFECT,
-            $receipt->resultCode,
-        );
+        self::assertNotNull($dispatch);
+        self::assertSame($operation->outbox_event_id, $dispatch->messageId);
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $dispatch->outcome);
+        self::assertSame('review_required', DB::table('outbox_messages')
+            ->where('id', $operation->outbox_event_id)
+            ->value('dispatch_state'));
+        self::assertSame('prepared', DB::table('telegram_delivery_operations')
+            ->where('public_id', $firstOperationPublicId)
+            ->value('state'));
+        self::assertSame(0, (int) DB::table('telegram_delivery_operations')
+            ->where('public_id', $firstOperationPublicId)
+            ->value('provider_attempts'));
         self::assertSame(0, $transport->attempts);
 
         self::assertGreaterThanOrEqual(1, $runner->reconcile(10));
@@ -521,6 +527,17 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertNotNull($recipient);
         self::assertSame('queued', $recipient->delivery_state);
         self::assertNull($recipient->delivery_operation_public_id);
+        self::assertSame(
+            TelegramBroadcastDeliveryEffectGuard::PAUSED_BEFORE_EFFECT,
+            DB::table('broadcast_recipient_messages')
+                ->where('delivery_operation_public_id', $firstOperationPublicId)
+                ->value('result_code'),
+        );
+        self::assertSame(1, DB::table('broadcast_recipient_messages')
+            ->where('broadcast_recipient_id', (int) $recipient->id)
+            ->where('action', 'retry')
+            ->where('state', 'prepared')
+            ->count());
 
         $resumed = $campaigns->resume(
             $actor['user_id'],
