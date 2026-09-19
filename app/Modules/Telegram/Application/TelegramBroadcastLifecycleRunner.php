@@ -285,7 +285,6 @@ final readonly class TelegramBroadcastLifecycleRunner
             }
 
             $now = $this->timestamp();
-            $retryNotBefore = $this->retryNotBefore($result);
             $updated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $operation->id)
                 ->where('state', 'prepared')
