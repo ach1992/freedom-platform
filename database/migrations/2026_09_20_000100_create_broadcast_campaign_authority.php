@@ -112,6 +112,7 @@ return new class extends Migration
             $table->ulid('delivery_operation_public_id')->nullable()->unique();
             $table->unsignedBigInteger('telegram_message_id')->nullable();
             $table->string('failure_code', 128)->nullable();
+            $table->dateTime('retry_not_before', 6)->nullable();
             $table->dateTime('sent_at', 6)->nullable();
             $table->dateTime('created_at', 6);
             $table->dateTime('updated_at', 6);
@@ -138,6 +139,7 @@ return new class extends Migration
             $table->ulid('delivery_operation_public_id')->nullable()->unique();
             $table->unsignedBigInteger('telegram_message_id')->nullable();
             $table->string('result_code', 128)->nullable();
+            $table->dateTime('retry_not_before', 6)->nullable();
             $table->dateTime('provider_boundary_started_at', 6)->nullable();
             $table->dateTime('provider_boundary_finished_at', 6)->nullable();
             $table->foreignId('requested_by_administrator_id')
@@ -171,6 +173,7 @@ return new class extends Migration
             $table->ulid('delivery_operation_public_id')->nullable()->unique();
             $table->unsignedBigInteger('telegram_message_id')->nullable();
             $table->string('result_code', 128)->nullable();
+            $table->dateTime('retry_not_before', 6)->nullable();
             $table->dateTime('provider_boundary_started_at', 6)->nullable();
             $table->dateTime('provider_boundary_finished_at', 6)->nullable();
             $table->dateTime('created_at', 6);
@@ -294,6 +297,10 @@ ALTER TABLE broadcast_recipients
         (delivery_state = 'sent' AND telegram_message_id IS NOT NULL AND sent_at IS NOT NULL AND failure_code IS NULL)
         OR (delivery_state IN ('failed_transient','failed_permanent','uncertain') AND failure_code IS NOT NULL AND sent_at IS NULL)
         OR (delivery_state IN ('queued','sending','skipped') AND sent_at IS NULL)
+    ),
+    ADD CONSTRAINT broadcast_recipient_retry_window_chk CHECK (
+        retry_not_before IS NULL
+        OR (delivery_state = 'failed_transient' AND retry_not_before >= created_at)
     )
 SQL);
 
@@ -326,6 +333,10 @@ ALTER TABLE broadcast_recipient_messages
     ADD CONSTRAINT broadcast_recipient_message_boundary_chk CHECK (
         (state = 'sending' AND provider_boundary_started_at IS NOT NULL AND provider_boundary_finished_at IS NULL)
         OR (state <> 'sending')
+    ),
+    ADD CONSTRAINT broadcast_recipient_message_retry_window_chk CHECK (
+        retry_not_before IS NULL
+        OR (state = 'retryable' AND retry_not_before >= created_at)
     )
 SQL);
 
@@ -348,6 +359,10 @@ ALTER TABLE broadcast_campaign_tests
     ADD CONSTRAINT broadcast_campaign_test_boundary_chk CHECK (
         (state = 'sending' AND provider_boundary_started_at IS NOT NULL AND provider_boundary_finished_at IS NULL)
         OR state <> 'sending'
+    ),
+    ADD CONSTRAINT broadcast_campaign_test_retry_window_chk CHECK (
+        retry_not_before IS NULL
+        OR (state = 'failed' AND retry_not_before >= created_at)
     )
 SQL);
     }
