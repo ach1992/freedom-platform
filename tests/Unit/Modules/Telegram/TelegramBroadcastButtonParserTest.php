@@ -12,12 +12,12 @@ final class TelegramBroadcastButtonParserTest extends TestCase
 {
     public function test_none_removes_authored_keyboard(): void
     {
-        self::assertNull((new TelegramBroadcastButtonParser())->parse('none'));
+        self::assertNull((new TelegramBroadcastButtonParser)->parse('none'));
     }
 
     public function test_support_contact_button_reuses_existing_https_policy(): void
     {
-        $keyboard = (new TelegramBroadcastButtonParser())->parse(
+        $keyboard = (new TelegramBroadcastButtonParser)->parse(
             'support_contact | پشتیبانی | https://t.me/example_support',
         );
 
@@ -31,7 +31,7 @@ final class TelegramBroadcastButtonParserTest extends TestCase
         $this->expectException(DomainException::class);
         $this->expectExceptionMessage('not supported');
 
-        (new TelegramBroadcastButtonParser())->parse(
+        (new TelegramBroadcastButtonParser)->parse(
             'unknown | Example | https://example.com',
         );
     }
