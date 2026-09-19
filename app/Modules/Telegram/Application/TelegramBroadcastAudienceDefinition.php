@@ -16,8 +16,8 @@ final readonly class TelegramBroadcastAudienceDefinition
      * @param list<string> $tierCodes
      * @param list<string> $tagCodes
      * @param list<string> $offeringPublicIds
-     * @param list<string> $categoryPublicIds
-     * @param list<string> $serverPublicIds
+     * @param list<string> $categoryCodes
+     * @param list<string> $serverCodes
      * @param list<string> $manualUserPublicIds
      * @param list<int> $channelChatIds
      */
@@ -27,8 +27,8 @@ final readonly class TelegramBroadcastAudienceDefinition
         public array $tagCodes = [],
         public string $purchaseState = 'any',
         public array $offeringPublicIds = [],
-        public array $categoryPublicIds = [],
-        public array $serverPublicIds = [],
+        public array $categoryCodes = [],
+        public array $serverCodes = [],
         public string $serviceState = 'any',
         public ?int $walletMinimumIrr = null,
         public ?int $walletMaximumIrr = null,
@@ -42,8 +42,8 @@ final readonly class TelegramBroadcastAudienceDefinition
         $this->assertCodeList($tagCodes, 'Broadcast tag code');
         $this->assertOneOf($purchaseState, ['any', 'with_successful', 'without_successful'], 'Broadcast purchase state');
         $this->assertUlidList($offeringPublicIds, 'Broadcast offering public ID');
-        $this->assertUlidList($categoryPublicIds, 'Broadcast category public ID');
-        $this->assertUlidList($serverPublicIds, 'Broadcast server public ID');
+        $this->assertCodeList($categoryCodes, 'Broadcast category code');
+        $this->assertCodeList($serverCodes, 'Broadcast server code');
         $this->assertOneOf($serviceState, ['any', 'active', 'expired'], 'Broadcast service state');
 
         if ($walletMinimumIrr !== null && $walletMinimumIrr < 0) {
@@ -89,8 +89,8 @@ final readonly class TelegramBroadcastAudienceDefinition
             && $this->tagCodes === []
             && $this->purchaseState === 'any'
             && $this->offeringPublicIds === []
-            && $this->categoryPublicIds === []
-            && $this->serverPublicIds === []
+            && $this->categoryCodes === []
+            && $this->serverCodes === []
             && $this->serviceState === 'any'
             && $this->walletMinimumIrr === null
             && $this->walletMaximumIrr === null
@@ -107,8 +107,8 @@ final readonly class TelegramBroadcastAudienceDefinition
             'tag_codes' => $this->canonicalStrings($this->tagCodes),
             'purchase_state' => $this->purchaseState,
             'offering_public_ids' => $this->canonicalStrings($this->offeringPublicIds),
-            'category_public_ids' => $this->canonicalStrings($this->categoryPublicIds),
-            'server_public_ids' => $this->canonicalStrings($this->serverPublicIds),
+            'category_codes' => $this->canonicalStrings($this->categoryCodes),
+            'server_codes' => $this->canonicalStrings($this->serverCodes),
             'service_state' => $this->serviceState,
             'wallet_minimum_irr' => $this->walletMinimumIrr,
             'wallet_maximum_irr' => $this->walletMaximumIrr,
@@ -154,8 +154,8 @@ final readonly class TelegramBroadcastAudienceDefinition
             'tag_codes',
             'purchase_state',
             'offering_public_ids',
-            'category_public_ids',
-            'server_public_ids',
+            'category_codes',
+            'server_codes',
             'service_state',
             'wallet_minimum_irr',
             'wallet_maximum_irr',
@@ -174,8 +174,8 @@ final readonly class TelegramBroadcastAudienceDefinition
             self::stringList($data['tag_codes']),
             self::requiredString($data['purchase_state']),
             self::stringList($data['offering_public_ids']),
-            self::stringList($data['category_public_ids']),
-            self::stringList($data['server_public_ids']),
+            self::stringList($data['category_codes']),
+            self::stringList($data['server_codes']),
             self::requiredString($data['service_state']),
             self::nullableNonNegativeInt($data['wallet_minimum_irr']),
             self::nullableNonNegativeInt($data['wallet_maximum_irr']),
