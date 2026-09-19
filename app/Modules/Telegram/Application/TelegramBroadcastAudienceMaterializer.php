@@ -64,9 +64,18 @@ final readonly class TelegramBroadcastAudienceMaterializer
     }
 
     /** @requirement COM-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 */
-    public function materialize(string $campaignPublicId, int $expectedAudienceVersion): int
-    {
+    public function materialize(
+        string $campaignPublicId,
+        int $expectedAudienceVersion,
+        int $expectedStateVersion,
+    ): int {
+        if ($expectedStateVersion < 1) {
+            throw new DomainException('Broadcast campaign state version is invalid.');
+        }
         $source = $this->campaignAudience($campaignPublicId, $expectedAudienceVersion);
+        if ((int) $source->state_version !== $expectedStateVersion) {
+            throw new DomainException('Broadcast campaign changed before audience materialization.');
+        }
         if ($source->audience_materialized_at !== null) {
             return $this->nonNegativeInt($source->recipient_count, 'Broadcast recipient count');
         }
@@ -80,6 +89,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
             $expectedAudienceVersion,
             $recipients,
             $now,
+            $expectedStateVersion,
         ): int {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('id', (int) $source->campaign_id)
@@ -87,6 +97,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
                 ->first([
                     'state',
                     'current_audience_version',
+                    'state_version',
                     'audience_materialized_at',
                     'recipient_count',
                 ]);
@@ -98,6 +109,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
             }
             if ((string) $campaign->state !== 'draft'
                 || (int) $campaign->current_audience_version !== $expectedAudienceVersion
+                || (int) $campaign->state_version !== $expectedStateVersion
             ) {
                 throw new DomainException('Broadcast audience changed before materialization completed.');
             }
@@ -134,6 +146,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
                 ->where('state', 'draft')
                 ->whereNull('audience_materialized_at')
                 ->where('current_audience_version', $expectedAudienceVersion)
+                ->where('state_version', $expectedStateVersion)
                 ->update([
                     'recipient_count' => $count,
                     'audience_materialized_at' => $now,
@@ -168,6 +181,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
                 'campaign.bot_id',
                 'campaign.state',
                 'campaign.current_audience_version',
+                'campaign.state_version',
                 'campaign.audience_materialized_at',
                 'campaign.recipient_count',
                 'audience.id as audience_id',
