@@ -21,6 +21,8 @@ use SensitiveParameter;
 
 final readonly class TelegramBroadcastOwnerTestService
 {
+    private const SOURCE_BOUNDARY_RECOVERY_MINUTES = 5;
+
     public function __construct(
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
@@ -217,15 +219,24 @@ final readonly class TelegramBroadcastOwnerTestService
                 throw new RuntimeException('Broadcast Owner test disappeared before source-message effect.');
             }
             if ((string) $row->state === 'sending') {
-                $connection->table('broadcast_campaign_tests')
-                    ->where('public_id', $testPublicId)
-                    ->where('state', 'sending')
-                    ->update([
-                        'state' => 'uncertain',
-                        'result_code' => 'broadcast_owner_test_interrupted_source_effect',
-                        'provider_boundary_finished_at' => $this->timestamp(),
-                        'updated_at' => $this->timestamp(),
-                    ]);
+                $staleBefore = $this->clock->now()
+                    ->modify('-'.self::SOURCE_BOUNDARY_RECOVERY_MINUTES.' minutes')
+                    ->format('Y-m-d H:i:s.u');
+                if (is_string($row->provider_boundary_started_at)
+                    && $row->provider_boundary_started_at <= $staleBefore
+                ) {
+                    $now = $this->timestamp();
+                    $connection->table('broadcast_campaign_tests')
+                        ->where('public_id', $testPublicId)
+                        ->where('state', 'sending')
+                        ->where('provider_boundary_started_at', '<=', $staleBefore)
+                        ->update([
+                            'state' => 'uncertain',
+                            'result_code' => 'broadcast_owner_test_interrupted_source_effect',
+                            'provider_boundary_finished_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                }
 
                 return false;
             }
