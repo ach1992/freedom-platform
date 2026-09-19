@@ -73,10 +73,11 @@ verify_shards() {
 verify_shards 2
 verify_shards 4
 verify_shards 8
+verify_shards 16
 
 if bash "$selector" 0 0 >/dev/null 2>&1; then
     fail 'zero shard count must be rejected'
 fi
-if bash "$selector" 8 8 >/dev/null 2>&1; then
+if bash "$selector" 16 16 >/dev/null 2>&1; then
     fail 'out-of-range shard index must be rejected'
 fi
