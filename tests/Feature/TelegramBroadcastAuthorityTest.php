@@ -1,0 +1,459 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Modules\Telegram\Application\TelegramBroadcastAudienceDefinition;
+use App\Modules\Telegram\Application\TelegramBroadcastCampaignService;
+use App\Modules\Telegram\Application\TelegramBroadcastLifecycleService;
+use App\Modules\Telegram\Application\TelegramBroadcastMessageDefinition;
+use App\Modules\Telegram\Application\TelegramBroadcastRetryService;
+use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
+use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
+use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
+use DomainException;
+use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Tests\TestCase;
+
+/** @requirement COM-002 COM-003 ACL-001 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
+final class TelegramBroadcastAuthorityTest extends TestCase
+{
+    use DatabaseTruncation;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram broadcast authority verification requires MariaDB/MySQL.');
+        }
+
+        $this->seed();
+        config([
+            'app.url' => 'https://bot.example.test',
+            'telegram.bot_token' => '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+            'telegram.webhook_secret' => 'telegram_webhook_secret_1234567890_safe',
+            'telegram.webhook_path' => 'api/telegram/webhook',
+            'telegram.max_body_bytes' => 1_048_576,
+            'telegram.queue' => 'critical',
+            'telegram.processing_lease_seconds' => 120,
+            'telegram.api_base_url' => 'https://api.telegram.org',
+            'telegram.api_timeout_seconds' => 15,
+        ]);
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            if (DB::connection()->getDriverName() === 'mysql') {
+                $this->truncateTablesForAllConnections();
+            }
+        } finally {
+            parent::tearDown();
+        }
+    }
+
+    public function test_create_replay_owner_gate_materialization_and_cancel_are_restart_safe(): void
+    {
+        $actor = $this->owner(910001);
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        $message = TelegramBroadcastMessageDefinition::newText('پیام آزمایشی کمپین');
+        $audience = new TelegramBroadcastAudienceDefinition;
+
+        $created = $service->createDraft(
+            $actor['user_id'],
+            $message,
+            $audience,
+            'broadcast-create-replay',
+        );
+        $replayed = $service->createDraft(
+            $actor['user_id'],
+            $message,
+            $audience,
+            'broadcast-create-replay',
+        );
+
+        self::assertFalse($created->replayed);
+        self::assertTrue($replayed->replayed);
+        self::assertSame($created->publicId, $replayed->publicId);
+        self::assertSame(1, DB::table('broadcast_campaigns')->count());
+        self::assertSame(1, DB::table('broadcast_message_versions')->count());
+        self::assertSame(1, DB::table('broadcast_audiences')->count());
+
+        try {
+            $service->createDraft(
+                $actor['user_id'],
+                TelegramBroadcastMessageDefinition::newText('different input'),
+                $audience,
+                'broadcast-create-replay',
+            );
+            self::fail('Conflicting replay input must be rejected.');
+        } catch (DomainException) {
+            self::assertSame(1, DB::table('broadcast_campaigns')->count());
+        }
+
+        self::assertSame(1, $service->estimateAudience(
+            $actor['user_id'],
+            $created->publicId,
+            $created->audienceVersion,
+        ));
+
+        try {
+            $service->startNow($actor['user_id'], $created->publicId, $created->stateVersion);
+            self::fail('Broad delivery must require a successful current-version Owner test.');
+        } catch (DomainException) {
+            self::assertNull(DB::table('broadcast_campaigns')
+                ->where('public_id', $created->publicId)
+                ->value('audience_materialized_at'));
+        }
+
+        $this->successfulOwnerTest($created->publicId, $actor);
+        $started = $service->startNow(
+            $actor['user_id'],
+            $created->publicId,
+            $created->stateVersion,
+        );
+
+        self::assertSame(TelegramBroadcastCampaignState::Active, $started->state);
+        self::assertSame(1, $started->recipientCount);
+        self::assertSame(1, DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
+            ->where('delivery_state', 'queued')
+            ->count());
+
+        $cancelled = $service->cancel(
+            $actor['user_id'],
+            $created->publicId,
+            $started->stateVersion,
+        );
+        self::assertSame(TelegramBroadcastCampaignState::Cancelled, $cancelled->state);
+        self::assertSame(1, DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
+            ->where('delivery_state', 'skipped')
+            ->where('failure_code', 'broadcast_cancelled_before_effect')
+            ->count());
+    }
+
+    public function test_source_message_is_bound_to_authorized_creator_chat(): void
+    {
+        $actor = $this->owner(910101);
+        $other = $this->telegramUser(910102);
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+
+        try {
+            $service->createDraft(
+                $actor['user_id'],
+                TelegramBroadcastMessageDefinition::copy(
+                    $other['telegram_user_id'],
+                    42,
+                    TelegramBroadcastSourceKind::Photo,
+                ),
+                new TelegramBroadcastAudienceDefinition,
+                'broadcast-source-cross-actor',
+            );
+            self::fail('Broadcast source message must not cross administrator chat authority.');
+        } catch (DomainException) {
+            self::assertSame(0, DB::table('broadcast_campaigns')->count());
+        }
+
+        $accepted = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::copy(
+                $actor['telegram_user_id'],
+                43,
+                TelegramBroadcastSourceKind::Photo,
+                'کپشن اولیه',
+            ),
+            new TelegramBroadcastAudienceDefinition,
+            'broadcast-source-own-chat',
+        );
+
+        self::assertSame('copy', DB::table('broadcast_message_versions')
+            ->where('broadcast_campaign_id', $this->campaignId($accepted->publicId))
+            ->value('mode'));
+        self::assertSame($actor['telegram_user_id'], (int) DB::table('broadcast_message_versions')
+            ->where('broadcast_campaign_id', $this->campaignId($accepted->publicId))
+            ->value('source_chat_id'));
+    }
+
+    public function test_retry_never_requeues_uncertain_recipient_and_reopens_only_definitive_failure(): void
+    {
+        $actor = $this->owner(910201);
+        $first = $this->telegramUser(910202);
+        $second = $this->telegramUser(910203);
+        $campaign = $this->startedCampaign($actor, 'broadcast-retry-campaign');
+        $campaignId = $this->campaignId($campaign->publicId);
+
+        $recipients = DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $campaignId)
+            ->orderBy('id')
+            ->get(['id', 'public_id']);
+        self::assertCount(3, $recipients);
+
+        $now = now('UTC');
+        DB::table('broadcast_recipients')->where('id', (int) $recipients[0]->id)->update([
+            'delivery_state' => 'sent',
+            'telegram_message_id' => 7001,
+            'failure_code' => null,
+            'sent_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('broadcast_recipients')->where('id', (int) $recipients[1]->id)->update([
+            'delivery_state' => 'failed_transient',
+            'telegram_message_id' => null,
+            'failure_code' => 'telegram_delivery_retryable',
+            'sent_at' => null,
+            'updated_at' => $now,
+        ]);
+        DB::table('broadcast_recipients')->where('id', (int) $recipients[2]->id)->update([
+            'delivery_state' => 'uncertain',
+            'telegram_message_id' => null,
+            'failure_code' => 'telegram_delivery_uncertain',
+            'sent_at' => null,
+            'updated_at' => $now,
+        ]);
+
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        self::assertTrue($service->completeIfFinished($campaign->publicId));
+        $completed = $service->current($actor['user_id'], $campaign->publicId);
+        self::assertSame(TelegramBroadcastCampaignState::Completed, $completed->state);
+
+        $retry = $this->app->make(TelegramBroadcastRetryService::class);
+        try {
+            $retry->retryFailed(
+                $actor['user_id'],
+                $campaign->publicId,
+                $completed->stateVersion,
+                'broadcast-retry-mixed-selection',
+                [(string) $recipients[1]->public_id, (string) $recipients[2]->public_id],
+            );
+            self::fail('Uncertain recipient must never enter automatic failed-recipient retry.');
+        } catch (DomainException) {
+            self::assertSame('uncertain', DB::table('broadcast_recipients')
+                ->where('id', (int) $recipients[2]->id)
+                ->value('delivery_state'));
+        }
+
+        self::assertSame(1, $retry->retryFailed(
+            $actor['user_id'],
+            $campaign->publicId,
+            $completed->stateVersion,
+            'broadcast-retry-definitive-only',
+        ));
+        self::assertSame('queued', DB::table('broadcast_recipients')
+            ->where('id', (int) $recipients[1]->id)
+            ->value('delivery_state'));
+        self::assertSame('uncertain', DB::table('broadcast_recipients')
+            ->where('id', (int) $recipients[2]->id)
+            ->value('delivery_state'));
+        self::assertSame(TelegramBroadcastCampaignState::Active, $service
+            ->current($actor['user_id'], $campaign->publicId)
+            ->state);
+
+        unset($first, $second);
+    }
+
+    public function test_lifecycle_revision_requires_new_owner_test_and_groups_exact_recipient_operations(): void
+    {
+        $actor = $this->owner(910301);
+        $this->telegramUser(910302);
+        $campaign = $this->startedCampaign($actor, 'broadcast-lifecycle-campaign');
+        $campaignId = $this->campaignId($campaign->publicId);
+        $now = now('UTC');
+
+        $recipients = DB::table('broadcast_recipients')
+            ->where('broadcast_campaign_id', $campaignId)
+            ->orderBy('id')
+            ->get(['id']);
+        foreach ($recipients as $index => $recipient) {
+            DB::table('broadcast_recipients')->where('id', (int) $recipient->id)->update([
+                'delivery_state' => 'sent',
+                'telegram_message_id' => 8100 + $index,
+                'failure_code' => null,
+                'sent_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        $campaignService = $this->app->make(TelegramBroadcastCampaignService::class);
+        self::assertTrue($campaignService->completeIfFinished($campaign->publicId));
+        $completed = $campaignService->current($actor['user_id'], $campaign->publicId);
+
+        $lifecycle = $this->app->make(TelegramBroadcastLifecycleService::class);
+        $revision = $lifecycle->reviseContent(
+            $actor['user_id'],
+            $campaign->publicId,
+            $completed->stateVersion,
+            TelegramBroadcastMessageDefinition::newText('نسخه ویرایش‌شده'),
+        );
+        self::assertSame(2, $revision->messageVersion);
+
+        try {
+            $lifecycle->queueAction(
+                $actor['user_id'],
+                $campaign->publicId,
+                $revision->stateVersion,
+                TelegramBroadcastLifecycleAction::Edit,
+                'broadcast-lifecycle-before-owner-test',
+            );
+            self::fail('Lifecycle mutation must require a successful test of the revised message version.');
+        } catch (DomainException) {
+            self::assertSame(0, DB::table('broadcast_recipient_messages')
+                ->where('action', 'edit')
+                ->count());
+        }
+
+        $this->successfulOwnerTest($campaign->publicId, $actor, 2);
+        $batch = $lifecycle->queueAction(
+            $actor['user_id'],
+            $campaign->publicId,
+            $revision->stateVersion,
+            TelegramBroadcastLifecycleAction::Edit,
+            'broadcast-lifecycle-edit-batch',
+        );
+
+        self::assertSame(count($recipients), $batch->recipientCount);
+        self::assertSame(count($recipients), DB::table('broadcast_recipient_messages')
+            ->where('operation_group_public_id', $batch->groupPublicId)
+            ->where('action', 'edit')
+            ->where('state', 'prepared')
+            ->count());
+
+        $progress = $lifecycle->progress(
+            $actor['user_id'],
+            $campaign->publicId,
+            $batch->groupPublicId,
+        );
+        self::assertSame($batch->recipientCount, $progress->prepared);
+        self::assertSame(0, $progress->finishedCount());
+
+        try {
+            $lifecycle->queueAction(
+                $actor['user_id'],
+                $campaign->publicId,
+                $batch->stateVersion,
+                TelegramBroadcastLifecycleAction::Delete,
+                'broadcast-lifecycle-overlap',
+            );
+            self::fail('Overlapping lifecycle batches must be rejected.');
+        } catch (DomainException) {
+            self::assertSame($batch->recipientCount, DB::table('broadcast_recipient_messages')
+                ->where('operation_group_public_id', $batch->groupPublicId)
+                ->count());
+        }
+    }
+
+    /**
+     * @return array{user_id:int,administrator_id:int,telegram_account_id:int,telegram_user_id:int}
+     */
+    private function owner(int $telegramUserId): array
+    {
+        $identity = $this->telegramUser($telegramUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => $identity['user_id'],
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return [
+            ...$identity,
+            'administrator_id' => $administratorId,
+        ];
+    }
+
+    /** @return array{user_id:int,telegram_account_id:int,telegram_user_id:int} */
+    private function telegramUser(int $telegramUserId): array
+    {
+        $now = now('UTC');
+        $userId = (int) DB::table('users')->insertGetId([
+            'public_id' => (string) Str::ulid(),
+            'account_type' => 'customer',
+            'account_status' => 'active',
+            'locale' => 'fa',
+            'first_seen_at' => $now,
+            'last_seen_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $telegramAccountId = (int) DB::table('telegram_accounts')->insertGetId([
+            'user_id' => $userId,
+            'bot_id' => 123456789,
+            'telegram_user_id' => $telegramUserId,
+            'username' => 'broadcast_'.$telegramUserId,
+            'language_code' => 'fa',
+            'is_bot' => false,
+            'first_seen_at' => $now,
+            'last_seen_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return [
+            'user_id' => $userId,
+            'telegram_account_id' => $telegramAccountId,
+            'telegram_user_id' => $telegramUserId,
+        ];
+    }
+
+    private function startedCampaign(array $actor, string $requestKey): \App\Modules\Telegram\Application\TelegramBroadcastCampaignReceipt
+    {
+        $service = $this->app->make(TelegramBroadcastCampaignService::class);
+        $created = $service->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::newText('متن کمپین'),
+            new TelegramBroadcastAudienceDefinition,
+            $requestKey,
+        );
+        $this->successfulOwnerTest($created->publicId, $actor);
+
+        return $service->startNow(
+            $actor['user_id'],
+            $created->publicId,
+            $created->stateVersion,
+        );
+    }
+
+    private function successfulOwnerTest(string $campaignPublicId, array $owner, int $messageVersion = 1): void
+    {
+        $campaignId = $this->campaignId($campaignPublicId);
+        $messageVersionId = DB::table('broadcast_message_versions')
+            ->where('broadcast_campaign_id', $campaignId)
+            ->where('version', $messageVersion)
+            ->value('id');
+        self::assertIsNumeric($messageVersionId);
+        $now = now('UTC');
+
+        DB::table('broadcast_campaign_tests')->insert([
+            'public_id' => (string) Str::ulid(),
+            'broadcast_campaign_id' => $campaignId,
+            'broadcast_message_version_id' => (int) $messageVersionId,
+            'owner_administrator_id' => $owner['administrator_id'],
+            'telegram_account_id' => $owner['telegram_account_id'],
+            'request_key_hash' => hash('sha256', $campaignPublicId.'|owner-test|'.$messageVersion),
+            'state' => 'succeeded',
+            'delivery_operation_public_id' => null,
+            'telegram_message_id' => 9900 + $messageVersion,
+            'result_code' => 'telegram_test_success',
+            'provider_boundary_started_at' => null,
+            'provider_boundary_finished_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function campaignId(string $publicId): int
+    {
+        $id = DB::table('broadcast_campaigns')->where('public_id', $publicId)->value('id');
+        self::assertIsNumeric($id);
+
+        return (int) $id;
+    }
+}
