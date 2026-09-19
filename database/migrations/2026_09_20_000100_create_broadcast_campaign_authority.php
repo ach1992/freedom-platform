@@ -313,34 +313,7 @@ ALTER TABLE broadcast_campaign_tests
     ADD CONSTRAINT broadcast_campaign_test_delivery_chk CHECK (
         delivery_operation_public_id IS NULL
         OR (
-            delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}
-SQL);
-    }
-
-    public function down(): void
-    {
-        foreach ([
-            'broadcast_campaign_tests',
-            'broadcast_recipient_messages',
-            'broadcast_recipients',
-            'broadcast_message_versions',
-            'broadcast_audiences',
-            'broadcast_campaigns',
-        ] as $table) {
-            if (Schema::hasTable($table) && DB::table($table)->exists()) {
-                throw new RuntimeException('Broadcast campaign records must be retained; rollback requires empty authority tables.');
-            }
-        }
-
-        Schema::dropIfExists('broadcast_campaign_tests');
-        Schema::dropIfExists('broadcast_recipient_messages');
-        Schema::dropIfExists('broadcast_recipients');
-        Schema::dropIfExists('broadcast_message_versions');
-        Schema::dropIfExists('broadcast_audiences');
-        Schema::dropIfExists('broadcast_campaigns');
-    }
-};
-
+            delivery_operation_public_id REGEXP '^[0-9A-HJKMNP-TV-Z]{26}$'
             AND BINARY delivery_operation_public_id = BINARY UPPER(delivery_operation_public_id)
         )
     ),
