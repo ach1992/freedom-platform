@@ -471,6 +471,12 @@ return [
         'agent_status_histories' => 'Agents',
         'alerts' => 'Operations',
         'audit_logs' => 'SharedAppendOnly',
+        'broadcast_audiences' => 'Telegram',
+        'broadcast_campaign_tests' => 'Telegram',
+        'broadcast_campaigns' => 'Telegram',
+        'broadcast_message_versions' => 'Telegram',
+        'broadcast_recipient_messages' => 'Telegram',
+        'broadcast_recipients' => 'Telegram',
         'benefit_code_campaign_versions' => 'Promotions',
         'benefit_code_campaigns' => 'Promotions',
         'benefit_code_disables' => 'Promotions',
@@ -697,6 +703,12 @@ return [
     // Feature-private durable tables whose physical persistence identity may only be referenced by
     // their owning module. Other modules must use the owner's public Application boundary.
     'application_private_tables' => [
+        'broadcast_audiences',
+        'broadcast_campaign_tests',
+        'broadcast_campaigns',
+        'broadcast_message_versions',
+        'broadcast_recipient_messages',
+        'broadcast_recipients',
         'localization_override_versions',
         'localization_overrides',
         'support_ticket_attachments',
