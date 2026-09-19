@@ -438,15 +438,18 @@ final readonly class TelegramBroadcastLifecycleRunner
              *     delivery_operation_public_id:?string
              * }|null $operation
              */
-            $operation = $connection->table('broadcast_recipient_messages')
-                ->where('public_id', $operationPublicId)
+            $operation = $connection->table('broadcast_recipient_messages as operation')
+                ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+                ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
+                ->where('operation.public_id', $operationPublicId)
+                ->where('campaign.bot_id', $this->runtime->botId())
                 ->lockForUpdate()
                 ->first([
-                    'id',
-                    'broadcast_recipient_id',
-                    'action',
-                    'state',
-                    'delivery_operation_public_id',
+                    'operation.id',
+                    'operation.broadcast_recipient_id',
+                    'operation.action',
+                    'operation.state',
+                    'operation.delivery_operation_public_id',
                 ]);
             if ($operation === null || $operation->delivery_operation_public_id === null) {
                 return false;
