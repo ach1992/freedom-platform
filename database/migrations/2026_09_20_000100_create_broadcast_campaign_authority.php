@@ -12,23 +12,23 @@ return new class extends Migration
     /** @requirement COM-002 COM-003 ARCH-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function up(): void
     {
-        foreach ([
+        $authorityTables = [
             'broadcast_campaign_tests',
             'broadcast_recipient_messages',
             'broadcast_recipients',
             'broadcast_message_versions',
             'broadcast_audiences',
             'broadcast_campaigns',
-        ] as $table) {
-            if (! Schema::hasTable($table)) {
-                continue;
-            }
+        ];
 
-            if (DB::table($table)->exists()) {
+        foreach ($authorityTables as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->exists()) {
                 throw new RuntimeException('Broadcast campaign migration found non-empty pre-existing authority tables.');
             }
+        }
 
-            Schema::drop($table);
+        foreach ($authorityTables as $table) {
+            Schema::dropIfExists($table);
         }
 
         Schema::create('broadcast_campaigns', function (Blueprint $table): void {
