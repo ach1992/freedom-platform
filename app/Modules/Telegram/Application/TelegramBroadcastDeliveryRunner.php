@@ -862,7 +862,6 @@ final readonly class TelegramBroadcastDeliveryRunner
                     null,
                     $this->resultCode($operation->result_code, 'telegram_delivery_uncertain'),
                 ],
-                default => throw new RuntimeException('Broadcast delivery terminal state mapping is incomplete.'),
             };
 
             $now = $this->timestamp();
@@ -1092,6 +1091,10 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $keyboard;
     }
 
+    /**
+     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
+     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string} $message
+     */
     private function releaseLockedClaim(
         Connection $connection,
         object $recipient,
@@ -1125,6 +1128,10 @@ final readonly class TelegramBroadcastDeliveryRunner
         }
     }
 
+    /**
+     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
+     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string} $message
+     */
     private function markLockedUncertain(
         Connection $connection,
         object $recipient,
@@ -1151,6 +1158,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             ]);
     }
 
+    /** @param object{id:int|string} $recipient */
     private function releaseExpiredPrepared(
         Connection $connection,
         object $recipient,
@@ -1169,6 +1177,10 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $updated === 1 ? 1 : 0;
     }
 
+    /**
+     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
+     * @param object{id:int|string,broadcast_recipient_id?:int|string,state:string} $message
+     */
     private function recoverExpiredSourceSending(
         Connection $connection,
         object $recipient,
@@ -1184,6 +1196,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         return 1;
     }
 
+    /** @param object{id:int|string} $recipient */
     private function recoverTerminalRecipient(
         Connection $connection,
         object $recipient,
@@ -1213,6 +1226,10 @@ final readonly class TelegramBroadcastDeliveryRunner
         return $updated === 1 ? 1 : 0;
     }
 
+    /**
+     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
+     * @param object{id:int|string,broadcast_recipient_id?:int|string,state:string} $message
+     */
     private function recoverExpiredUnknown(
         Connection $connection,
         object $recipient,
@@ -1228,6 +1245,10 @@ final readonly class TelegramBroadcastDeliveryRunner
         return 1;
     }
 
+    /**
+     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string}|null $recipient
+     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string}|null $message
+     */
     private function assertClaimRows(
         TelegramBroadcastRecipientClaim $claim,
         ?object $recipient,
