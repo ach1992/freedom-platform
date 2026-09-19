@@ -192,7 +192,10 @@ final readonly class TelegramBroadcastAudienceDefinition
         return $instance;
     }
 
-    /** @param list<string> $values @param list<string> $allowed */
+    /**
+     * @param list<string> $values
+     * @param list<string> $allowed
+     */
     private function assertAllowedList(array $values, array $allowed, string $label): void
     {
         foreach ($values as $value) {
@@ -242,7 +245,10 @@ final readonly class TelegramBroadcastAudienceDefinition
         }
     }
 
-    /** @param list<string> $values @return list<string> */
+    /**
+     * @param list<string> $values
+     * @return list<string>
+     */
     private function canonicalStrings(array $values): array
     {
         $copy = $values;
@@ -251,7 +257,10 @@ final readonly class TelegramBroadcastAudienceDefinition
         return $copy;
     }
 
-    /** @param list<int> $values @return list<int> */
+    /**
+     * @param list<int> $values
+     * @return list<int>
+     */
     private function canonicalIntegers(array $values): array
     {
         $copy = $values;
