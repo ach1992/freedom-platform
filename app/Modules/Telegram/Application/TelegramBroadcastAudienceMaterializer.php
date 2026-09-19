@@ -187,7 +187,7 @@ final readonly class TelegramBroadcastAudienceMaterializer
         }
 
         /** @var CampaignAudienceRow|null $row */
-$row = $this->database->connection()->table('broadcast_campaigns as campaign')
+        $row = $this->database->connection()->table('broadcast_campaigns as campaign')
             ->join('broadcast_audiences as audience', function ($join): void {
                 $join->on('audience.broadcast_campaign_id', '=', 'campaign.id')
                     ->on('audience.version', '=', 'campaign.current_audience_version');
