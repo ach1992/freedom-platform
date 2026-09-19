@@ -18,6 +18,7 @@ interface TelegramDeliveryEffectGuard
     public function rejectionCode(
         Connection $connection,
         string $operationPublicId,
+        string $correlationId,
         TelegramMutationRequest $request,
     ): ?string;
 }
