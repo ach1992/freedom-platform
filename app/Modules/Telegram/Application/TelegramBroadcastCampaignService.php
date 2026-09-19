@@ -55,6 +55,72 @@ final readonly class TelegramBroadcastCampaignService
         return $this->administratorUsers->allowsUser($actorUserId, self::PERMISSION);
     }
 
+    /** @requirement COM-002 COM-003 ACL-002 DAT-003 SEC-002 */
+    public function current(
+        int $actorUserId,
+        string $campaignPublicId,
+    ): TelegramBroadcastCampaignReceipt {
+        $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $this->assertPublicId($campaignPublicId);
+        $connection = $this->database->connection();
+        $campaignId = $connection->table('broadcast_campaigns')
+            ->where('public_id', $campaignPublicId)
+            ->value('id');
+        if (! is_int($campaignId) && ! is_string($campaignId)) {
+            throw new DomainException('Broadcast campaign is unavailable.');
+        }
+
+        return $this->receiptById($connection, (int) $campaignId, false);
+    }
+
+    /** @requirement COM-002 COM-003 ACL-002 DAT-003 SEC-002 */
+    public function currentMessage(
+        int $actorUserId,
+        string $campaignPublicId,
+    ): TelegramBroadcastMessageDefinition {
+        $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $this->assertPublicId($campaignPublicId);
+
+        /** @var object{
+         *     mode:string,
+         *     source_kind:?string,
+         *     text:?string,
+         *     caption_override:?string,
+         *     source_chat_id:int|string|null,
+         *     source_message_id:int|string|null,
+         *     inline_keyboard_snapshot:?string
+         * }|null $row
+         */
+        $row = $this->database->connection()->table('broadcast_campaigns as campaign')
+            ->join('broadcast_message_versions as message', function ($join): void {
+                $join->on('message.broadcast_campaign_id', '=', 'campaign.id')
+                    ->on('message.version', '=', 'campaign.current_message_version');
+            })
+            ->where('campaign.public_id', $campaignPublicId)
+            ->first([
+                'message.mode',
+                'message.source_kind',
+                'message.text',
+                'message.caption_override',
+                'message.source_chat_id',
+                'message.source_message_id',
+                'message.inline_keyboard_snapshot',
+            ]);
+        if ($row === null) {
+            throw new DomainException('Broadcast campaign message is unavailable.');
+        }
+
+        return TelegramBroadcastMessageDefinition::restoreStored(
+            $row->mode,
+            $row->source_kind,
+            $row->text,
+            $row->caption_override,
+            $row->source_chat_id,
+            $row->source_message_id,
+            $row->inline_keyboard_snapshot,
+        );
+    }
+
     /** @requirement COM-002 ACL-001 ACL-002 DAT-002 DAT-003 SEC-002 QUA-001 QUA-004 */
     public function createDraft(
         int $actorUserId,
