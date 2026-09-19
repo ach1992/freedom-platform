@@ -335,8 +335,8 @@ grep -F "MARIADB_VERSION: '10.11'" "$ci" >/dev/null \
 if grep -Eq 'mariadb_version:.*11\.4|MARIADB_VERSION:.*11\.4' "$ci"; then
     fail 'normal CI must not require a MariaDB compatibility matrix on every PR'
 fi
-grep -F 'shard_index: [0, 1, 2, 3]' "$ci" >/dev/null \
-    || fail 'normal FULL Feature acceptance must retain exactly four isolated shards'
+grep -F 'shard_index: [0, 1, 2, 3, 4, 5, 6, 7]' "$ci" >/dev/null \
+    || fail 'normal FULL Feature acceptance must retain exactly eight isolated shards'
 grep -F 'bash scripts/ci/select-feature-shard.sh "$shard_count" "$shard_index"' "$ci" >/dev/null \
     || fail 'normal FULL Feature acceptance must use the deterministic shard selector'
 grep -F 'SHARD_RESULT: ${{ needs.integration_shards.result }}' "$ci" >/dev/null \
