@@ -28,6 +28,7 @@ final readonly class TelegramPrivateMediaIngestor
     private const ASSOCIATION_TYPES = [
         'c2c_manual_submission',
         'support_ticket_attachment',
+        'administrator_direct_message',
     ];
 
     public function __construct(

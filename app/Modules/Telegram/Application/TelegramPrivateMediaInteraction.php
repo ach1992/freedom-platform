@@ -25,6 +25,7 @@ final readonly class TelegramPrivateMediaInteraction
         public TelegramPrivateMediaInput $media,
         public DateTimeImmutable $messageAt,
         public bool $replayed,
+        public ?string $caption = null,
     ) {
         if ($requestKey === ''
             || preg_match('/\A[1-9][0-9]{5,19}\z/', $botId) !== 1
@@ -35,7 +36,11 @@ final readonly class TelegramPrivateMediaInteraction
             || $sessionPublicId === ''
             || $flow === ''
             || $sessionState === ''
-            || $sessionVersion < 1) {
+            || $sessionVersion < 1
+            || ($caption !== null
+                && (! mb_check_encoding($caption, 'UTF-8')
+                    || str_contains($caption, "\0")
+                    || mb_strlen($caption) > 1024))) {
             throw new InvalidArgumentException('Telegram private-media interaction snapshot is invalid.');
         }
     }

@@ -13,9 +13,9 @@ use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
 /**
- * Administrator customer target discovery/preview plus the bounded COM-001
- * text-only direct-message journey. Customer lookup remains owned by Customers;
- * external delivery remains owned by the existing confidential #212/#179 path.
+ * Administrator customer target discovery/preview plus bounded COM-001
+ * text/private-media direct-message journeys. Customer lookup remains owned by
+ * Customers; durable external delivery remains owned by the #179 authority.
  */
 final readonly class TelegramAdminCustomerNavigationHandler
 {
@@ -49,6 +49,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
         private TelegramInteractionCallbackService $callbacks,
         private TelegramAdministratorCustomerTargetDiscovery $targets,
         private TelegramAdministratorDirectMessageService $directMessages,
+        private TelegramPrivateMediaIngestor $privateMedia,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
     ) {}
@@ -88,6 +89,84 @@ final readonly class TelegramAdminCustomerNavigationHandler
             self::STATE_MESSAGE_SUBMITTING => $this->handleMessageSubmitting($action),
             default => throw new RuntimeException('Telegram administrator customer navigation state is unsupported.'),
         };
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 QUA-001 QUA-004 */
+    public function handlePrivateMedia(TelegramPrivateMediaInteraction $interaction): bool
+    {
+        if ($interaction->flow !== TelegramNavigationEntryGateway::FLOW
+            || $interaction->sessionState !== self::STATE_MESSAGE_COMPOSE) {
+            return false;
+        }
+
+        $selection = $this->selectionFromPayload($interaction->sessionPayload);
+        $action = $this->actionForPrivateMedia($interaction);
+
+        if ($interaction->media->sourceKind === 'photo'
+            && $interaction->media->reportedFileSize !== null
+            && $interaction->media->reportedFileSize > 10_000_000) {
+            $target = $this->targets->resolve($interaction->userId, $interaction->botId, $selection);
+            $this->renderMessageCompose($action, $interaction->sessionVersion, $target, 'message_invalid');
+
+            return true;
+        }
+
+        try {
+            $media = $this->privateMedia->ingest(
+                $interaction->botId,
+                $interaction->updateId,
+                $interaction->telegramAccountId,
+                $interaction->userId,
+                $interaction->media,
+            );
+        } catch (TelegramPrivateMediaRejected) {
+            $target = $this->targets->resolve($interaction->userId, $interaction->botId, $selection);
+            $this->renderMessageCompose($action, $interaction->sessionVersion, $target, 'message_invalid');
+
+            return true;
+        }
+
+        try {
+            [$draft, $session] = $this->database->connection()->transaction(function () use (
+                $interaction,
+                $selection,
+                $media,
+            ): array {
+                $draft = $this->directMessages->createMediaDraft(
+                    $interaction->userId,
+                    $interaction->botId,
+                    $selection,
+                    $interaction->media->sourceKind,
+                    $media,
+                    $interaction->caption ?? '',
+                    $interaction->requestKey,
+                );
+                $session = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $interaction->sessionVersion,
+                    self::STATE_MESSAGE_CONFIRM,
+                    ['draft' => $draft->publicId, 'selection' => $selection],
+                    'tg-admin-customer-message-confirm:'.hash('sha256', $interaction->requestKey.':'.$draft->publicId),
+                );
+
+                return [$draft, $session];
+            }, 3);
+        } catch (AuthorizationException) {
+            $this->privateMedia->discardIfUnassociated($media, $interaction->userId);
+            $this->showPreviewState($action, $selection, 'message-media-authorization-lost');
+
+            return true;
+        } catch (DomainException) {
+            $this->privateMedia->discardIfUnassociated($media, $interaction->userId);
+            $target = $this->targets->resolve($interaction->userId, $interaction->botId, $selection);
+            $this->renderMessageCompose($action, $interaction->sessionVersion, $target, 'message_invalid');
+
+            return true;
+        }
+        $this->assertActor($action, $session->userId);
+        $this->renderMessageConfirmation($action, $session->version, $selection, $draft->publicId);
+
+        return true;
     }
 
     private function handleSearch(TelegramInteractionAction $action): void
@@ -377,7 +456,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
                     'tg-admin-customer-message-submit:'.hash('sha256', $draftPublicId),
                 );
 
-                $this->directMessages->acceptTextConfirmation(
+                $this->directMessages->acceptConfirmation(
                     $action->userId,
                     $action->botId,
                     $selection,
@@ -405,7 +484,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
         string $draftPublicId,
     ): void {
         try {
-            $this->directMessages->confirmText(
+            $this->directMessages->confirm(
                 $action->userId,
                 $action->botId,
                 $selection,
@@ -682,13 +761,32 @@ final readonly class TelegramAdminCustomerNavigationHandler
         if (mb_strlen($header) > self::MESSAGE_CONFIRMATION_HEADER_MAX_LENGTH) {
             throw new RuntimeException('Telegram administrator direct-message confirmation localization exceeds its reserved header budget.');
         }
-        $confirmation = $header."\n\n".$draft->text;
+        $body = $draft->text;
+        if ($draft->isMedia()) {
+            if ($draft->mediaDetectedMime === null || $draft->mediaByteSize === null) {
+                throw new RuntimeException('Telegram administrator direct-media confirmation metadata is incomplete.');
+            }
+            $caption = $draft->text === ''
+                ? $this->translation('telegram.navigation.admin.customer_search.message_media_caption_none', $locale)
+                : $draft->text;
+            $body = $this->translation('telegram.navigation.admin.customer_search.message_media_confirmation', $locale, [
+                'type' => $this->translation(
+                    'telegram.navigation.admin.customer_search.message_media_type_'.$draft->contentType,
+                    $locale,
+                ),
+                'mime' => $draft->mediaDetectedMime,
+                'size' => (string) $draft->mediaByteSize,
+                'caption' => $caption,
+            ]);
+        }
+
+        $confirmation = $header."\n\n".$body;
         if (mb_strlen($confirmation) > self::TELEGRAM_TEXT_MAX_LENGTH) {
             throw new RuntimeException('Telegram administrator direct-message confirmation exceeds the single-presentation limit.');
         }
 
-        // The bounded text and localization budgets keep target context + exact
-        // authored content in one confidential presentation before any effect.
+        // Target context plus exact text/caption and bounded media metadata stay
+        // in one confidential confirmation before any customer-facing effect.
         $this->queue(
             $action,
             $confirmation,
@@ -809,6 +907,32 @@ final readonly class TelegramAdminCustomerNavigationHandler
             'tg-admin-customer-delivery:'.hash('sha256', $action->requestKey.':'.$surface),
             'tg-admin-customer:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 40),
             $keyboard,
+        );
+    }
+
+    private function actionForPrivateMedia(
+        TelegramPrivateMediaInteraction $interaction,
+    ): TelegramInteractionAction {
+        return new TelegramInteractionAction(
+            TelegramInteractionActionKind::Message,
+            $interaction->requestKey,
+            $interaction->botId,
+            $interaction->updateId,
+            $interaction->telegramAccountId,
+            $interaction->userId,
+            $interaction->telegramUserId,
+            $interaction->sessionPublicId,
+            $interaction->flow,
+            $interaction->sessionState,
+            $interaction->sessionVersion,
+            $interaction->sessionPayload,
+            null,
+            null,
+            null,
+            [],
+            $interaction->replayed,
+            null,
+            $interaction->messageAt,
         );
     }
 

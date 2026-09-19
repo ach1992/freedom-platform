@@ -57,7 +57,8 @@ final readonly class TelegramDeliveryRequestFingerprint
 
         $presentationText = match (true) {
             $request->presentation instanceof NonRestrictedTelegramPresentation => $request->presentation->text(),
-            $request->presentation instanceof TelegramProtectedPresentationReference => $request->presentation->durableText(),
+            $request->presentation instanceof TelegramProtectedPresentationReference,
+            $request->presentation instanceof TelegramPrivateMediaPresentationReference => $request->presentation->durableText(),
             default => null,
         };
         $hashes = $confidentialPresentationHashes ?? [null];

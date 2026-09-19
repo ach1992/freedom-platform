@@ -20,6 +20,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioning
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
@@ -48,14 +50,19 @@ use App\Modules\Telegram\Application\TelegramCustomerTrialProvisioningStatusSnap
 use App\Modules\Telegram\Application\TelegramCustomerTrialRouteOption;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
+use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
+use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
+use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramMutationOutcome;
+use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
@@ -64,7 +71,12 @@ use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
+use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
+use App\Modules\Telegram\Application\TelegramPrivateMediaDownload;
+use App\Modules\Telegram\Application\TelegramPrivateMediaIngestor;
+use App\Modules\Telegram\Application\TelegramPrivateMediaInteractionGateway;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
@@ -77,10 +89,12 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -1114,6 +1128,67 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
     }
 }
 
+final class TelegramNavigationPrivateMediaFetcher implements TelegramPrivateMediaFetcher
+{
+    public int $calls = 0;
+
+    public function __construct(private readonly string $content) {}
+
+    public function fetch(
+        RestrictedValue $fileId,
+        RestrictedValue $expectedFileUniqueId,
+        int $maximumBytes,
+    ): TelegramPrivateMediaDownload {
+        $this->calls++;
+
+        if (strlen($this->content) > $maximumBytes) {
+            throw new RuntimeException('Navigation private-media fixture exceeds the configured maximum.');
+        }
+
+        return TelegramPrivateMediaDownload::fromBytes($this->content, strlen($this->content));
+    }
+}
+
+final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMediaMessageSender
+{
+    public int $attempts = 0;
+
+    public bool $uncertain = false;
+
+    /** @var list<TelegramResolvedPrivateMediaPresentation> */
+    public array $presentations = [];
+
+    public function __construct(
+        private readonly int $expectedRecipientChatId,
+        private readonly int $messageId,
+    ) {}
+
+    public function send(
+        int $recipientChatId,
+        TelegramResolvedPrivateMediaPresentation $presentation,
+    ): TelegramMutationResult {
+        if ($recipientChatId !== $this->expectedRecipientChatId) {
+            throw new RuntimeException('Navigation private-media sender received an unexpected recipient.');
+        }
+
+        $this->attempts++;
+        $this->presentations[] = $presentation;
+
+        if ($this->uncertain) {
+            return new TelegramMutationResult(
+                TelegramMutationOutcome::UncertainResult,
+                'telegram_transport_uncertain',
+            );
+        }
+
+        return new TelegramMutationResult(
+            TelegramMutationOutcome::Success,
+            'telegram_success',
+            messageId: $this->messageId,
+        );
+    }
+}
+
 /** @requirement ONB-002 ONB-003 USR-001 BUY-001 BUY-003 AGT-001 CAT-002 CAT-003 CAT-008 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 LOC-001 OPS-003 QUA-001 QUA-004 */
 final class TelegramNavigationEntryTest extends TestCase
 {
@@ -1145,6 +1220,7 @@ final class TelegramNavigationEntryTest extends TestCase
             'telegram.processing_lease_seconds' => 120,
             'telegram.api_base_url' => 'https://api.telegram.org',
             'telegram.api_timeout_seconds' => 15,
+            'telegram.private_media_max_bytes' => 1_048_576,
         ]);
     }
 
@@ -4526,6 +4602,690 @@ SQL);
         ]);
     }
 
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 SEC-009 CNT-001 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_photo_is_private_confirmed_and_exactly_once_at_provider_boundary(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9786;
+        $targetTelegramId = 888777666561;
+        $targetUsername = 'direct_media_target';
+        $adminUsername = 'admin_direct_media_operator';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99101);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7480,
+            $adminTelegramId,
+            $targetTelegramId,
+            $targetUsername,
+            $adminUsername,
+        );
+        $processor = $journey['processor'];
+        $adminAccountId = $journey['admin_account_id'];
+        $adminUserId = $journey['admin_user_id'];
+        $selection = $journey['selection'];
+        $targetDeliveryCountBefore = $journey['target_delivery_count'];
+
+        $invalid = $this->photoMediaPayload(
+            7486,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-invalid',
+            'private-provider-unique-direct-media-invalid',
+            strlen($png),
+            'formatted caption must fail closed',
+        );
+        $invalid['message']['caption_entities'] = [[
+            'type' => 'bold',
+            'offset' => 0,
+            'length' => 9,
+        ]];
+        $this->accept($invalid);
+        $processor->process('123456789', 7486);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(0, DB::table('telegram_administrator_direct_messages')->count());
+        self::assertSame(
+            'admin_customer_message_compose',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+
+        $oversized = $this->photoMediaPayload(
+            7487,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-oversized',
+            'private-provider-unique-direct-media-oversized',
+            10_000_001,
+        );
+        $this->accept($oversized);
+        $processor->process('123456789', 7487);
+
+        self::assertSame(0, $fetcher->calls);
+        self::assertSame(0, DB::table('telegram_private_media')->count());
+        self::assertSame(0, DB::table('telegram_administrator_direct_messages')->count());
+        self::assertSame(
+            'admin_customer_message_compose',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $adminAccountId)
+                ->value('state'),
+        );
+
+        $fileId = 'private-provider-file-direct-media-valid';
+        $fileUniqueId = 'private-provider-unique-direct-media-valid';
+        $caption = 'safe private photo caption';
+        $this->accept($this->photoMediaPayload(
+            7488,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $fileId,
+            $fileUniqueId,
+            strlen($png),
+            $caption,
+        ));
+        $processor->process('123456789', 7488);
+        $processor->process('123456789', 7488);
+
+        self::assertSame(1, $fetcher->calls);
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_customer_message_confirm', (string) $confirmSession->state);
+        $confirmPayload = json_decode((string) $confirmSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['draft', 'selection'], array_keys($confirmPayload));
+        self::assertSame($selection, $confirmPayload['selection']);
+        self::assertIsString($confirmPayload['draft']);
+        self::assertMatchesRegularExpression('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $confirmPayload['draft']);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $confirmPayload['draft'])
+            ->first();
+        self::assertNotNull($direct);
+        self::assertSame('photo', (string) $direct->content_type);
+        self::assertSame($targetTelegramId, (int) $direct->target_telegram_user_id);
+        self::assertSame(strlen($png), (int) $direct->media_byte_size);
+        self::assertSame('image/png', (string) $direct->media_detected_mime);
+        self::assertSame(hash('sha256', $png), (string) $direct->media_content_sha256);
+        self::assertIsString($direct->media_public_id);
+        self::assertNull($direct->delivery_operation_public_id);
+        self::assertNotSame($caption, (string) $direct->content_ciphertext);
+        self::assertStringNotContainsString($caption, (string) $direct->content_ciphertext);
+        self::assertSame(
+            $caption,
+            $this->app->make(StringEncrypter::class)->decryptString((string) $direct->content_ciphertext),
+        );
+
+        try {
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->update(['media_byte_size' => 10_000_001]);
+            self::fail('MariaDB must reject a persisted direct photo above the sendPhoto size limit.');
+        } catch (QueryException) {
+            self::assertSame(
+                strlen($png),
+                (int) DB::table('telegram_administrator_direct_messages')
+                    ->where('public_id', (string) $direct->public_id)
+                    ->value('media_byte_size'),
+            );
+        }
+        try {
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->update([
+                    'content_type' => 'document',
+                    'content_length' => 1,
+                ]);
+            self::fail('MariaDB must reject persisted caption length for non-photo direct media.');
+        } catch (QueryException) {
+            self::assertSame(
+                'photo',
+                DB::table('telegram_administrator_direct_messages')
+                    ->where('public_id', (string) $direct->public_id)
+                    ->value('content_type'),
+            );
+        }
+
+        $media = DB::table('telegram_private_media')->first();
+        self::assertNotNull($media);
+        self::assertSame('associated', (string) $media->state);
+        self::assertSame('administrator_direct_message', (string) $media->association_type);
+        self::assertSame((string) $direct->public_id, (string) $media->association_public_id);
+        self::assertSame((string) $direct->media_public_id, (string) $media->public_id);
+        self::assertStringNotContainsString($fileId, (string) $media->encrypted_file_id);
+        self::assertStringNotContainsString($fileUniqueId, (string) $media->encrypted_file_unique_id);
+        Storage::disk('telegram_private_media')->assertExists((string) $media->storage_path);
+
+        $confirmation = $this->latestConfidentialPresentation();
+        self::assertStringContainsString('تأیید نهایی پیام مستقیم', $confirmation);
+        self::assertStringContainsString('عکس', $confirmation);
+        self::assertStringContainsString('image/png', $confirmation);
+        self::assertStringContainsString($caption, $confirmation);
+        self::assertStringContainsString((string) $targetTelegramId, $confirmation);
+
+        $durableBeforeConfirm = $this->navigationCommonDurableEvidence((int) $confirmSession->id, $adminTelegramId);
+        foreach ([$fileId, $fileUniqueId, $caption, base64_encode($png)] as $secret) {
+            self::assertStringNotContainsString($secret, $durableBeforeConfirm);
+        }
+
+        $confirmToken = $this->callbackToken('navigation.admin.customer.message.confirm', $adminAccountId);
+        $this->accept($this->callbackPayload(
+            7489,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $processor->process('123456789', 7489);
+        $processor->process('123456789', 7489);
+
+        $finalSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $adminAccountId)
+            ->first(['state', 'payload']);
+        self::assertNotNull($finalSession);
+        self::assertSame('admin_customer_preview', (string) $finalSession->state);
+        self::assertSame(
+            ['selection' => $selection],
+            json_decode((string) $finalSession->payload, true, 512, JSON_THROW_ON_ERROR),
+        );
+        self::assertSame(
+            $targetDeliveryCountBefore + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', $confirmPayload['draft'])
+            ->first(['public_id', 'delivery_operation_public_id', 'correlation_id', 'queued_at']);
+        self::assertNotNull($direct);
+        self::assertIsString($direct->delivery_operation_public_id);
+        self::assertNotNull($direct->queued_at);
+
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $direct->delivery_operation_public_id)
+            ->first(['public_id', 'recipient_chat_id', 'presentation_text', 'correlation_id', 'state']);
+        self::assertNotNull($operation);
+        self::assertSame($targetTelegramId, (int) $operation->recipient_chat_id);
+        self::assertSame(
+            '[PRIVATE_TELEGRAM_MEDIA_REFERENCE:v1:administrator_direct_message:'.(string) $direct->public_id.']',
+            (string) $operation->presentation_text,
+        );
+        self::assertSame((string) $direct->correlation_id, (string) $operation->correlation_id);
+        self::assertSame('prepared', (string) $operation->state);
+
+        $outbox = DB::table('outbox_messages')
+            ->where('aggregate_id', (string) $operation->public_id)
+            ->first(['id', 'payload', 'contract_version']);
+        self::assertNotNull($outbox);
+        self::assertSame(
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+            (int) $outbox->contract_version,
+        );
+        self::assertSame(
+            '{"telegram_delivery_operation_public_id":"'.(string) $operation->public_id.'"}',
+            (string) $outbox->payload,
+        );
+
+        $ordinaryCustomerEvidence = json_encode([
+            'operation' => (array) $operation,
+            'outbox' => (array) $outbox,
+            'session' => (array) $finalSession,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        foreach ([$fileId, $fileUniqueId, $caption, base64_encode($png), (string) $media->storage_path] as $secret) {
+            self::assertStringNotContainsString($secret, $ordinaryCustomerEvidence);
+        }
+
+        try {
+            $this->app->make(TelegramAdministratorDirectMessageService::class)
+                ->mediaPresentationForDelivery((string) $direct->public_id, $targetTelegramId);
+            self::fail('Private direct-media bytes must not resolve outside the canonical delivery executor.');
+        } catch (\LogicException) {
+            self::assertSame(0, $sender->attempts);
+        }
+
+        try {
+            $this->app->make(TelegramPrivateMediaDeliveryResolver::class)
+                ->resolveAdministratorDirectMessage((string) $media->public_id, (string) $direct->public_id);
+            self::fail('Private direct-media bytes must not resolve by bypassing the direct-message authority.');
+        } catch (\LogicException) {
+            self::assertSame(0, $sender->attempts);
+        }
+
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        Storage::disk('telegram_private_media')->put((string) $media->storage_path, 'tampered-private-media');
+        try {
+            $executor->execute(
+                (string) $operation->public_id,
+                (string) $outbox->id,
+                (string) $direct->correlation_id,
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+            );
+            self::fail('Tampered private media must fail before entering the provider boundary.');
+        } catch (DomainException) {
+            self::assertSame(0, $sender->attempts);
+            $this->assertDatabaseHas('telegram_delivery_operations', [
+                'public_id' => (string) $operation->public_id,
+                'state' => 'prepared',
+                'provider_attempts' => 0,
+            ]);
+        }
+        Storage::disk('telegram_private_media')->put((string) $media->storage_path, $png);
+
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $outbox->id,
+            (string) $direct->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+
+        self::assertSame('succeeded', $first->state->value);
+        self::assertSame('succeeded', $second->state->value);
+        self::assertSame(99101, $first->messageId);
+        self::assertSame(99101, $second->messageId);
+        self::assertSame(1, $sender->attempts);
+        self::assertCount(1, $sender->presentations);
+        self::assertSame('photo', $sender->presentations[0]->contentType());
+        self::assertSame($caption, $sender->presentations[0]->captionForProvider());
+        self::assertSame($png, $sender->presentations[0]->revealBytesForProvider());
+        self::assertSame(hash('sha256', $png), $sender->presentations[0]->contentSha256());
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => (string) $operation->public_id,
+            'state' => 'succeeded',
+            'telegram_message_id' => 99101,
+            'provider_attempts' => 1,
+        ]);
+
+        $deliveryResult = $this->app
+            ->make(TelegramAdministratorDirectMessageService::class)
+            ->deliveryResultForSender($adminUserId, (string) $direct->public_id);
+        self::assertSame('succeeded', $deliveryResult->state->value);
+        self::assertSame(99101, $deliveryResult->messageId);
+    }
+
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_permission_loss_fails_before_delivery_queue(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9787;
+        $targetTelegramId = 888777666562;
+        $adminUsername = 'admin_direct_media_revoke';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99102);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7520,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_revoke_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7526,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-revoke',
+            'private-provider-unique-direct-media-revoke',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7526);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $targetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->count();
+
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $this->accept($this->callbackPayload(
+            7527,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $journey['processor']->process('123456789', 7527);
+
+        self::assertSame(0, $sender->attempts);
+        self::assertSame(
+            $targetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertNull(DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->value('delivery_operation_public_id'));
+        self::assertSame(
+            'associated',
+            DB::table('telegram_private_media')->value('state'),
+        );
+        self::assertSame(
+            'admin_customer_preview',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $journey['admin_account_id'])
+                ->value('state'),
+        );
+    }
+
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_target_drift_fails_before_delivery_queue(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9788;
+        $targetTelegramId = 888777666563;
+        $driftedTelegramId = 888777666564;
+        $adminUsername = 'admin_direct_media_drift';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99103);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7560,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_drift_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7566,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-drift',
+            'private-provider-unique-direct-media-drift',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7566);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $targetAccountId = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $targetTelegramId)
+            ->value('id');
+        self::assertIsNumeric($targetAccountId);
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $targetSession = $sessions->activeForAccount((int) $targetAccountId);
+        self::assertNotNull($targetSession);
+        $sessions->cancel(
+            $targetSession->publicId,
+            $targetSession->version,
+            'direct-media-target-drift-cancel:'.(string) $targetAccountId,
+        );
+        self::assertNull($sessions->activeForAccount((int) $targetAccountId));
+
+        self::assertSame(1, DB::table('telegram_accounts')
+            ->where('id', (int) $targetAccountId)
+            ->update([
+                'telegram_user_id' => $driftedTelegramId,
+                'updated_at' => now('UTC'),
+            ]));
+
+        $oldTargetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->count();
+        $newTargetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $driftedTelegramId)
+            ->count();
+
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $this->accept($this->callbackPayload(
+            7567,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $journey['processor']->process('123456789', 7567);
+
+        self::assertSame(0, $sender->attempts);
+        self::assertSame(
+            $oldTargetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertSame(
+            $newTargetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $driftedTelegramId)->count(),
+        );
+        self::assertNull(DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->value('delivery_operation_public_id'));
+        self::assertSame(
+            'admin_customer_preview',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $journey['admin_account_id'])
+                ->value('state'),
+        );
+    }
+
+    /** @requirement COM-001 ARCH-004 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_uncertain_result_is_not_sent_twice(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9789;
+        $targetTelegramId = 888777666565;
+        $adminUsername = 'admin_direct_media_uncertain';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99104);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7600,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_uncertain_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7606,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-uncertain',
+            'private-provider-unique-direct-media-uncertain',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7606);
+
+        $direct = DB::table('telegram_administrator_direct_messages')
+            ->first(['public_id', 'correlation_id']);
+        self::assertNotNull($direct);
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $this->accept($this->callbackPayload(
+            7607,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $journey['processor']->process('123456789', 7607);
+
+        $linked = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->first(['delivery_operation_public_id', 'correlation_id']);
+        self::assertNotNull($linked);
+        self::assertIsString($linked->delivery_operation_public_id);
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('public_id', (string) $linked->delivery_operation_public_id)
+            ->first(['public_id', 'outbox_event_id']);
+        self::assertNotNull($operation);
+
+        $sender->uncertain = true;
+        $executor = $this->app->make(TelegramDeliveryOperationExecutor::class);
+        $first = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $linked->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+        $second = $executor->execute(
+            (string) $operation->public_id,
+            (string) $operation->outbox_event_id,
+            (string) $linked->correlation_id,
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+
+        self::assertSame('uncertain', $first->state->value);
+        self::assertSame('uncertain', $second->state->value);
+        self::assertNull($first->messageId);
+        self::assertSame(1, $sender->attempts);
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => (string) $operation->public_id,
+            'state' => 'uncertain',
+            'provider_attempts' => 1,
+            'result_code' => 'telegram_transport_uncertain',
+        ]);
+    }
+
+    /** @requirement COM-001 ARCH-004 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_recovers_existing_operation_after_link_failure_without_reauthorization(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9790;
+        $targetTelegramId = 888777666566;
+        $adminUsername = 'admin_direct_media_recover';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99105);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7640,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_recover_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7646,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-recover',
+            'private-provider-unique-direct-media-recover',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7646);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $confirmUpdateId = 7647;
+        $this->accept($this->callbackPayload(
+            $confirmUpdateId,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_direct_message_link
+BEFORE UPDATE ON telegram_administrator_direct_messages
+FOR EACH ROW
+BEGIN
+    IF OLD.delivery_operation_public_id IS NULL AND NEW.delivery_operation_public_id IS NOT NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-direct-media-link-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $journey['processor']->process('123456789', $confirmUpdateId);
+                self::fail('The simulated direct-media linkage failure must leave the accepted update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_link');
+        }
+
+        self::assertSame(
+            $journey['target_delivery_count'] + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        $existingOperation = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->orderByDesc('id')
+            ->value('public_id');
+        self::assertIsString($existingOperation);
+        $afterFailure = DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->first(['confirmed_at', 'delivery_operation_public_id']);
+        self::assertNotNull($afterFailure);
+        self::assertNotNull($afterFailure->confirmed_at);
+        self::assertNull($afterFailure->delivery_operation_public_id);
+
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
+        $journey['processor']->process('123456789', $confirmUpdateId);
+
+        self::assertSame(
+            $journey['target_delivery_count'] + 1,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertSame(
+            $existingOperation,
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->value('delivery_operation_public_id'),
+        );
+        self::assertSame(0, $sender->attempts);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => $confirmUpdateId,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_text_message_is_confirmed_encrypted_and_exactly_once_on_replay(): void
     {
@@ -6383,6 +7143,33 @@ SQL);
         ];
     }
 
+    /** @return array<string,mixed> */
+    private function photoMediaPayload(
+        int $updateId,
+        int $telegramUserId,
+        string $username,
+        string $languageCode,
+        string $fileId,
+        string $fileUniqueId,
+        int $fileSize,
+        ?string $caption = null,
+    ): array {
+        $payload = $this->payload($updateId, $telegramUserId, $username, $languageCode, 'unused');
+        unset($payload['message']['text']);
+        $payload['message']['photo'] = [[
+            'file_id' => $fileId,
+            'file_unique_id' => $fileUniqueId,
+            'width' => 1,
+            'height' => 1,
+            'file_size' => $fileSize,
+        ]];
+        if ($caption !== null) {
+            $payload['message']['caption'] = $caption;
+        }
+
+        return $payload;
+    }
+
     /** @return array<string, mixed> */
     private function callbackPayload(
         int $updateId,
@@ -6472,6 +7259,90 @@ SQL);
             $callback->replayed,
             $callback->acceptedAt,
         );
+    }
+
+    /**
+     * @return array{
+     *     processor:TelegramUpdateProcessor,
+     *     admin_account_id:int,
+     *     admin_user_id:int,
+     *     selection:string,
+     *     target_delivery_count:int
+     * }
+     */
+    private function prepareAdminDirectMediaCompose(
+        int $baseUpdateId,
+        int $adminTelegramId,
+        int $targetTelegramId,
+        string $targetUsername,
+        string $adminUsername,
+    ): array {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload($baseUpdateId, $adminTelegramId, $adminUsername, 'fa', '/start'));
+        $processor->process('123456789', $baseUpdateId);
+        $adminAccount = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $adminTelegramId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        $this->salesContentAdministratorForUser((int) $adminAccount->user_id);
+
+        $this->accept($this->payload($baseUpdateId + 20, $targetTelegramId, $targetUsername, 'en', '/start'));
+        $processor->process('123456789', $baseUpdateId + 20);
+
+        $this->accept($this->payload($baseUpdateId + 1, $adminTelegramId, $adminUsername, 'fa', '/menu'));
+        $processor->process('123456789', $baseUpdateId + 1);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 2, $adminTelegramId, $adminUsername, 'fa', $adminToken));
+        $processor->process('123456789', $baseUpdateId + 2);
+
+        $searchToken = $this->callbackToken('navigation.admin.customer_search', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 3, $adminTelegramId, $adminUsername, 'fa', $searchToken));
+        $processor->process('123456789', $baseUpdateId + 3);
+        $this->accept($this->payload($baseUpdateId + 4, $adminTelegramId, $adminUsername, 'fa', '@'.$targetUsername));
+        $processor->process('123456789', $baseUpdateId + 4);
+
+        $messageToken = $this->callbackToken('navigation.admin.customer.message', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload($baseUpdateId + 5, $adminTelegramId, $adminUsername, 'fa', $messageToken));
+        $processor->process('123456789', $baseUpdateId + 5);
+
+        $composeSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)
+            ->first(['state', 'payload']);
+        self::assertNotNull($composeSession);
+        self::assertSame('admin_customer_message_compose', (string) $composeSession->state);
+        $composePayload = json_decode((string) $composeSession->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame(['selection'], array_keys($composePayload));
+        self::assertIsString($composePayload['selection']);
+
+        return [
+            'processor' => $processor,
+            'admin_account_id' => (int) $adminAccount->id,
+            'admin_user_id' => (int) $adminAccount->user_id,
+            'selection' => $composePayload['selection'],
+            'target_delivery_count' => DB::table('telegram_delivery_operations')
+                ->where('recipient_chat_id', $targetTelegramId)
+                ->count(),
+        ];
+    }
+
+    private function bindAdminDirectMediaDependencies(
+        TelegramPrivateMediaFetcher $fetcher,
+        TelegramPrivateMediaMessageSender $sender,
+    ): void {
+        $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
+        $this->app->instance(TelegramPrivateMediaMessageSender::class, $sender);
+
+        foreach ([
+            TelegramPrivateMediaIngestor::class,
+            TelegramAdminCustomerNavigationHandler::class,
+            TelegramPrivateMediaInteractionGateway::class,
+            TelegramInteractionDispatcher::class,
+            TelegramUpdateProcessor::class,
+            TelegramDeliveryOperationExecutor::class,
+        ] as $service) {
+            $this->app->forgetInstance($service);
+        }
     }
 
     /**
@@ -6688,6 +7559,19 @@ SQL);
         );
 
         return [$processor, $accountId];
+    }
+
+    private function navigationOnePixelPng(): string
+    {
+        $decoded = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNg+A8AAQIBANEay48AAAAASUVORK5CYII=',
+            true,
+        );
+        if (! is_string($decoded)) {
+            throw new RuntimeException('Navigation PNG test fixture could not be decoded.');
+        }
+
+        return $decoded;
     }
 
     private function callbackToken(string $action, int $telegramAccountId, string $expectedActionPayload = '{}'): string

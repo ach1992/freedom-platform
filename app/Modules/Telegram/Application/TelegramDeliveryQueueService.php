@@ -34,6 +34,8 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE = 4;
 
+    public const OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE = 5;
+
     public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
 
     public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
@@ -98,6 +100,58 @@ final readonly class TelegramDeliveryQueueService
             null,
             self::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
         );
+    }
+
+    /** @requirement COM-001 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function queuePrivateMediaReference(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        TelegramPrivateMediaPresentationReference $reference,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramDeliveryOperationReceipt {
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
+        if ($action !== TelegramDeliveryAction::Send) {
+            throw new DomainException('Private-media-reference Telegram delivery supports send mutations only.');
+        }
+
+        return $this->queueRequest(
+            new TelegramMutationRequest($action, $recipientChatId, null, $reference),
+            $reference->durableText(),
+            null,
+            $requestKey,
+            $correlationId,
+            null,
+            self::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE,
+        );
+    }
+
+    /** @requirement COM-001 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-003 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
+    public function findExistingPrivateMediaReference(
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        TelegramPrivateMediaPresentationReference $reference,
+        string $requestKey,
+        string $correlationId,
+    ): ?TelegramDeliveryOperationReceipt {
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
+        if ($action !== TelegramDeliveryAction::Send) {
+            throw new DomainException('Private-media-reference Telegram delivery supports send mutations only.');
+        }
+
+        $request = new TelegramMutationRequest($action, $recipientChatId, null, $reference);
+        $requestKeyHash = $this->requestKeyHash($requestKey);
+        $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);
+        $botId = $this->runtime->botId();
+        $this->assertBotId($botId);
+        $fingerprintCandidates = TelegramDeliveryRequestFingerprint::candidates(
+            $request,
+            $botId,
+            $correlationId,
+        );
+        $existing = $this->operationByRequestHash($this->database->connection(), $requestKeyHash, false);
+
+        return $existing === null ? null : $this->replayReceipt($existing, $fingerprintCandidates);
     }
 
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -185,9 +239,18 @@ final readonly class TelegramDeliveryQueueService
             ) {
                 throw new RuntimeException('Telegram protected-reference queue contract is internally inconsistent.');
             }
+        } elseif ($contractVersion === self::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE) {
+            if (! $request->presentation instanceof TelegramPrivateMediaPresentationReference
+                || $confidentialPresentation !== null
+                || $inlineKeyboard !== null
+                || $durablePresentationText !== $request->presentation->durableText()
+            ) {
+                throw new RuntimeException('Telegram private-media-reference queue contract is internally inconsistent.');
+            }
         } elseif ($confidentialPresentation !== null
             || $request->presentation instanceof ConfidentialTelegramPresentation
             || $request->presentation instanceof TelegramProtectedPresentationReference
+            || $request->presentation instanceof TelegramPrivateMediaPresentationReference
             || $durablePresentationText !== ($request->presentation instanceof NonRestrictedTelegramPresentation
                 ? $request->presentation->text()
                 : null)

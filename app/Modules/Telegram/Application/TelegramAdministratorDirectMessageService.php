@@ -61,6 +61,7 @@ final readonly class TelegramAdministratorDirectMessageService
         private Clock $clock,
         private ConfidentialTelegramPresentationFactory $presentations,
         private TelegramConfidentialDeliveryQueue $delivery,
+        private TelegramAdministratorDirectMediaMessageService $mediaMessages,
     ) {}
 
     public function availableFor(int $actorUserId): bool
@@ -171,6 +172,27 @@ final readonly class TelegramAdministratorDirectMessageService
         }
     }
 
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 QUA-001 QUA-004 */
+    public function createMediaDraft(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $sourceKind,
+        TelegramPrivateMediaReceipt $media,
+        #[SensitiveParameter] string $caption,
+        string $requestKey,
+    ): TelegramAdministratorDirectMessageDraft {
+        return $this->mediaMessages->createDraft(
+            $actorUserId,
+            $botId,
+            $selectionToken,
+            $sourceKind,
+            $media,
+            $caption,
+            $requestKey,
+        );
+    }
+
     /** @requirement COM-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 */
     public function draftForConfirmation(
         int $actorUserId,
@@ -184,8 +206,40 @@ final readonly class TelegramAdministratorDirectMessageService
         if ($row === null) {
             throw new DomainException('Telegram administrator direct-message draft is unavailable.');
         }
+        if ((string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
+            return $this->mediaMessages->draftForConfirmation(
+                $actorUserId,
+                $botId,
+                $selectionToken,
+                $publicId,
+            );
+        }
 
         return $this->draftFromRow($row, $administratorId, $botId, $target, null, false);
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
+    public function acceptConfirmation(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $publicId,
+    ): TelegramAdministratorDirectMessageDraft {
+        $this->administrators->authorizeUser($actorUserId, self::PERMISSION);
+        $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
+        if ($row === null) {
+            throw new DomainException('Telegram administrator direct-message draft is unavailable.');
+        }
+        if ((string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
+            return $this->mediaMessages->acceptConfirmation(
+                $actorUserId,
+                $botId,
+                $selectionToken,
+                $publicId,
+            );
+        }
+
+        return $this->acceptTextConfirmation($actorUserId, $botId, $selectionToken, $publicId);
     }
 
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
@@ -234,6 +288,24 @@ final readonly class TelegramAdministratorDirectMessageService
 
             return $draft;
         }, 3);
+    }
+
+    /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
+    public function confirm(
+        int $actorUserId,
+        string $botId,
+        string $selectionToken,
+        string $publicId,
+    ): TelegramDeliveryOperationReceipt {
+        $row = $this->rowByPublicId($this->database->connection(), $publicId, false);
+        if ($row === null) {
+            throw new DomainException('Telegram administrator direct-message draft is unavailable.');
+        }
+        if ((string) $row->content_type !== self::CONTENT_TYPE_TEXT) {
+            return $this->mediaMessages->confirm($actorUserId, $botId, $selectionToken, $publicId);
+        }
+
+        return $this->confirmText($actorUserId, $botId, $selectionToken, $publicId);
     }
 
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 OPS-003 QUA-001 QUA-004 */
@@ -310,6 +382,16 @@ final readonly class TelegramAdministratorDirectMessageService
         $this->linkDeliveryOperation($publicId, $administratorId, $receipt->publicId);
 
         return $receipt;
+    }
+
+    /** @requirement COM-001 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 */
+    public function mediaPresentationForDelivery(
+        string $publicId,
+        int $recipientChatId,
+    ): TelegramResolvedPrivateMediaPresentation {
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertExecutorCaller();
+
+        return $this->mediaMessages->mediaPresentationForDelivery($publicId, $recipientChatId);
     }
 
     /** @requirement COM-001 ACL-002 SEC-002 DAT-003 OPS-003 */

@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
@@ -33,6 +34,8 @@ final readonly class TelegramDeliveryOperationExecutor
         private TelegramDeliveryConfidentialPresentationService $confidentialPresentations,
         private ?ProtectedTelegramMessageSender $protectedSender = null,
         private ?TelegramProtectedPresentationResolver $protectedPresentations = null,
+        private ?TelegramPrivateMediaMessageSender $privateMediaSender = null,
+        private ?TelegramAdministratorDirectMessageService $directMessages = null,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -72,7 +75,7 @@ final readonly class TelegramDeliveryOperationExecutor
         string $expectedCorrelationId,
         int $contractVersion = TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION,
     ): TelegramDeliveryOperationReceipt {
-        /** @var array{row: DeliveryOperationRow, boundary_entered: bool, request:?TelegramMutationRequest, protected_presentation:?ProtectedTelegramPresentation} $boundary */
+        /** @var array{row: DeliveryOperationRow, boundary_entered: bool, request:?TelegramMutationRequest, protected_presentation:?ProtectedTelegramPresentation, private_media_presentation:?TelegramResolvedPrivateMediaPresentation} $boundary */
         $boundary = $this->database->connection()->transaction(function (Connection $connection) use ($publicId, $expectedOutboxEventId, $expectedCorrelationId, $contractVersion): array {
             $this->databaseCapability->acquireRuntimeLifecycleFence($connection);
             $row = $this->operation($connection, $publicId, true);
@@ -93,11 +96,18 @@ final readonly class TelegramDeliveryOperationExecutor
                     'boundary_entered' => false,
                     'request' => null,
                     'protected_presentation' => null,
+                    'private_media_presentation' => null,
                 ];
             }
 
             if (! in_array($state, [TelegramDeliveryOperationState::Prepared, TelegramDeliveryOperationState::Retryable], true)) {
-                return ['row' => $row, 'boundary_entered' => false, 'request' => null, 'protected_presentation' => null];
+                return [
+                    'row' => $row,
+                    'boundary_entered' => false,
+                    'request' => null,
+                    'protected_presentation' => null,
+                    'private_media_presentation' => null,
+                ];
             }
 
             // Interactive resolution and durable fingerprint verification must
@@ -109,6 +119,8 @@ final readonly class TelegramDeliveryOperationExecutor
             $confidential = null;
             $protectedReference = null;
             $protectedPresentation = null;
+            $privateMediaReference = null;
+            $privateMediaPresentation = null;
             if ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION) {
                 // Historical v1: exact non-restricted text only.
             } elseif ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_INTERACTIVE) {
@@ -147,6 +159,17 @@ final readonly class TelegramDeliveryOperationExecutor
                 );
                 $protectedPresentations = $this->protectedPresentations ?? throw new RuntimeException('Protected Telegram presentation resolver is unavailable.');
                 $protectedPresentation = $protectedPresentations->resolveForSelf($userId, $protectedReference);
+            } elseif ($contractVersion === TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PRIVATE_MEDIA_REFERENCE) {
+                if ($this->privateMediaSender === null || $this->directMessages === null) {
+                    throw new RuntimeException('Private Telegram media delivery dependencies are unavailable.');
+                }
+                $privateMediaReference = TelegramPrivateMediaPresentationReference::restore(
+                    (string) ($row->presentation_text ?? ''),
+                );
+                $privateMediaPresentation = $this->directMessages->mediaPresentationForDelivery(
+                    $privateMediaReference->directMessagePublicId,
+                    $recipientChatId,
+                );
             } else {
                 throw new DomainException('Telegram delivery Outbox contract version is unsupported.');
             }
@@ -155,6 +178,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 $interactive?->keyboard,
                 $confidential?->presentation,
                 $protectedReference,
+                $privateMediaReference,
             );
             $confidentialHashCandidates = $confidential === null
                 ? null
@@ -178,6 +202,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 'boundary_entered' => true,
                 'request' => $request,
                 'protected_presentation' => $protectedPresentation,
+                'private_media_presentation' => $privateMediaPresentation,
             ];
         }, 3);
 
@@ -190,12 +215,20 @@ final readonly class TelegramDeliveryOperationExecutor
             ?? throw new RuntimeException('Telegram delivery provider boundary is missing its prepared mutation request.');
         try {
             $protectedPresentation = $boundary['protected_presentation'];
-            $result = $protectedPresentation === null
-                ? $this->transport->mutate($request)
-                : $this->protectedMutationResult(($this->protectedSender ?? throw new RuntimeException('Protected Telegram sender is unavailable.'))->send(
+            $privateMediaPresentation = $boundary['private_media_presentation'];
+            if ($privateMediaPresentation !== null) {
+                $result = ($this->privateMediaSender ?? throw new RuntimeException('Private Telegram media sender is unavailable.'))->send(
+                    $request->recipientChatId,
+                    $privateMediaPresentation,
+                );
+            } elseif ($protectedPresentation !== null) {
+                $result = $this->protectedMutationResult(($this->protectedSender ?? throw new RuntimeException('Protected Telegram sender is unavailable.'))->send(
                     $request->recipientChatId,
                     $protectedPresentation,
                 ));
+            } else {
+                $result = $this->transport->mutate($request);
+            }
         } catch (Throwable) {
             $result = new TelegramMutationResult(
                 TelegramMutationOutcome::UncertainResult,
@@ -326,13 +359,17 @@ final readonly class TelegramDeliveryOperationExecutor
         ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard,
         ?ConfidentialTelegramPresentation $confidentialPresentation = null,
         ?TelegramProtectedPresentationReference $protectedReference = null,
+        ?TelegramPrivateMediaPresentationReference $privateMediaReference = null,
     ): TelegramMutationRequest {
         $action = TelegramDeliveryAction::tryFrom((string) $row->action)
             ?? throw new RuntimeException('Stored Telegram delivery action is invalid.');
-        if ($confidentialPresentation !== null && $protectedReference !== null) {
-            throw new RuntimeException('Telegram delivery cannot be confidential and protected-reference simultaneously.');
+        $specialPresentationCount = (int) ($confidentialPresentation !== null)
+            + (int) ($protectedReference !== null)
+            + (int) ($privateMediaReference !== null);
+        if ($specialPresentationCount > 1) {
+            throw new RuntimeException('Telegram delivery cannot combine special presentation authorities.');
         }
-        $presentation = $confidentialPresentation ?? $protectedReference;
+        $presentation = $confidentialPresentation ?? $protectedReference ?? $privateMediaReference;
         if ($presentation === null && $row->presentation_text !== null) {
             $presentation = NonRestrictedTelegramPresentation::restorePersisted((string) $row->presentation_text);
         }
