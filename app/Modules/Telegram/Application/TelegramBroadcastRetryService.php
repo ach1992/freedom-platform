@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Shared\Application\Clock;
@@ -22,6 +23,7 @@ final readonly class TelegramBroadcastRetryService
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
         private Clock $clock,
+        private TelegramDeliveryRuntime $runtime,
     ) {}
 
     /**
@@ -61,6 +63,7 @@ final readonly class TelegramBroadcastRetryService
                 /** @var object{id:int|string,state:string,state_version:int|string,current_message_version:int|string,completed_at:?string}|null $campaign */
                 $campaign = $connection->table('broadcast_campaigns')
                     ->where('public_id', $campaignPublicId)
+                    ->where('bot_id', $this->runtime->botId())
                     ->lockForUpdate()
                     ->first([
                         'id',
