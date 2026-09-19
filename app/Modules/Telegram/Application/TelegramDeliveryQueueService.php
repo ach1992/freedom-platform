@@ -110,7 +110,7 @@ final readonly class TelegramDeliveryQueueService
         string $requestKey,
         string $correlationId,
     ): TelegramDeliveryOperationReceipt {
-        TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
         if ($action !== TelegramDeliveryAction::Send) {
             throw new DomainException('Private-media-reference Telegram delivery supports send mutations only.');
         }
@@ -134,7 +134,7 @@ final readonly class TelegramDeliveryQueueService
         string $requestKey,
         string $correlationId,
     ): ?TelegramDeliveryOperationReceipt {
-        TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+        TelegramPrivateMediaDeliveryProvenanceGuard::assertQueueSource();
         if ($action !== TelegramDeliveryAction::Send) {
             throw new DomainException('Private-media-reference Telegram delivery supports send mutations only.');
         }
