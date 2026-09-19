@@ -4736,6 +4736,22 @@ SQL);
                     ->value('media_byte_size'),
             );
         }
+        try {
+            DB::table('telegram_administrator_direct_messages')
+                ->where('public_id', (string) $direct->public_id)
+                ->update([
+                    'content_type' => 'document',
+                    'content_length' => 1,
+                ]);
+            self::fail('MariaDB must reject persisted caption length for non-photo direct media.');
+        } catch (QueryException) {
+            self::assertSame(
+                'photo',
+                DB::table('telegram_administrator_direct_messages')
+                    ->where('public_id', (string) $direct->public_id)
+                    ->value('content_type'),
+            );
+        }
 
         $media = DB::table('telegram_private_media')->first();
         self::assertNotNull($media);
