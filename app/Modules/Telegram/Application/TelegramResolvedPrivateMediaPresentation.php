@@ -27,7 +27,6 @@ final class TelegramResolvedPrivateMediaPresentation implements Stringable
         if (! in_array($contentType, ['photo', 'video', 'document'], true)
             || $bytes === ''
             || strlen($bytes) !== $byteSize
-            || $byteSize < 1
             || $byteSize > 20_000_000
             || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,126}\z/', $filename) !== 1
             || str_contains($filename, '..')
