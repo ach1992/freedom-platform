@@ -424,6 +424,7 @@ final readonly class TelegramBroadcastOwnerTestService
                     ->where('public_id', $deliveryPublicId)
                     ->first([
                         'state',
+                        'outbox_event_id',
                         'telegram_message_id',
                         'result_code',
                     ]);
@@ -433,7 +434,15 @@ final readonly class TelegramBroadcastOwnerTestService
 
                 $operationState = TelegramDeliveryOperationState::tryFrom((string) $operation->state)
                     ?? throw new RuntimeException('Broadcast Owner test delivery state is invalid.');
-                [$state, $messageId, $resultCode] = match ($operationState) {
+                $preEffectReview = $operationState === TelegramDeliveryOperationState::Prepared
+                    && $connection->table('outbox_messages')
+                        ->where('id', (string) $operation->outbox_event_id)
+                        ->whereNull('processed_at')
+                        ->where('dispatch_state', 'review_required')
+                        ->exists();
+                [$state, $messageId, $resultCode] = $preEffectReview
+                    ? ['failed', null, 'telegram_broadcast_owner_test_pre_effect_review_required']
+                    : match ($operationState) {
                     TelegramDeliveryOperationState::Prepared,
                     TelegramDeliveryOperationState::Retryable => ['queued', null, $operation->result_code],
                     TelegramDeliveryOperationState::Sending => ['sending', null, $operation->result_code],
