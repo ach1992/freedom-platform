@@ -275,6 +275,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             }
 
             $now = $this->timestamp();
+            $retryNotBefore = $this->retryNotBefore($result);
             $messageUpdated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $message->id)
                 ->where('state', 'prepared')
@@ -510,6 +511,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'state' => $messageState,
                     'telegram_message_id' => $messageId,
                     'result_code' => $result->resultCode,
+                    'retry_not_before' => $retryNotBefore,
                     'provider_boundary_finished_at' => $now,
                     'updated_at' => $now,
                 ]);
@@ -521,6 +523,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'delivery_state' => $recipientState,
                     'telegram_message_id' => $messageId,
                     'failure_code' => $failureCode,
+                    'retry_not_before' => $retryNotBefore,
                     'sent_at' => $recipientState === 'sent' ? $now : null,
                     'claim_token_hash' => null,
                     'claim_expires_at' => null,
@@ -1143,6 +1146,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             ->update([
                 'delivery_state' => $cancelled ? 'skipped' : 'queued',
                 'failure_code' => $cancelled ? $resultCode : null,
+                'retry_not_before' => null,
                 'claim_token_hash' => null,
                 'claim_expires_at' => null,
                 'updated_at' => $now,
@@ -1174,6 +1178,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             ->update([
                 'delivery_state' => 'uncertain',
                 'failure_code' => $resultCode,
+                'retry_not_before' => null,
                 'claim_token_hash' => null,
                 'claim_expires_at' => null,
                 'updated_at' => $now,
@@ -1235,6 +1240,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                 'delivery_state' => $state,
                 'telegram_message_id' => $messageId,
                 'failure_code' => $failureCode,
+                'retry_not_before' => null,
                 'sent_at' => $state === 'sent' ? $now : null,
                 'claim_token_hash' => null,
                 'claim_expires_at' => null,
@@ -1306,6 +1312,22 @@ final readonly class TelegramBroadcastDeliveryRunner
         }
 
         return $validated;
+    }
+
+    private function retryNotBefore(TelegramMutationResult $result): ?string
+    {
+        if ($result->outcome !== TelegramMutationOutcome::RetryAfter) {
+            return null;
+        }
+
+        $seconds = $result->retryAfterSeconds;
+        if ($seconds === null) {
+            throw new RuntimeException('Broadcast provider retry delay is unavailable.');
+        }
+
+        return $this->clock->now()
+            ->modify('+'.$seconds.' seconds')
+            ->format('Y-m-d H:i:s.u');
     }
 
     private function resultCode(mixed $value, string $fallback): string
