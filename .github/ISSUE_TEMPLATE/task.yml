@@ -11,6 +11,8 @@ body:
 
         Execution continuity: once the parent objective is authorized and this task is READY, normal reversible implementation/validation/review-preparation continues without another Owner checkpoint. Approval requirements are action-scoped; a "before merge/release" gate does not pause coding, testing, PR maintenance, or dependency-safe follow-on work.
 
+        Task lifecycle: this Issue owns the full meaningful outcome, not just the first PR. Keep it open across cohesive partial PRs while acceptance/dependency/risk/rollback/validation boundaries remain aligned. Partial PRs use Refs, not Closes. Use a Contract Revision for bounded in-outcome refinement; create a sibling Issue only when a material boundary actually changes or one contract would become unsafe/mixed-purpose/unreviewable.
+
   - type: textarea
     id: authority
     attributes:
