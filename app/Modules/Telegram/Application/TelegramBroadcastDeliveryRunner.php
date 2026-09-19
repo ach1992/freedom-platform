@@ -208,7 +208,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         $this->dispatchText($claim, $context);
     }
 
-    /** @param array<string,mixed> $context */
+    /** @param  array<string,mixed>  $context */
     private function dispatchText(TelegramBroadcastRecipientClaim $claim, array $context): void
     {
         $this->assertClaimStillActive($claim);
