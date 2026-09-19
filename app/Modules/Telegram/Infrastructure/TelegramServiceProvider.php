@@ -10,6 +10,7 @@ use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
@@ -259,6 +260,13 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(
             TelegramSourceMessageSender::class,
             fn (Application $application): TelegramSourceMessageSender => new HttpTelegramSourceMessageSender(
+                $application->make(Factory::class),
+                $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramBroadcastLifecycleTransport::class,
+            fn (Application $application): TelegramBroadcastLifecycleTransport => new HttpTelegramBroadcastLifecycleTransport(
                 $application->make(Factory::class),
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
