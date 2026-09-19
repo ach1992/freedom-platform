@@ -337,6 +337,7 @@ final readonly class TelegramBroadcastLifecycleRunner
                 TelegramMutationOutcome::UncertainResult => 'uncertain',
             };
             $now = $this->timestamp();
+            $retryNotBefore = $this->retryNotBefore($result);
             $updated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $operation->id)
                 ->where('state', 'sending')
