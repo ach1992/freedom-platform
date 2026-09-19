@@ -1150,6 +1150,8 @@ final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMedia
 {
     public int $attempts = 0;
 
+    public bool $uncertain = false;
+
     /** @var list<TelegramResolvedPrivateMediaPresentation> */
     public array $presentations = [];
 
@@ -1168,6 +1170,13 @@ final class TelegramNavigationPrivateMediaSender implements TelegramPrivateMedia
 
         $this->attempts++;
         $this->presentations[] = $presentation;
+
+        if ($this->uncertain) {
+            return new TelegramMutationResult(
+                TelegramMutationOutcome::UncertainResult,
+                'telegram_transport_uncertain',
+            );
+        }
 
         return new TelegramMutationResult(
             TelegramMutationOutcome::Success,
