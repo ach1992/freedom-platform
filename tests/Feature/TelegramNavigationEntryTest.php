@@ -4858,6 +4858,170 @@ SQL);
         self::assertSame(99101, $deliveryResult->messageId);
     }
 
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_permission_loss_fails_before_delivery_queue(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9787;
+        $targetTelegramId = 888777666562;
+        $adminUsername = 'admin_direct_media_revoke';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99102);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7520,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_revoke_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7526,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-revoke',
+            'private-provider-unique-direct-media-revoke',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7526);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $targetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->count();
+
+        $permissionId = DB::table('permissions')->where('code', 'telegram.direct_messages.send')->value('id');
+        $salesContentRoleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        self::assertIsNumeric($permissionId);
+        self::assertIsNumeric($salesContentRoleId);
+        self::assertSame(1, DB::table('role_permissions')
+            ->where('role_id', (int) $salesContentRoleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete());
+
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $this->accept($this->callbackPayload(
+            7527,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $journey['processor']->process('123456789', 7527);
+
+        self::assertSame(0, $sender->attempts);
+        self::assertSame(
+            $targetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertNull(DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->value('delivery_operation_public_id'));
+        self::assertSame(
+            'associated',
+            DB::table('telegram_private_media')->value('state'),
+        );
+        self::assertSame(
+            'admin_customer_preview',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $journey['admin_account_id'])
+                ->value('state'),
+        );
+    }
+
+    /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 DAT-004 OPS-003 QUA-001 QUA-004 */
+    public function test_admin_customer_direct_media_target_drift_fails_before_delivery_queue(): void
+    {
+        Storage::fake('telegram_private_media');
+
+        $adminTelegramId = 9788;
+        $targetTelegramId = 888777666563;
+        $driftedTelegramId = 888777666564;
+        $adminUsername = 'admin_direct_media_drift';
+        $png = $this->navigationOnePixelPng();
+        $fetcher = new TelegramNavigationPrivateMediaFetcher($png);
+        $sender = new TelegramNavigationPrivateMediaSender($targetTelegramId, 99103);
+        $this->bindAdminDirectMediaDependencies($fetcher, $sender);
+
+        $journey = $this->prepareAdminDirectMediaCompose(
+            7560,
+            $adminTelegramId,
+            $targetTelegramId,
+            'direct_media_drift_target',
+            $adminUsername,
+        );
+        $this->accept($this->photoMediaPayload(
+            7566,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            'private-provider-file-direct-media-drift',
+            'private-provider-unique-direct-media-drift',
+            strlen($png),
+        ));
+        $journey['processor']->process('123456789', 7566);
+
+        $direct = DB::table('telegram_administrator_direct_messages')->first(['public_id']);
+        self::assertNotNull($direct);
+        $targetAccountId = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $targetTelegramId)
+            ->value('id');
+        self::assertIsNumeric($targetAccountId);
+        self::assertSame(1, DB::table('telegram_accounts')
+            ->where('id', (int) $targetAccountId)
+            ->update([
+                'telegram_user_id' => $driftedTelegramId,
+                'updated_at' => now('UTC'),
+            ]));
+
+        $oldTargetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $targetTelegramId)
+            ->count();
+        $newTargetDeliveryCount = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $driftedTelegramId)
+            ->count();
+
+        $confirmToken = $this->callbackToken(
+            'navigation.admin.customer.message.confirm',
+            $journey['admin_account_id'],
+        );
+        $this->accept($this->callbackPayload(
+            7567,
+            $adminTelegramId,
+            $adminUsername,
+            'fa',
+            $confirmToken,
+        ));
+        $journey['processor']->process('123456789', 7567);
+
+        self::assertSame(0, $sender->attempts);
+        self::assertSame(
+            $oldTargetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $targetTelegramId)->count(),
+        );
+        self::assertSame(
+            $newTargetDeliveryCount,
+            DB::table('telegram_delivery_operations')->where('recipient_chat_id', $driftedTelegramId)->count(),
+        );
+        self::assertNull(DB::table('telegram_administrator_direct_messages')
+            ->where('public_id', (string) $direct->public_id)
+            ->value('delivery_operation_public_id'));
+        self::assertSame(
+            'admin_customer_preview',
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', $journey['admin_account_id'])
+                ->value('state'),
+        );
+    }
+
     /** @requirement COM-001 ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 CNT-001 OPS-003 QUA-001 QUA-004 */
     public function test_admin_customer_direct_text_message_is_confirmed_encrypted_and_exactly_once_on_replay(): void
     {
