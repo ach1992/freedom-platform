@@ -57,6 +57,7 @@ use App\Modules\Telegram\Application\TelegramInteractionCallbackReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
+use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
