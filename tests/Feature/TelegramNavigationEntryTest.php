@@ -4904,7 +4904,7 @@ SQL);
         $this->assertDatabaseHas('telegram_delivery_operations', [
             'public_id' => (string) $operation->public_id,
             'state' => 'succeeded',
-            'message_id' => 99101,
+            'telegram_message_id' => 99101,
             'provider_attempts' => 1,
         ]);
 
