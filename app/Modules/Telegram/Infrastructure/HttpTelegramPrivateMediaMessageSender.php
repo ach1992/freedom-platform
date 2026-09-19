@@ -43,8 +43,9 @@ final readonly class HttpTelegramPrivateMediaMessageSender implements TelegramPr
         TelegramResolvedPrivateMediaPresentation $presentation,
     ): Response {
         $bytes = $presentation->revealBytesForProvider();
-        $field = $presentation->contentType;
-        $method = match ($presentation->contentType) {
+        $contentType = $presentation->contentType();
+        $field = $contentType;
+        $method = match ($contentType) {
             'photo' => 'sendPhoto',
             'video' => 'sendVideo',
             'document' => 'sendDocument',
@@ -52,10 +53,11 @@ final readonly class HttpTelegramPrivateMediaMessageSender implements TelegramPr
         };
 
         $payload = ['chat_id' => $recipientChatId];
-        if ($presentation->caption !== '') {
-            $payload['caption'] = $presentation->caption;
+        $caption = $presentation->captionForProvider();
+        if ($caption !== '') {
+            $payload['caption'] = $caption;
         }
-        if ($presentation->contentType === 'document') {
+        if ($contentType === 'document') {
             // Multipart scalar parts are strings; use the Bot API's explicit boolean literal.
             $payload['disable_content_type_detection'] = 'true';
         }
@@ -65,7 +67,7 @@ final readonly class HttpTelegramPrivateMediaMessageSender implements TelegramPr
             ->withoutRedirecting()
             ->timeout($this->configuration->apiTimeoutSeconds)
             ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
-            ->attach($field, $bytes, $presentation->filename)
+            ->attach($field, $bytes, $presentation->filename())
             ->post(
                 $this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/'.$method,
                 $payload,
