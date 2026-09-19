@@ -67,7 +67,7 @@ verify_shards() {
     ((max_weight * 100 <= min_weight * 115)) \
         || fail "$count-way shard static weights are imbalanced: ${weights[*]}"
 
-    printf 'Feature $s-way sharding invariants passed: weights %s\n' "$count" "${weights[*]}"
+    printf 'Feature %s-way sharding invariants passed: weights %s\n' "$count" "${weights[*]}"
 }
 
 verify_shards 2
