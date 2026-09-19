@@ -47,6 +47,7 @@ final readonly class TelegramBroadcastCampaignService
     ): TelegramBroadcastCampaignReceipt {
         $administratorId = $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
         $botId = $this->botId();
+        $this->assertSourceBoundToActor($actorUserId, $botId, $message);
         $requestHash = $this->requestHash($requestKey);
         $messageHash = $message->contentHash();
         $audienceHash = $audience->hash();
@@ -157,6 +158,8 @@ final readonly class TelegramBroadcastCampaignService
         $administratorId = $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
         $this->assertPublicId($campaignPublicId);
         $this->assertStateVersion($expectedStateVersion);
+        $botId = $this->botId();
+        $this->assertSourceBoundToActor($actorUserId, $botId, $message);
         $messageHash = $message->contentHash();
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
@@ -832,6 +835,27 @@ final readonly class TelegramBroadcastCampaignService
     {
         if ((int) $campaign->state_version !== $expectedStateVersion) {
             throw new DomainException('Broadcast campaign state version is stale.');
+        }
+    }
+
+    private function assertSourceBoundToActor(
+        int $actorUserId,
+        string $botId,
+        TelegramBroadcastMessageDefinition $message,
+    ): void {
+        if ($message->sourceChatId === null) {
+            return;
+        }
+
+        $telegramUserId = $this->database->connection()->table('telegram_accounts')
+            ->where('user_id', $actorUserId)
+            ->where('bot_id', $botId)
+            ->where('is_bot', false)
+            ->value('telegram_user_id');
+        if ((! is_int($telegramUserId) && ! is_string($telegramUserId))
+            || (int) $telegramUserId !== $message->sourceChatId
+        ) {
+            throw new DomainException('Broadcast source message must belong to the authorized administrator chat.');
         }
     }
 
