@@ -98,9 +98,14 @@ final readonly class TelegramBroadcastRetryService
                     throw new DomainException('Broadcast failed-recipient retry must wait for the current lifecycle mutation to finish.');
                 }
 
+                $now = $this->timestamp();
                 $query = $connection->table('broadcast_recipients')
                     ->where('broadcast_campaign_id', (int) $campaign->id)
-                    ->whereIn('delivery_state', ['failed_transient', 'failed_permanent']);
+                    ->whereIn('delivery_state', ['failed_transient', 'failed_permanent'])
+                    ->where(function ($retry) use ($now): void {
+                        $retry->whereNull('retry_not_before')
+                            ->orWhere('retry_not_before', '<=', $now);
+                    });
                 if ($recipientPublicIds !== []) {
                     $query->whereIn('public_id', $recipientPublicIds);
                 }
@@ -126,7 +131,6 @@ final readonly class TelegramBroadcastRetryService
                     throw new RuntimeException('Broadcast retry message version is unavailable.');
                 }
 
-                $now = $this->timestamp();
                 $messageRows = [];
                 $recipientIds = [];
                 foreach ($recipients as $recipient) {
@@ -164,6 +168,7 @@ final readonly class TelegramBroadcastRetryService
                         'delivery_operation_public_id' => null,
                         'telegram_message_id' => null,
                         'failure_code' => null,
+                        'retry_not_before' => null,
                         'sent_at' => null,
                         'claim_token_hash' => null,
                         'claim_expires_at' => null,
