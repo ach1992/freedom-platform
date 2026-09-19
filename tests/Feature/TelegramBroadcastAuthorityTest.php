@@ -190,10 +190,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
 
         DB::table('broadcast_campaigns')
             ->where('public_id', $scheduled->publicId)
-            ->update([
-                'scheduled_at' => now('UTC'),
-                'updated_at' => now('UTC'),
-            ]);
+            ->update(['scheduled_at' => DB::raw('created_at')]);
 
         self::assertSame(1, $service->activateDueCampaigns());
         $scheduledCompleted = $service->current($actor['user_id'], $scheduled->publicId);
