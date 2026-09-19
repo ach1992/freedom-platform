@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
