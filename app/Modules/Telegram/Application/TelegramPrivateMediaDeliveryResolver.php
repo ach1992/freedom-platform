@@ -75,6 +75,52 @@ final readonly class TelegramPrivateMediaDeliveryResolver
         return new TelegramPrivateMediaDeliveryPayload($contents, $mime, $size);
     }
 
+    /** @requirement COM-001 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 */
+    public function resolveAdministratorDirectMessage(
+        string $mediaPublicId,
+        string $directMessagePublicId,
+    ): TelegramPrivateMediaDeliveryPayload {
+        if (! Str::isUlid($mediaPublicId) || ! Str::isUlid($directMessagePublicId)) {
+            throw new RuntimeException('Administrator direct-message private-media identity is invalid.');
+        }
+        $mediaPublicId = strtoupper($mediaPublicId);
+        $directMessagePublicId = strtoupper($directMessagePublicId);
+
+        /** @var stdClass|null $row */
+        $row = $this->database->connection()->table('telegram_private_media')
+            ->where('public_id', $mediaPublicId)
+            ->where('state', 'associated')
+            ->where('association_type', 'administrator_direct_message')
+            ->where('association_public_id', $directMessagePublicId)
+            ->first(['public_id', 'storage_path', 'detected_mime', 'byte_size', 'content_sha256']);
+        if ($row === null
+            || ! is_string($row->storage_path)
+            || ! is_string($row->detected_mime)
+            || ! is_string($row->content_sha256)
+            || $row->byte_size === null) {
+            throw new RuntimeException('Administrator direct-message private media is unavailable.');
+        }
+
+        $expectedPath = $this->storagePath($mediaPublicId);
+        if (! hash_equals($expectedPath, $row->storage_path)) {
+            throw new RuntimeException('Administrator direct-message private-media storage identity is invalid.');
+        }
+
+        $disk = $this->disk();
+        if (! $disk->exists($expectedPath)) {
+            throw new RuntimeException('Administrator direct-message private-media bytes are unavailable.');
+        }
+        $contents = $disk->get($expectedPath);
+        [$mime, $hash, $size] = TelegramPrivateMediaContentValidator::validate($contents, 20_000_000);
+        if ($mime !== $row->detected_mime
+            || $size !== (int) $row->byte_size
+            || ! hash_equals(strtolower((string) $row->content_sha256), $hash)) {
+            throw new RuntimeException('Administrator direct-message private-media bytes failed integrity verification.');
+        }
+
+        return new TelegramPrivateMediaDeliveryPayload($contents, $mime, $size);
+    }
+
     private function storagePath(string $publicId): string
     {
         return 'receipts/'.substr(hash('sha256', $publicId), 0, 2).'/'.$publicId.'.media';
