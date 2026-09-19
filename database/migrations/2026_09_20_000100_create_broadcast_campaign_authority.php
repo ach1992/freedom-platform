@@ -46,6 +46,7 @@ return new class extends Migration
             $table->unsignedInteger('current_audience_version')->default(1);
             $table->unsignedInteger('recipient_count')->default(0);
             $table->string('correlation_id', 64)->unique();
+            $table->dateTime('audience_materialized_at', 6)->nullable();
             $table->dateTime('scheduled_at', 6)->nullable();
             $table->dateTime('started_at', 6)->nullable();
             $table->dateTime('completed_at', 6)->nullable();
@@ -197,6 +198,7 @@ ALTER TABLE broadcast_campaigns
     ),
     ADD CONSTRAINT broadcast_campaign_time_chk CHECK (
         updated_at >= created_at
+        AND (audience_materialized_at IS NULL OR audience_materialized_at >= created_at)
         AND (started_at IS NULL OR started_at >= created_at)
         AND (completed_at IS NULL OR completed_at >= created_at)
         AND (cancelled_at IS NULL OR cancelled_at >= created_at)
