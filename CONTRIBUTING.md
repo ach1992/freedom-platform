@@ -4,18 +4,19 @@ This file owns the repository's **development workflow**: branches, Issues/PRs, 
 
 ## Workflow
 
-1. Read `AGENTS.md`, Program Issue `#3`, and the owning Task Issue when one is required/present. For a bounded FAST-path change without a dedicated Task Issue, identify the existing requirement/Phase/Program authority in the PR.
+1. On first ownership, Master/chat rotation, or Phase transition, recover `AGENTS.md`, Program Issue `#3`, the active Phase, and any current Task/PR. During continuous work under an unchanged recovered Phase/cutline, retain that baseline and refresh only decision-relevant deltas; do not reread unchanged Program/closed history for every task. For the active change, read the owning Task Issue when one is required/present; for bounded FAST work, identify the existing requirement/Phase/Program authority in the PR.
 2. Confirm the relevant parent phase/dependencies and inspect the current `main` head from GitHub.
 3. Work on one temporary task branch unless the active Phase explicitly owns one cumulative implementation branch/PR.
-4. Open the PR against `main`.
-5. Keep the PR Draft while it is changing; mark it Ready only when the intended validation should run.
+4. Open the PR against `main`. For substantive multi-commit work, open it as Draft by default.
+5. Keep the PR Draft while implementation/self-review corrections are still expected. **Ready means the current candidate is intended to consume acceptance CI.** Mark it Ready only after the implementation has converged and focused validation/self-review make a merge-gate run useful. If material correction work appears after Ready, convert back to Draft before further correction pushes; do not leave a changing candidate Ready and repeatedly pay for superseded broad CI.
+   With two independent WIP streams targeting `main`, normally advance only one into Ready/review/integration at a time if its merge would stale the other's evidence; keep the other Draft until the first target update is reconciled.
 6. Do not merge your own Worker PR.
 
 `main` is the default and primary integration branch. Normal product work reaches it through reviewed PRs rather than direct pushes. Current project state and source live in GitHub; there is no Owner-maintained local/server project checkout to synchronize and no repository status snapshot to maintain.
 
 When a temporary branch appears no longer needed, the Master reports its name to the Owner. Branch cleanup is Owner-operated; do not delete branches automatically or add branch-deletion automation unless the Owner explicitly changes this policy later.
 
-Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and READY work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and dependency-safe follow-on task selection. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
+Do not insert a human checkpoint between ordinary reversible steps. When the current objective is authorized and dependency-safe executable work exists, continue implementation, targeted validation, PR maintenance, self-review/correction, and outcome-linked follow-on work. Stop only for a real blocker/decision/capability boundary or for the specific action that is explicitly approval-gated.
 
 ## Execution and validation routing
 
@@ -39,23 +40,28 @@ Task-contract persistence is owned by `AGENTS.md`. Use `.github/ISSUE_TEMPLATE/t
 
 When a Task Issue exists, keep it limited to the implementation/review facts required by `AGENTS.md`. Add security/data/financial/provider/schema/runtime/compatibility/protected-area detail only when it matters. Do not create fields or documents merely to say `N/A`, repeat GitHub state, or preserve test logs already available from CI.
 
-After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Keep exact commit/run/review receipts in GitHub comments, PRs, and CI rather than copying them into repository status documents; an `Initial state` field remains historical contract input and does not need rewriting.
+A Task Issue represents its **whole meaningful outcome**, not merely the first PR or first technical seam. Keep it open across cohesive partial PRs when the acceptance/dependency/risk/rollback/validation boundary remains the same. Use `Refs #...` for a partial PR and `Closes #...` only when that PR actually satisfies the full Task acceptance. Prefer updating the existing contract/revision for bounded in-outcome refinement over closing it and creating a mechanically similar sibling.
 
-Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood.
+Default to one reviewable PR for one meaningful Task/FAST outcome. Multiple partial PRs are justified only by a material dependency/integration sequence, risk/rollback/release boundary, distinct review ownership, platform constraint, or diff-size/reviewability limit; technical layers or mechanically similar seams alone are not PR boundaries. A cumulative Phase PR is likewise not a default speed shortcut and must remain one cohesive reviewable outcome.
+
+After verified integration/closure, reconcile any acceptance checklist or explicit mutable current-state text in an owning Issue when one exists. Exact commit/run identity belongs to native Git/PR/check state; do not create a comment ledger for every candidate or CI rerun. Use comments for material decisions/blockers/review results/approval boundaries/explicit pauses or a recovery summary that native state cannot express. An `Initial state` field remains historical contract input and does not need rewriting.
+
+Pull requests use `.github/pull_request_template.md`: identify the durable authority (and owning Issue when one exists), summarize the change, state material risk/impact, and provide the focused verification or applicable CI result. Record a nonclaim only when adjacent scope could otherwise be misunderstood. The PR body is not a candidate ledger: GitHub already owns current base/head SHA, mergeability and check/run identity. Do not rewrite the body after every push/rerun merely to copy those fields; update it when scope/risk/acceptance/nonclaims or stable review-useful evidence materially changes.
 
 Sensitive paths are assigned in `.github/CODEOWNERS`. CODEOWNERS identifies intended ownership; actual merge enforcement depends on repository protection/rulesets. Verify live repository settings before relying on protection as an enforced fact.
 
-High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to another dependency-safe READY task.
+High/Critical work involving financial integrity, authorization, security controls, provider semantics, schema, deployment/release behavior, secrets, or irreversible operations requires independent review and explicit Owner approval before merge unless that exact merge/action was already authorized. This gate does not by itself block reversible implementation, testing, review preparation, or continuation to other dependency-safe executable work.
 
-## Independent review relay
+## Independent review
 
-When independent review is required, the permitted project dispatch mechanism is an **Owner-relayed fresh ChatGPT chat**.
+When independent review is required, use a reviewer context that is genuinely independent from the authoring Master. Prefer direct dispatch to a fresh independent reviewer capability when the current tool/runtime supports that separation and exact evidence envelope. If no such direct route exists, use an **Owner-relayed fresh ChatGPT chat**. The review result contract and freshness requirements are identical either way.
 
-1. The authoring Master completes applicable exact-head validation and effective-diff self-review, then gives the Owner one ready-to-paste `INDEPENDENT REVIEW CHAT` prompt.
-2. The prompt identifies the repository/PR/change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and validation evidence tied to that exact candidate.
-3. The Owner opens a new ChatGPT chat and pastes the prompt. That fresh chat reviews read-only and returns the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
-4. The Owner relays the complete review result back to the authoring Master. The Master reconciles every finding and refreshes candidate/target/CI/review freshness before relying on the review or integrating.
+1. The authoring Master first lets implementation and effective-diff self-review converge and freezes the candidate. Start the applicable exact-head CI and independent review **concurrently** when neither depends on the other's result. Do not request independent review while planned implementation/self-review correction remains.
+2. The review envelope identifies the repository/PR/change, exact integration target/base SHA, exact candidate HEAD SHA, owning Issue/contract and acceptance criteria, risk level, material review boundaries/invariants, and current validation/CI evidence identifiers. CI may be marked `pending` when the same exact candidate is already running; a reviewer never treats pending CI as passed evidence.
+3. If a direct independent-review capability is available, dispatch the same bounded read-only envelope there. Otherwise the Owner opens a fresh ChatGPT chat with the ready-to-paste `INDEPENDENT REVIEW CHAT` prompt. The reviewer returns the exact candidate SHA reviewed, a verdict of `APPROVE` or `CHANGES_REQUIRED`, and evidence-backed findings classified as `BLOCKER`, `REQUIRED`, or `OPTIONAL`.
+4. The Master reconciles the complete review result and exact-head CI independently. Integration readiness requires both a current acceptable review and all applicable green CI/checks for the same candidate/target envelope.
 5. Candidate, target, contract, or material effective-diff drift invalidates the affected independent review; generate a new exact review packet rather than reusing a stale verdict.
+6. For remediation after `CHANGES_REQUIRED`, the fresh packet identifies the prior reviewed candidate and the exact delta to the corrected candidate. The new verdict always binds the current exact candidate, but unchanged prior analysis may be reused when its assumptions remain valid; the reviewer widens back to the full affected surface whenever the correction changes those assumptions. Do not force ceremonial whole-diff rediscovery solely because a bounded correction changed the SHA.
 
 ### Defensive review-packet formulation
 
@@ -67,7 +73,7 @@ Independent-review packets are defensive software-assurance artifacts. Preserve 
 - A platform refusal, hidden response, or safety limitation is not review evidence and never satisfies an independent-review gate. Reformulate the same exact review envelope using bounded defensive/property-based language and the same Owner-relayed fresh ChatGPT mechanism; keep the material scope unchanged.
 - Do not evade or defeat platform safety controls. If an equivalent compliant review packet still cannot be reviewed, surface the missing review capability/gate instead of substituting self-review, weakening the contract, or manufacturing approval.
 
-Do not request GitHub/Copilot reviewers or dispatch independent review through another agent/service merely to satisfy this repository rule. If repository/platform protection independently requires a native approval object, treat that as a separate integration gate and surface it without fabricating or bypassing it.
+Do not use GitHub/Copilot or another agent/service merely to manufacture an approval object or to replace the required independence/evidence contract. A directly dispatchable reviewer is valid only when it is genuinely separate from the authoring context and can perform the same bounded evidence-based review. If repository/platform protection independently requires a native approval object, treat that as a separate integration gate and surface it without fabricating or bypassing it.
 
 ## Merge method
 
