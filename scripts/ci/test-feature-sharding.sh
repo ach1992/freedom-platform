@@ -17,6 +17,7 @@ one="$tmpdir/one"
 zero="$tmpdir/zero"
 two="$tmpdir/two"
 union="$tmpdir/union"
+ordered_union="$tmpdir/ordered-union"
 overlap="$tmpdir/overlap"
 
 find "$root/tests/Feature" -type f -name '*Test.php' -printf '%P\n' | sed 's#^#tests/Feature/#' | sort > "$all"
@@ -34,6 +35,9 @@ bash "$selector" 2 1 > "$two"
 
 cat "$zero" "$two" | sort > "$union"
 cmp -s "$all" "$union" || fail '2-way shard union must contain every Feature file exactly once'
+
+cat "$zero" "$two" > "$ordered_union"
+cmp -s "$all" "$ordered_union" || fail '2-way shards must preserve contiguous Feature-suite file order'
 
 comm -12 "$zero" "$two" > "$overlap"
 [[ ! -s "$overlap" ]] || fail '2-way shards overlap'
