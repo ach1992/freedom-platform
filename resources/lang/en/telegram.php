@@ -60,8 +60,8 @@ Telegram ID: :telegram_id
 Account ID: :account_id
 Username: :username
 
-Send the text you want to deliver to this customer. Nothing is sent until the final confirmation step.',
-                'message_invalid' => 'Send a non-empty text message up to 3500 characters.',
+Send text, a photo, a video, or a document. Text may contain up to 3500 characters. A photo may include a plain caption up to 1024 characters. Nothing is sent until the final confirmation step.',
+                'message_invalid' => 'Send text up to 3500 characters, or one supported photo, video, or document. Only a photo may include a plain caption up to 1024 characters.',
                 'message_confirmation' => 'Final Direct Message Confirmation
 
 Telegram ID: :telegram_id
@@ -69,6 +69,11 @@ Account ID: :account_id
 Username: :username
 
 Message to send:',
+                'message_media_confirmation' => "Type: :type\nMIME: :mime\nSize: :size bytes\nCaption: :caption",
+                'message_media_type_photo' => 'Photo',
+                'message_media_type_video' => 'Video',
+                'message_media_type_document' => 'Document',
+                'message_media_caption_none' => 'None',
                 'message_confirm_button' => 'Confirm and queue',
                 'message_queued' => 'The direct message was queued once. Its Telegram result and message ID remain linked to the delivery record.',
                 'message_unavailable' => 'The draft expired or the selected target changed. Review the current target and compose a new message.',
