@@ -53,7 +53,7 @@ Detailed development routing is in `CONTRIBUTING.md`; test/CI semantics are in `
 
 ## Task contract
 
-Persist a dedicated GitHub Task Contract Issue when it materially improves implementation, review, coordination, recovery, or risk control. It is required for substantive product behavior, High/Critical work, delegated or cross-session work, material dependency/decision sequencing, or work whose acceptance/state must remain independently recoverable.
+Persist a dedicated GitHub Task Contract Issue when it materially improves implementation, review, coordination, recovery, or risk control. It is required for High/Critical work, delegated or cross-session work, material dependency/decision sequencing, or a substantive product outcome whose acceptance/state cannot be represented safely by an existing requirement/Phase/Program authority plus one reviewable bounded FAST PR. Substantive behavior alone does **not** force a new Issue when the Low/Medium FAST criteria below are genuinely satisfied.
 
 Do **not** create a ceremonial Issue for bounded Low/Medium-risk self-executed FAST work when all of these are true:
 
@@ -88,7 +88,7 @@ For this repository, required independent review is dispatched only by giving th
 
 ## Continuous execution
 
-When the current objective is authorized and a dependency-safe Task Contract is `READY`, the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review and corrections. Continue the current meaningful outcome until its acceptance is actually satisfied; then select the next dependency-safe meaningful outcome. Create a new Task Contract only when no current contract properly owns that work and the persistence rules above require one.
+When the current objective is authorized and any required Task Contract is `READY` — or bounded FAST work has clear durable authority without a dedicated Task Issue — the Master should self-execute normal reversible engineering steps without asking for another Owner confirmation merely because the task is High/Critical risk or because one bounded slice finished. This includes task/branch/PR maintenance, implementation, targeted validation, CI preparation, self-review and corrections. Continue the current meaningful outcome until its acceptance is actually satisfied; then select the next dependency-safe meaningful outcome. Create a new Task Contract only when no current contract properly owns that work and the persistence rules above require one.
 
 Delegate only when there is a concrete execution/review benefit. Worker availability is capacity, not a prerequisite for progress.
 
@@ -98,7 +98,7 @@ Owner approval requirements in this repository are action-scoped. Unless an Issu
 
 ## Scope, architecture, and correctness
 
-Work from the owning Issue and preserve accepted behavior outside scope.
+Work from the owning Task Issue when one is required/present; otherwise work from the existing requirement/Phase/Program authority that owns the bounded FAST outcome. Preserve accepted behavior outside scope.
 
 The architecture is a modular monolith optimized for future change:
 
@@ -132,7 +132,7 @@ Use prepared ORM/query-builder paths, validation, output escaping, least privile
 
 For every change:
 
-1. read the task Issue and only the canonical docs relevant to the decision;
+1. read the owning Task Issue when one is required/present, otherwise the existing requirement/Phase/Program authority, plus only the canonical docs relevant to the decision;
 2. inspect current implementation/tests before adding a concept;
 3. make the smallest reliable change **inside the accepted meaningful outcome**; do not use "smallest change" as a reason to split one coherent contract into seam-sized Issues/PRs;
 4. add behavior-focused success/failure/security/concurrency tests only where they provide signal;
