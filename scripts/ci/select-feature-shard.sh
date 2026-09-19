@@ -26,28 +26,31 @@ while IFS= read -r -d '' path; do
     rel=${path#"$root/"}
     lines=$(wc -l < "$path")
     printf '%012d\t%s\n' "$lines" "$rel"
-done < <(find "$feature_root" -type f -name '*Test.php' -print0) | sort -nr -k1,1 -k2,2 > "$tmp"
+done < <(find "$feature_root" -type f -name '*Test.php' -print0) | sort -k2,2 > "$tmp"
 
 [[ -s "$tmp" ]] || fail 'no Feature tests were found'
 
-declare -a weights
-declare -a assignments
-for ((i = 0; i < shard_count; i++)); do
-    weights[$i]=0
-    assignments[$i]=''
-done
-
+total=0
 while IFS=$'\t' read -r padded_lines rel; do
     [[ -n "$padded_lines" && -n "$rel" ]] || fail 'invalid weighted Feature test record'
+    total=$((total + 10#$padded_lines))
+done < "$tmp"
+((total > 0)) || fail 'Feature test static weight must be positive'
+
+cumulative=0
+selected=0
+while IFS=$'\t' read -r padded_lines rel; do
     lines=$((10#$padded_lines))
-    best=0
-    for ((i = 1; i < shard_count; i++)); do
-        if ((weights[$i] < weights[$best])); then
-            best=$i
-        fi
-    done
-    weights[$best]=$((weights[$best] + lines))
-    assignments[$best]+="$rel"$'\n'
+    midpoint_twice=$((2 * cumulative + lines))
+    assigned=$((midpoint_twice * shard_count / (2 * total)))
+    ((assigned < shard_count)) || assigned=$((shard_count - 1))
+
+    if ((assigned == shard_index)); then
+        printf '%s\n' "$rel"
+        selected=$((selected + 1))
+    fi
+
+    cumulative=$((cumulative + lines))
 done < "$tmp"
 
-printf '%s' "${assignments[$shard_index]}" | sed '/^$/d' | sort
+((selected > 0)) || fail "Feature shard $shard_index/$shard_count is empty"
