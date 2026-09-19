@@ -122,6 +122,7 @@ final readonly class TelegramBroadcastOwnerTestService
             ?? throw new RuntimeException('Broadcast Owner test message mode is invalid.');
 
         if ($mode === TelegramBroadcastMessageMode::NewText) {
+            $this->assertCampaignCreatorAuthorized($context);
             $text = $context['text'];
             if (! is_string($text) || $text === '') {
                 throw new RuntimeException('Broadcast Owner test text is unavailable.');
@@ -202,7 +203,8 @@ final readonly class TelegramBroadcastOwnerTestService
         TelegramBroadcastMessageMode $mode,
     ): TelegramBroadcastOwnerTestReceipt {
         $this->administrators->authorizeUser($actorUserId, TelegramBroadcastCampaignService::PERMISSION);
-        $this->assertSourceStillBound($actorUserId, $context['bot_id'], $context['source_chat_id']);
+        $this->assertCampaignCreatorAuthorized($context);
+        $this->assertSourceStillBound($context['creator_user_id'], $context['bot_id'], $context['source_chat_id']);
 
         $connection = $this->database->connection();
         $entered = $connection->transaction(function (Connection $connection) use ($testPublicId): bool {
@@ -416,6 +418,7 @@ final readonly class TelegramBroadcastOwnerTestService
     ): array {
         $botId = $this->runtime->botId();
         $row = $connection->table('broadcast_campaigns as campaign')
+            ->join('administrators as creator', 'creator.id', '=', 'campaign.actor_administrator_id')
             ->join('broadcast_message_versions as message', function ($join): void {
                 $join->on('message.broadcast_campaign_id', '=', 'campaign.id')
                     ->on('message.version', '=', 'campaign.current_message_version');
@@ -429,6 +432,7 @@ final readonly class TelegramBroadcastOwnerTestService
             ->first([
                 'campaign.id as campaign_id',
                 'campaign.actor_administrator_id',
+                'creator.user_id as creator_user_id',
                 'campaign.bot_id',
                 'campaign.state',
                 'campaign.state_version',
@@ -444,7 +448,6 @@ final readonly class TelegramBroadcastOwnerTestService
                 'telegram.telegram_user_id',
             ]);
         if ($row === null
-            || (int) $row->actor_administrator_id !== $administratorId
             || ! hash_equals((string) $row->bot_id, $botId)
             || (string) $row->state !== TelegramBroadcastCampaignState::Draft->value
             || (int) $row->state_version !== $expectedStateVersion
@@ -455,6 +458,8 @@ final readonly class TelegramBroadcastOwnerTestService
         return [
             'campaign_id' => $this->positiveInt($row->campaign_id, 'Broadcast campaign ID'),
             'administrator_id' => $administratorId,
+            'creator_administrator_id' => $this->positiveInt($row->actor_administrator_id, 'Broadcast creator administrator ID'),
+            'creator_user_id' => $this->positiveInt($row->creator_user_id, 'Broadcast creator user ID'),
             'bot_id' => $botId,
             'correlation_id' => (string) $row->correlation_id,
             'message_version_id' => $this->positiveInt($row->message_version_id, 'Broadcast message version ID'),
@@ -476,6 +481,26 @@ final readonly class TelegramBroadcastOwnerTestService
             || (int) $row->telegram_account_id !== $context['telegram_account_id']
         ) {
             throw new DomainException('Broadcast Owner test request key was reused with different input.');
+        }
+    }
+
+    /** @param array<string,mixed> $context */
+    private function assertCampaignCreatorAuthorized(array $context): void
+    {
+        $creatorUserId = $this->positiveInt(
+            $context['creator_user_id'] ?? null,
+            'Broadcast creator user ID',
+        );
+        $expectedAdministratorId = $this->positiveInt(
+            $context['creator_administrator_id'] ?? null,
+            'Broadcast creator administrator ID',
+        );
+        $authorizedAdministratorId = $this->administrators->authorizeUser(
+            $creatorUserId,
+            TelegramBroadcastCampaignService::PERMISSION,
+        );
+        if ($authorizedAdministratorId !== $expectedAdministratorId) {
+            throw new DomainException('Broadcast campaign creator authorization changed before provider effect.');
         }
     }
 
