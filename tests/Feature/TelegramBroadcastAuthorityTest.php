@@ -1255,7 +1255,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
 
     public function test_invalid_due_schedule_is_cancelled_and_does_not_block_later_valid_activation(): void
     {
-        $creator = $this->owner(910251);
+        $creator = $this->salesContentAdministrator(910251);
         $staleOwner = $this->owner(910252);
         $service = $this->app->make(TelegramBroadcastCampaignService::class);
         $emptyAudience = new TelegramBroadcastAudienceDefinition(
@@ -1276,13 +1276,21 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             new DateTimeImmutable('+10 minutes', new DateTimeZone('UTC')),
         );
 
+        DB::table('administrators')
+            ->where('id', $staleOwner['administrator_id'])
+            ->update([
+                'is_owner' => false,
+                'updated_at' => now('UTC'),
+            ]);
+        $currentOwner = $this->owner(910253);
+
         $valid = $service->createDraft(
             $creator['user_id'],
             TelegramBroadcastMessageDefinition::newText('valid scheduled campaign'),
             $emptyAudience,
             'broadcast-valid-scheduled-second',
         );
-        $this->successfulOwnerTest($valid->publicId, $creator);
+        $this->successfulOwnerTest($valid->publicId, $currentOwner);
         $service->schedule(
             $creator['user_id'],
             $valid->publicId,
@@ -1293,13 +1301,6 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         DB::table('broadcast_campaigns')
             ->whereIn('public_id', [$invalid->publicId, $valid->publicId])
             ->update(['scheduled_at' => DB::raw('created_at')]);
-        DB::table('administrators')
-            ->where('id', $staleOwner['administrator_id'])
-            ->update([
-                'is_owner' => false,
-                'updated_at' => now('UTC'),
-            ]);
-
         self::assertSame(1, $service->activateDueCampaigns(10));
         self::assertSame(
             TelegramBroadcastCampaignState::Cancelled,
@@ -1312,6 +1313,43 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertNotNull(DB::table('broadcast_campaigns')
             ->where('public_id', $invalid->publicId)
             ->value('cancelled_at'));
+    }
+
+    /**
+     * @return array{user_id:int,administrator_id:int,telegram_account_id:int,telegram_user_id:int}
+     */
+    private function salesContentAdministrator(int $telegramUserId): array
+    {
+        $identity = $this->telegramUser($telegramUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => $identity['user_id'],
+            'status' => 'active',
+            'is_owner' => false,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $roleId = DB::table('roles')
+            ->where('code', 'sales_content')
+            ->where('is_active', true)
+            ->value('id');
+        self::assertIsNumeric($roleId);
+        DB::table('administrator_role_assignments')->insert([
+            'administrator_id' => $administratorId,
+            'role_id' => (int) $roleId,
+            'granted_by_administrator_id' => null,
+            'granted_at' => $now,
+            'revoked_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return [
+            ...$identity,
+            'administrator_id' => $administratorId,
+        ];
     }
 
     /**
