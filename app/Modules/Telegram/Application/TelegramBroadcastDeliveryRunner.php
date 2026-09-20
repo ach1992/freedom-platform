@@ -371,13 +371,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                 ->where('public_id', $claim->campaignPublicId)
                 ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
-                ->first([
-                    'id',
-                    'public_id',
-                    'broadcast_message_version_id',
-                    'requested_by_administrator_id',
-                    'state',
-                ]);
+                ->first(['id', 'state']);
             if ($campaign === null) {
                 throw new RuntimeException('Broadcast campaign disappeared before source provider boundary.');
             }
