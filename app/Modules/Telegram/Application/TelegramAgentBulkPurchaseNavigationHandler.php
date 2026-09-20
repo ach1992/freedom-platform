@@ -716,7 +716,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
      */
     private function selectionState(array $payload): array
     {
-        if (array_keys($payload) !== ['page', 'selected'] || ! is_int($payload['page']) || $payload['page'] < 1 || ! is_array($payload['selected']) || ! array_is_list($payload['selected'])) {
+        if (! $this->hasExactKeys($payload, ['page', 'selected']) || ! is_int($payload['page']) || $payload['page'] < 1 || ! is_array($payload['selected']) || ! array_is_list($payload['selected'])) {
             throw new RuntimeException('Telegram Agent bulk purchase selection state is invalid.');
         }
 
@@ -728,7 +728,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
      */
     private function reviewState(array $payload): array
     {
-        if (array_keys($payload) !== ['page', 'selected', 'batch_key'] || ! is_string($payload['batch_key'])) {
+        if (! $this->hasExactKeys($payload, ['page', 'selected', 'batch_key']) || ! is_string($payload['batch_key'])) {
             throw new RuntimeException('Telegram Agent bulk purchase review state is invalid.');
         }
         [$page, $selected] = $this->selectionState(['page' => $payload['page'], 'selected' => $payload['selected']]);
@@ -744,7 +744,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
     private function submittingState(array $payload): array
     {
         $expected = ['page', 'selected', 'batch_key', 'operation_key', 'mode', 'previous_bulk_order_public_id', 'previous_succeeded', 'previous_failed'];
-        if (array_keys($payload) !== $expected
+        if (! $this->hasExactKeys($payload, $expected)
             || ! is_string($payload['operation_key'])
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['operation_key']) !== 1
             || ! is_string($payload['mode'])
@@ -789,7 +789,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
      */
     private function resultState(array $payload): array
     {
-        if (array_keys($payload) !== ['page', 'selected', 'batch_key', 'operation_key', 'bulk_order_public_id', 'succeeded', 'failed']
+        if (! $this->hasExactKeys($payload, ['page', 'selected', 'batch_key', 'operation_key', 'bulk_order_public_id', 'succeeded', 'failed'])
             || ! is_string($payload['operation_key'])
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['operation_key']) !== 1
             || ! is_string($payload['bulk_order_public_id'])
@@ -837,7 +837,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
     /** @param array<string,mixed> $payload */
     private function settlementIdFromPayload(array $payload): string
     {
-        if (array_keys($payload) !== ['settlement'] || ! is_string($payload['settlement'])) {
+        if (! $this->hasExactKeys($payload, ['settlement']) || ! is_string($payload['settlement'])) {
             throw new RuntimeException('Telegram Agent bulk purchase settlement callback payload is invalid.');
         }
         $id = strtoupper($payload['settlement']);
@@ -849,7 +849,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
     /** @param array<string,mixed> $payload */
     private function pageFromCallbackPayload(array $payload): int
     {
-        if (array_keys($payload) !== ['page'] || ! is_int($payload['page']) || $payload['page'] < 1) {
+        if (! $this->hasExactKeys($payload, ['page']) || ! is_int($payload['page']) || $payload['page'] < 1) {
             throw new RuntimeException('Telegram Agent bulk purchase page callback payload is invalid.');
         }
 
@@ -988,6 +988,19 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
         }
 
         return $value;
+    }
+
+    /**
+     * @param  array<string,mixed>  $payload
+     * @param  list<string>  $expected
+     */
+    private function hasExactKeys(array $payload, array $expected): bool
+    {
+        $actual = array_keys($payload);
+        sort($actual, SORT_STRING);
+        sort($expected, SORT_STRING);
+
+        return $actual === $expected;
     }
 
     private function assertUlid(string $value, string $label): void
