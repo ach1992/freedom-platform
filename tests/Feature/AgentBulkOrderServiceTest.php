@@ -13,6 +13,7 @@ use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\TelegramAgentBulkPurchaseService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
@@ -209,6 +210,68 @@ final class AgentBulkOrderServiceTest extends TestCase
             self::fail('Unsupported Agent report periods must fail closed.');
         } catch (DomainException $exception) {
             self::assertSame('Agent report period is unsupported.', $exception->getMessage());
+        }
+    }
+
+    public function test_telegram_bulk_projection_exposes_only_unmaterialized_settlements_and_reuses_bulk_authority(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('telegram-bulk-projection');
+        $first = $this->agentSettlement('telegram-bulk-projection-a', $agent, $offering['id']);
+        $second = $this->agentSettlement('telegram-bulk-projection-b', $agent, $offering['id']);
+        $service = $this->app->make(TelegramAgentBulkPurchaseService::class);
+
+        $page = $service->pageForSelf($agent, $agent, 1, 6);
+        self::assertSame(2, $page->totalItems);
+        self::assertCount(2, $page->items);
+        self::assertSame(
+            [$second->settlementPublicId, $first->settlementPublicId],
+            array_map(static fn ($candidate): string => $candidate->purchaseSettlementPublicId, $page->items),
+        );
+
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $first->settlementPublicId,
+            $this->purchaseOrderCorrelation('telegram-bulk-existing-order'),
+        );
+        $remaining = $service->pageForSelf($agent, $agent, 1, 6);
+        self::assertSame(1, $remaining->totalItems);
+        self::assertCount(1, $remaining->items);
+        self::assertSame($second->settlementPublicId, $remaining->items[0]->purchaseSettlementPublicId);
+
+        $created = $service->executeForSelf(
+            $agent,
+            $agent,
+            'tg-bulk:'.hash('sha256', 'telegram-bulk-projection'),
+            [$second->settlementPublicId],
+            $this->purchaseOrderCorrelation('telegram-bulk-projection-create'),
+        );
+        self::assertFalse($created->replayed);
+        self::assertSame(1, $created->succeededCount);
+        self::assertSame(0, $created->failedCount);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->where('state', 'succeeded')->count());
+        self::assertSame(2, DB::table('orders')->count());
+        self::assertSame(2, DB::table('purchase_settlements')->count());
+        self::assertSame(0, $service->pageForSelf($agent, $agent, 1, 6)->totalItems);
+
+        $replay = $service->executeForSelf(
+            $agent,
+            $agent,
+            'tg-bulk:'.hash('sha256', 'telegram-bulk-projection'),
+            [$second->settlementPublicId],
+            $this->purchaseOrderCorrelation('telegram-bulk-projection-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($created->bulkOrderPublicId, $replay->bulkOrderPublicId);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(2, DB::table('orders')->count());
+        self::assertSame(2, DB::table('purchase_settlements')->count());
+
+        try {
+            $service->pageForSelf($agent + 1, $agent, 1, 6);
+            self::fail('Telegram Agent bulk candidates must be self-only.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Telegram Agent bulk purchase is self-only.', $exception->getMessage());
         }
     }
 

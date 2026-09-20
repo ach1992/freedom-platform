@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentChangeContext;
 use App\Modules\Promotions\Application\ReferralAttributionService;
+use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
@@ -28,6 +29,9 @@ use App\Modules\Telegram\Application\TelegramAdministratorDirectMediaMessageServ
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageButtonBuilder;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
+use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseCandidate;
+use App\Modules\Telegram\Application\TelegramAgentBulkPurchasePage;
+use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseResult;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
@@ -1249,6 +1253,96 @@ final class TelegramNavigationSourceMessageSender implements TelegramSourceMessa
     }
 }
 
+final class TelegramNavigationAgentBulkPurchase implements TelegramAgentBulkPurchase
+{
+    public int $executeCalls = 0;
+
+    public int $effectCount = 0;
+
+    /** @var array<string,true> */
+    private array $executedBatches = [];
+
+    /** @var list<array{actor:int,subject:int,batch_key:string,settlements:list<string>,correlation_id:string}> */
+    public array $executeArguments = [];
+
+    /** @var list<TelegramAgentBulkPurchaseCandidate> */
+    private array $items;
+
+    public function __construct()
+    {
+        $this->items = [
+            new TelegramAgentBulkPurchaseCandidate('01ARZ3NDEKTSV4RRFFQ69G5FAV', 'agent-lite', 2_500_000, '2026-09-20 10:00:00.000000'),
+            new TelegramAgentBulkPurchaseCandidate('01ARZ3NDEKTSV4RRFFQ69G5FAW', 'agent-plus', 4_000_000, '2026-09-20 10:05:00.000000'),
+        ];
+    }
+
+    public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramAgentBulkPurchasePage
+    {
+        $this->assertSelf($actorUserId, $subjectUserId);
+        if ($page < 1 || $pageSize < 1) {
+            throw new DomainException('Fake Telegram Agent bulk page is invalid.');
+        }
+
+        return new TelegramAgentBulkPurchasePage($this->items, 1, 1, count($this->items));
+    }
+
+    public function candidatesForSelf(int $actorUserId, int $subjectUserId, array $purchaseSettlementPublicIds): array
+    {
+        $this->assertSelf($actorUserId, $subjectUserId);
+        $byId = [];
+        foreach ($this->items as $item) {
+            $byId[$item->purchaseSettlementPublicId] = $item;
+        }
+        $selected = [];
+        foreach ($purchaseSettlementPublicIds as $id) {
+            if (! isset($byId[$id])) {
+                throw new AuthorizationException('Selected Agent bulk purchase is no longer eligible.');
+            }
+            $selected[] = $byId[$id];
+        }
+
+        return $selected;
+    }
+
+    public function executeForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $batchKey,
+        array $purchaseSettlementPublicIds,
+        string $correlationId,
+    ): TelegramAgentBulkPurchaseResult {
+        $this->assertSelf($actorUserId, $subjectUserId);
+        $this->candidatesForSelf($actorUserId, $subjectUserId, $purchaseSettlementPublicIds);
+        $this->executeCalls++;
+        $this->executeArguments[] = [
+            'actor' => $actorUserId,
+            'subject' => $subjectUserId,
+            'batch_key' => $batchKey,
+            'settlements' => array_values($purchaseSettlementPublicIds),
+            'correlation_id' => $correlationId,
+        ];
+        $replayed = isset($this->executedBatches[$batchKey]);
+        if (! $replayed) {
+            $this->executedBatches[$batchKey] = true;
+            $this->effectCount++;
+        }
+
+        return new TelegramAgentBulkPurchaseResult(
+            '01ARZ3NDEKTSV4RRFFQ69G5FAX',
+            count($purchaseSettlementPublicIds),
+            0,
+            $replayed,
+        );
+    }
+
+    private function assertSelf(int $actorUserId, int $subjectUserId): void
+    {
+        if ($actorUserId !== $subjectUserId) {
+            throw new AuthorizationException('Telegram Agent bulk purchase is self-only.');
+        }
+    }
+}
+
 /** @requirement ONB-002 ONB-003 USR-001 BUY-001 BUY-003 AGT-001 CAT-002 CAT-003 CAT-008 ADM-002 ACL-001 ACL-002 ACL-003 USDT-002 IPG-002 ARCH-003 ARCH-004 DAT-002 DAT-003 SEC-002 SEC-003 LOC-001 OPS-003 QUA-001 QUA-004 */
 final class TelegramNavigationEntryTest extends TestCase
 {
@@ -1292,6 +1386,7 @@ final class TelegramNavigationEntryTest extends TestCase
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6903');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7013');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_admin_rate_finalize');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_agent_bulk_finalize');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_queue');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_link');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6105');
@@ -7727,6 +7822,252 @@ SQL);
         self::assertSame('agent_cooperation', (string) $backSession->state);
         self::assertSame((int) $reportSession->version + 1, (int) $backSession->version);
         self::assertStringContainsString('Agent Menu', $this->latestConfidentialPresentation());
+    }
+
+    /** @requirement AGT-004 BUY-003 DAT-002 DAT-003 SEC-002 SEC-003 QUA-001 QUA-004 */
+    public function test_agent_bulk_purchase_navigation_selects_reviews_confirms_and_exact_update_replay_is_safe(): void
+    {
+        $telegramUserId = 9770;
+        $reviewerTelegramUserId = 9771;
+        $bulk = new TelegramNavigationAgentBulkPurchase;
+        $this->app->instance(TelegramAgentBulkPurchase::class, $bulk);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7630, $telegramUserId, 'agent_bulk', 'en', '/start'));
+        $processor->process('123456789', 7630);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $this->accept($this->payload(7640, $reviewerTelegramUserId, 'agent_bulk_reviewer', 'en', '/start'));
+        $processor->process('123456789', 7640);
+        $reviewerUserId = DB::table('telegram_accounts')->where('telegram_user_id', $reviewerTelegramUserId)->value('user_id');
+        self::assertIsNumeric($reviewerUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => (int) $reviewerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $applications = $this->app->make(AgentApplicationService::class);
+        $applications->submit($userId, new AgentChangeContext(
+            'telegram-agent-bulk-submit-7630',
+            'telegram-agent-bulk-submit-correlation-7630',
+            'customer_request',
+            actorUserId: $userId,
+        ));
+        $applicationId = DB::table('agent_applications')->where('customer_id', $userId)->value('id');
+        self::assertIsNumeric($applicationId);
+        $applications->claim((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-bulk-claim-7630',
+            'telegram-agent-bulk-claim-correlation-7630',
+            'review_action',
+            actorAdministratorId: $administratorId,
+        ));
+        $applications->approve((int) $applicationId, 'default', new AgentChangeContext(
+            'telegram-agent-bulk-approved-7630',
+            'telegram-agent-bulk-approved-correlation-7630',
+            'approved',
+            'Approved for Telegram Agent bulk navigation test.',
+            actorAdministratorId: $administratorId,
+        ));
+
+        $this->accept($this->payload(7631, $telegramUserId, 'agent_bulk', 'en', '/menu'));
+        $processor->process('123456789', 7631);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7632, $telegramUserId, 'agent_bulk', 'en', $agentToken));
+        $processor->process('123456789', 7632);
+        self::assertStringContainsString('Agent Menu', $this->latestConfidentialPresentation());
+
+        $bulkToken = $this->callbackToken('navigation.agent.bulk', $accountId);
+        $this->accept($this->callbackPayload(7633, $telegramUserId, 'agent_bulk', 'en', $bulkToken));
+        $processor->process('123456789', 7633);
+        $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('agent_bulk_select', (string) $session->state);
+        self::assertSame('{"page":1,"selected":[]}', (string) $session->payload);
+        self::assertStringContainsString('Bulk Purchase', $this->latestConfidentialPresentation());
+        self::assertSame(2, DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('session_version', (int) $session->version)
+            ->where('action', 'navigation.agent.bulk.toggle')
+            ->where('state', 'pending')
+            ->count());
+
+        $firstId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+        $secondId = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
+        $firstToggle = $this->callbackToken('navigation.agent.bulk.toggle', $accountId, '{"settlement":"'.$firstId.'"}');
+        $this->accept($this->callbackPayload(7634, $telegramUserId, 'agent_bulk', 'en', $firstToggle));
+        $processor->process('123456789', 7634);
+        $secondToggle = $this->callbackToken('navigation.agent.bulk.toggle', $accountId, '{"settlement":"'.$secondId.'"}');
+        $this->accept($this->callbackPayload(7635, $telegramUserId, 'agent_bulk', 'en', $secondToggle));
+        $processor->process('123456789', 7635);
+
+        $reviewToken = $this->callbackToken('navigation.agent.bulk.review', $accountId);
+        $this->accept($this->callbackPayload(7636, $telegramUserId, 'agent_bulk', 'en', $reviewToken));
+        $processor->process('123456789', 7636);
+        $reviewSession = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($reviewSession);
+        self::assertSame('agent_bulk_review', (string) $reviewSession->state);
+        self::assertStringContainsString('Review Bulk Purchase', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('Selected: 2', $this->latestConfidentialPresentation());
+
+        $confirmToken = $this->callbackToken('navigation.agent.bulk.confirm', $accountId);
+        $this->accept($this->callbackPayload(7637, $telegramUserId, 'agent_bulk', 'en', $confirmToken));
+        $processor->process('123456789', 7637);
+        self::assertSame(1, $bulk->executeCalls);
+        self::assertSame(1, $bulk->effectCount);
+        self::assertCount(1, $bulk->executeArguments);
+        self::assertSame([$firstId, $secondId], $bulk->executeArguments[0]['settlements']);
+        self::assertMatchesRegularExpression('/\\Atg-bulk:[0-9a-f]{64}\\z/', $bulk->executeArguments[0]['batch_key']);
+        self::assertMatchesRegularExpression('/\\Atg-bulk:[0-9a-f]{48}\\z/', $bulk->executeArguments[0]['correlation_id']);
+        $resultSession = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($resultSession);
+        self::assertSame('agent_bulk_result', (string) $resultSession->state);
+        self::assertStringContainsString('Bulk Purchase Result', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('Succeeded: 2', $this->latestConfidentialPresentation());
+
+        $deliveryCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
+        $callbackCount = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->count();
+        $processor->process('123456789', 7637);
+        self::assertSame(1, $bulk->executeCalls);
+        self::assertSame(1, $bulk->effectCount);
+        self::assertSame($deliveryCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
+        self::assertSame($callbackCount, DB::table('telegram_interaction_callbacks')->where('telegram_interaction_session_id', (int) $session->id)->count());
+
+        $doneToken = $this->callbackToken('navigation.agent.bulk.cancel', $accountId);
+        $this->accept($this->callbackPayload(7638, $telegramUserId, 'agent_bulk', 'en', $doneToken));
+        $processor->process('123456789', 7638);
+        self::assertSame('agent_cooperation', (string) DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('state'));
+        self::assertStringContainsString('Agent Menu', $this->latestConfidentialPresentation());
+    }
+
+    /** @requirement AGT-004 BUY-003 DAT-002 DAT-003 SEC-002 SEC-003 QUA-001 QUA-004 */
+    public function test_agent_bulk_purchase_recovers_submitting_fence_after_result_finalize_failure_without_second_effect(): void
+    {
+        $telegramUserId = 9780;
+        $reviewerTelegramUserId = 9781;
+        $bulk = new TelegramNavigationAgentBulkPurchase;
+        $this->app->instance(TelegramAgentBulkPurchase::class, $bulk);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7650, $telegramUserId, 'agent_bulk_recovery', 'en', '/start'));
+        $processor->process('123456789', 7650);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $accountId = (int) $account->id;
+        $userId = (int) $account->user_id;
+
+        $this->accept($this->payload(7660, $reviewerTelegramUserId, 'agent_bulk_recovery_reviewer', 'en', '/start'));
+        $processor->process('123456789', 7660);
+        $reviewerUserId = DB::table('telegram_accounts')->where('telegram_user_id', $reviewerTelegramUserId)->value('user_id');
+        self::assertIsNumeric($reviewerUserId);
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => (int) $reviewerUserId,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $applications = $this->app->make(AgentApplicationService::class);
+        $applications->submit($userId, new AgentChangeContext(
+            'telegram-agent-bulk-recovery-submit-7650',
+            'telegram-agent-bulk-recovery-submit-correlation-7650',
+            'customer_request',
+            actorUserId: $userId,
+        ));
+        $applicationId = DB::table('agent_applications')->where('customer_id', $userId)->value('id');
+        self::assertIsNumeric($applicationId);
+        $applications->claim((int) $applicationId, new AgentChangeContext(
+            'telegram-agent-bulk-recovery-claim-7650',
+            'telegram-agent-bulk-recovery-claim-correlation-7650',
+            'review_action',
+            actorAdministratorId: $administratorId,
+        ));
+        $applications->approve((int) $applicationId, 'default', new AgentChangeContext(
+            'telegram-agent-bulk-recovery-approved-7650',
+            'telegram-agent-bulk-recovery-approved-correlation-7650',
+            'approved',
+            'Approved for Telegram Agent bulk recovery test.',
+            actorAdministratorId: $administratorId,
+        ));
+
+        $this->accept($this->payload(7651, $telegramUserId, 'agent_bulk_recovery', 'en', '/menu'));
+        $processor->process('123456789', 7651);
+        $agentToken = $this->callbackToken('navigation.agent', $accountId);
+        $this->accept($this->callbackPayload(7652, $telegramUserId, 'agent_bulk_recovery', 'en', $agentToken));
+        $processor->process('123456789', 7652);
+        $bulkToken = $this->callbackToken('navigation.agent.bulk', $accountId);
+        $this->accept($this->callbackPayload(7653, $telegramUserId, 'agent_bulk_recovery', 'en', $bulkToken));
+        $processor->process('123456789', 7653);
+        $settlementId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
+        $toggle = $this->callbackToken('navigation.agent.bulk.toggle', $accountId, '{"settlement":"'.$settlementId.'"}');
+        $this->accept($this->callbackPayload(7654, $telegramUserId, 'agent_bulk_recovery', 'en', $toggle));
+        $processor->process('123456789', 7654);
+        $review = $this->callbackToken('navigation.agent.bulk.review', $accountId);
+        $this->accept($this->callbackPayload(7655, $telegramUserId, 'agent_bulk_recovery', 'en', $review));
+        $processor->process('123456789', 7655);
+        $confirm = $this->callbackToken('navigation.agent.bulk.confirm', $accountId);
+        $this->accept($this->callbackPayload(7656, $telegramUserId, 'agent_bulk_recovery', 'en', $confirm));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_agent_bulk_finalize
+BEFORE UPDATE ON telegram_interaction_sessions
+FOR EACH ROW
+BEGIN
+    IF OLD.state = 'agent_bulk_submitting' AND NEW.state = 'agent_bulk_result' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-agent-bulk-result-finalize-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $processor->process('123456789', 7656);
+                self::fail('The simulated Agent bulk result-finalize failure must keep the update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_agent_bulk_finalize');
+        }
+
+        self::assertSame(1, $bulk->executeCalls);
+        self::assertSame(1, $bulk->effectCount);
+        $submitting = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['state', 'version', 'payload']);
+        self::assertNotNull($submitting);
+        self::assertSame('agent_bulk_submitting', (string) $submitting->state);
+        self::assertStringContainsString('"mode":"confirm"', (string) $submitting->payload);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 7656,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+
+        $processor->process('123456789', 7656);
+
+        self::assertSame(2, $bulk->executeCalls);
+        self::assertSame(1, $bulk->effectCount);
+        self::assertSame($bulk->executeArguments[0]['batch_key'], $bulk->executeArguments[1]['batch_key']);
+        self::assertSame($bulk->executeArguments[0]['settlements'], $bulk->executeArguments[1]['settlements']);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'bot_id' => '123456789',
+            'update_id' => 7656,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        self::assertSame('agent_bulk_result', (string) DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('state'));
+        self::assertStringContainsString('Replay/recovery: Yes', $this->latestConfidentialPresentation());
     }
 
     public function test_agent_navigation_recovers_through_back_entry_command_and_cancel_without_agent_mutation(): void

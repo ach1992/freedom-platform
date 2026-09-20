@@ -540,6 +540,15 @@ final readonly class TelegramAgentNavigationHandler
         ));
     }
 
+    public function renderCurrentMenu(TelegramInteractionAction $action, int $sessionVersion): void
+    {
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        if (! $this->canOpen($summary)) {
+            throw new AuthorizationException('Telegram Agent journey access denied.');
+        }
+        $this->renderStatus($action, $sessionVersion, $summary, false);
+    }
+
     private function renderStatus(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -575,6 +584,19 @@ final readonly class TelegramAgentNavigationHandler
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram_agent.purchase.single_button', $locale),
                 $purchase->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+
+            $bulk = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAgentBulkPurchaseNavigationHandler::ACTION_OPEN,
+                [],
+                'tg-agent-bulk-button:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram_agent.bulk.button', $locale),
+                $bulk->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }
