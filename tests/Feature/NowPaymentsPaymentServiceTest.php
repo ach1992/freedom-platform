@@ -158,6 +158,12 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->clock = new NowPaymentsTestClock(new DateTimeImmutable('2026-08-14T06:30:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('SET timestamp = '.$this->clock->value->getTimestamp());
+            $this->beforeApplicationDestroyed(static function (): void {
+                DB::statement('SET timestamp = DEFAULT');
+            });
+        }
         $this->transport = new FakeNowPaymentsTransport;
 
         config()->set('app.url', 'https://payments.example.test');
