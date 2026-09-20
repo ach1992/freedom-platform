@@ -322,7 +322,7 @@ final readonly class TelegramBroadcastDeliveryRunner
             return;
         }
 
-        $entered = $this->enterSourceProviderBoundary($claim);
+        $entered = $this->enterSourceProviderBoundary($claim, $context);
         if (! $entered) {
             return;
         }
@@ -364,14 +364,17 @@ final readonly class TelegramBroadcastDeliveryRunner
         $this->finalizeSourceResult($claim, $result);
     }
 
-    private function enterSourceProviderBoundary(TelegramBroadcastRecipientClaim $claim): bool
-    {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($claim): bool {
+    /** @param array<string,mixed> $context */
+    private function enterSourceProviderBoundary(
+        TelegramBroadcastRecipientClaim $claim,
+        array $context,
+    ): bool {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($claim, $context): bool {
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
                 ->where('bot_id', $this->runtime->botId())
                 ->lockForUpdate()
-                ->first(['id', 'state']);
+                ->first(['id', 'state', 'state_version']);
             if ($campaign === null) {
                 throw new RuntimeException('Broadcast campaign disappeared before source provider boundary.');
             }
@@ -417,6 +420,37 @@ final readonly class TelegramBroadcastDeliveryRunner
                 throw new RuntimeException('Broadcast source recipient message is not prepared.');
             }
 
+            try {
+                $this->administrators->authorize(
+                    $context['creator_administrator_id'],
+                    TelegramBroadcastCampaignService::PERMISSION,
+                );
+            } catch (AuthorizationException) {
+                $this->pauseLockedSourceClaim(
+                    $connection,
+                    $campaign,
+                    $recipient,
+                    $message,
+                    $claim,
+                    'broadcast_creator_authorization_lost',
+                );
+
+                return false;
+            }
+
+            if (! $this->sourceStillBoundToCreator($context)) {
+                $this->pauseLockedSourceClaim(
+                    $connection,
+                    $campaign,
+                    $recipient,
+                    $message,
+                    $claim,
+                    'broadcast_source_binding_lost',
+                );
+
+                return false;
+            }
+
             $now = $this->timestamp();
             $updated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $message->id)
@@ -434,6 +468,53 @@ final readonly class TelegramBroadcastDeliveryRunner
 
             return true;
         }, 3);
+    }
+
+    /**
+     * @param object{id:int|string,state:string,state_version:int|string} $campaign
+     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
+     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string} $message
+     */
+    private function pauseLockedSourceClaim(
+        Connection $connection,
+        object $campaign,
+        object $recipient,
+        object $message,
+        TelegramBroadcastRecipientClaim $claim,
+        string $resultCode,
+    ): void {
+        if ((string) $campaign->state === TelegramBroadcastCampaignState::Active->value) {
+            $version = $this->positiveInt(
+                $campaign->state_version,
+                'Broadcast campaign state version',
+            );
+            $updated = $connection->table('broadcast_campaigns')
+                ->where('id', (int) $campaign->id)
+                ->where('state', TelegramBroadcastCampaignState::Active->value)
+                ->where('state_version', $version)
+                ->update([
+                    'state' => TelegramBroadcastCampaignState::Paused->value,
+                    'state_version' => $version + 1,
+                    'updated_at' => $this->timestamp(),
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Broadcast safety pause transition was lost.');
+            }
+        }
+
+        if (! is_string($recipient->claim_token_hash)
+            || ! hash_equals($recipient->claim_token_hash, $claim->claimTokenHash())
+        ) {
+            throw new DomainException('Broadcast source recipient claim is stale during safety pause.');
+        }
+
+        $this->releaseLockedClaim(
+            $connection,
+            $recipient,
+            $message,
+            false,
+            $resultCode,
+        );
     }
 
     private function finalizeSourceResult(
