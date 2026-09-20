@@ -11,6 +11,7 @@ use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryEffectGuard;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
@@ -60,15 +61,10 @@ use App\Modules\Telegram\Application\TelegramReferralDeepLink;
 use App\Modules\Telegram\Application\TelegramRequiredChannelService;
 use App\Modules\Telegram\Application\TelegramSourceMessageInteractionGateway;
 use App\Modules\Telegram\Application\TelegramSourceMessageReferenceDeliveryOutboxHandler;
-use App\Modules\Telegram\Application\TelegramSupportAttachmentNavigationHandler;
-use App\Modules\Telegram\Application\TelegramSupportCategoryNavigationHandler;
 use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
-use App\Modules\Telegram\Application\TelegramSupportRatingNavigationHandler;
-use App\Modules\Telegram\Application\TelegramSupportRoutingNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
-use App\Modules\Telegram\Application\TelegramZarinpalNavigationHandler;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
@@ -166,24 +162,10 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(
-            TelegramNavigationCompositeHandler::class,
-            fn (Application $application): TelegramNavigationCompositeHandler => new TelegramNavigationCompositeHandler(
-                $application->make(TelegramNavigationHandler::class),
-                $application->make(TelegramAdminCustomerNavigationHandler::class),
-                fn (): TelegramBroadcastNavigationHandler => $application->make(TelegramBroadcastNavigationHandler::class),
-                $application->make(TelegramAgentNavigationHandler::class),
-                $application->make(TelegramTrialNavigationHandler::class),
-                $application->make(TelegramSupportNavigationHandler::class),
-                $application->make(TelegramSupportRatingNavigationHandler::class),
-                $application->make(TelegramSupportCategoryNavigationHandler::class),
-                $application->make(TelegramSupportRoutingNavigationHandler::class),
-                $application->make(TelegramSupportAttachmentNavigationHandler::class),
-                $application->make(TelegramSupportMembershipFreshnessGuard::class),
-                $application->make(TelegramGiftCardNavigationHandler::class),
-                $application->make(TelegramUsdtNavigationHandler::class),
-                $application->make(TelegramZarinpalNavigationHandler::class),
-            ),
+            TelegramBroadcastNavigationResolver::class,
+            ContainerTelegramBroadcastNavigationResolver::class,
         );
+        $this->app->singleton(TelegramNavigationCompositeHandler::class);
         $this->app->singleton(TelegramBotEntryMembershipGateHandler::class);
         $this->app->tag([
             TelegramNavigationCompositeHandler::class,
