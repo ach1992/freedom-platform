@@ -20,14 +20,16 @@ use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
-use RuntimeException;
 use Tests\TestCase;
 
 final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurchaseNowPaymentsPayment
 {
     public int $prepareCalls = 0;
+
     public int $prepareEffects = 0;
+
     public int $refreshCalls = 0;
+
     public int $refreshEffects = 0;
 
     /** @var array<string,TelegramCustomerPurchaseNowPaymentsReceipt> */

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
