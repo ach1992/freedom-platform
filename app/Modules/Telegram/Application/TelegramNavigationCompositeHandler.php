@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 
 /**
@@ -15,6 +16,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
     public function __construct(
         private TelegramNavigationHandler $navigation,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
+        private TelegramBroadcastNavigationResolver $broadcastResolver,
         private TelegramAgentNavigationHandler $agent,
         private TelegramTrialNavigationHandler $trial,
         private TelegramSupportNavigationHandler $support,
@@ -35,6 +37,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 
     public function handle(TelegramInteractionAction $action): void
     {
+        if (TelegramBroadcastNavigationHandler::supportsAction($action)) {
+            $this->broadcastResolver->resolve()->handle($action);
+
+            return;
+        }
         if ($this->adminCustomers->supports($action)) {
             $this->adminCustomers->handle($action);
 

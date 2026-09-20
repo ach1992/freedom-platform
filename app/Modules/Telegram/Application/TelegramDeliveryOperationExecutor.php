@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramDeliveryEffectGuard;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
@@ -38,6 +39,7 @@ final readonly class TelegramDeliveryOperationExecutor
         private ?TelegramPrivateMediaMessageSender $privateMediaSender = null,
         private ?TelegramAdministratorDirectMessageService $directMessages = null,
         private ?TelegramSourceMessageSender $sourceMessageSender = null,
+        private ?TelegramDeliveryEffectGuard $effectGuard = null,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -227,6 +229,20 @@ final readonly class TelegramDeliveryOperationExecutor
                 $fingerprintCandidates,
             )) {
                 throw new DomainException('Telegram delivery request fingerprint no longer matches its durable presentation.');
+            }
+
+            $rejectionCode = $this->effectGuard?->rejectionCode(
+                $connection,
+                (string) $row->public_id,
+                (string) $row->correlation_id,
+                $request->action,
+                $request->recipientChatId,
+                $request->targetMessageId,
+            );
+            if ($rejectionCode !== null) {
+                throw new DomainException(
+                    'Telegram delivery effect rejected before provider boundary: '.$rejectionCode,
+                );
             }
 
             return [

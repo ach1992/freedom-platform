@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
@@ -161,6 +162,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
         private TelegramAdministratorCustomerTargetDiscovery $administratorCustomerTargets,
+        private AdministratorUserPermissionAuthorizer $administratorUsers,
         private TelegramSupportContactConfiguration $supportContact,
         private DatabaseManager $database,
     ) {}
@@ -825,7 +827,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     public function showAdminControl(TelegramInteractionAction $action): void
     {
         if (! $this->managedUsdtRateSettings->availableFor($action->userId)
-            && ! $this->administratorCustomerTargets->availableFor($action->userId)) {
+            && ! $this->administratorCustomerTargets->availableFor($action->userId)
+            && ! $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {
             $this->returnHome($action);
 
             return;
@@ -1050,6 +1053,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.usdt_rate', $locale),
                 $rate->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
+        if ($this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {
+            $broadcast = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramBroadcastNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-broadcast:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.broadcast.menu', $locale),
+                $broadcast->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }
@@ -3206,7 +3224,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
         if ($this->managedUsdtRateSettings->availableFor($action->userId)
-            || $this->administratorCustomerTargets->availableFor($action->userId)) {
+            || $this->administratorCustomerTargets->availableFor($action->userId)
+            || $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {
             $admin = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,

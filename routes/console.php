@@ -103,3 +103,17 @@ Schedule::command('services:notifications', [
     // duplicate threshold scans and is intentionally bounded after abnormal process termination.
     ->withoutOverlapping(30)
     ->onOneServer();
+
+Schedule::command('telegram:process-broadcasts', [
+    '--activation-limit' => 10,
+    '--recipient-limit' => 10,
+    '--lifecycle-limit' => 10,
+    '--json' => true,
+])
+    ->name('telegram.process-broadcasts')
+    ->everyMinute()
+    // Keep broadcast provider work small and isolated so it cannot monopolize the scheduler
+    // ahead of payment/provisioning maintenance or the common Outbox dispatcher.
+    ->withoutOverlapping(10)
+    ->onOneServer()
+    ->runInBackground();

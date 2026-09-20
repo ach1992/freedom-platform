@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Telegram\Domain\TelegramInteractionDispatchStatus;
 use App\Shared\Application\RestrictedValue;
@@ -38,6 +39,7 @@ final readonly class TelegramInteractionDispatcher
         private TelegramNavigationEntryGateway $navigationEntry,
         private TelegramPrivateMediaInteractionGateway $privateMediaGateway,
         private TelegramSourceMessageInteractionGateway $sourceMessageGateway,
+        private TelegramBroadcastSourceClassifier $broadcastSources,
     ) {}
 
     /** @param array<string, mixed> $update */
@@ -81,6 +83,9 @@ final readonly class TelegramInteractionDispatcher
             if (! is_int($sourceMessageId) || $sourceMessageId < 1) {
                 return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
             }
+            $sourceKind = $this->sourceMessageGateway->awaitingBroadcastSource((int) $account->id)
+                ? $this->broadcastSources->classify($message)
+                : null;
 
             return $this->dispatchSourceMessage(
                 $botId,
@@ -88,6 +93,7 @@ final readonly class TelegramInteractionDispatcher
                 $sourceMessageId,
                 (int) $account->id,
                 (int) $account->telegram_user_id,
+                $sourceKind,
             );
         }
 
@@ -224,6 +230,7 @@ final readonly class TelegramInteractionDispatcher
         int $sourceMessageId,
         int $telegramAccountId,
         int $telegramUserId,
+        ?TelegramBroadcastSourceKind $sourceKind,
     ): TelegramInteractionDispatchResult {
         $requestKey = $this->updateRequestKey($botId, $updateId, 'message');
         $binding = $this->updateBindings->bind(
@@ -254,6 +261,7 @@ final readonly class TelegramInteractionDispatcher
             $binding->sessionPayload,
             $telegramUserId,
             $sourceMessageId,
+            $sourceKind,
             $binding->replayed,
         ));
 

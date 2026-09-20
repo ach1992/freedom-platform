@@ -101,6 +101,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
         self::assertSame([
             'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
+            'app/Modules/Telegram/Application/TelegramBroadcastNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAgentNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
             'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
@@ -123,6 +124,14 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
 
         self::assertContains($source, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
         self::assertNotContains($source, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+    }
+
+    public function test_broadcast_navigation_has_confidential_but_not_generic_delivery_provenance(): void
+    {
+        $broadcastSource = 'app/Modules/Telegram/Application/TelegramBroadcastNavigationHandler.php';
+
+        self::assertContains($broadcastSource, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+        self::assertNotContains($broadcastSource, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
     }
 
     public function test_agent_navigation_has_confidential_but_not_generic_delivery_provenance(): void

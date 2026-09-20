@@ -23,6 +23,7 @@ final class DatabaseSeeder extends Seeder
             AgentPricingAccessFoundationSeeder::class,
             TelegramMembershipAccessFoundationSeeder::class,
             TelegramDirectMessagingAccessFoundationSeeder::class,
+            BroadcastAccessFoundationSeeder::class,
             LocalizationAccessFoundationSeeder::class,
             SupportTicketAccessFoundationSeeder::class,
             SupportTicketCategorySeeder::class,
