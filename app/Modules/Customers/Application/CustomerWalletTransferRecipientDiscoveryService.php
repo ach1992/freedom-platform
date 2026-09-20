@@ -184,6 +184,11 @@ final readonly class CustomerWalletTransferRecipientDiscoveryService
         if (! is_string($value) || preg_match('/\A[1-9][0-9]{0,19}\z/', $value) !== 1) {
             throw new RuntimeException($label.' is invalid.');
         }
+        $maximum = (string) PHP_INT_MAX;
+        if (strlen($value) > strlen($maximum)
+            || (strlen($value) === strlen($maximum) && strcmp($value, $maximum) > 0)) {
+            throw new RuntimeException($label.' exceeds the supported platform range.');
+        }
 
         return $value;
     }
