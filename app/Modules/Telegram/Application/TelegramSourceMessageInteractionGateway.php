@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
+
 final readonly class TelegramSourceMessageInteractionGateway
 {
     private const ADMIN_DIRECT_MESSAGE_SOURCE_STATE = 'admin_customer_message_source';
@@ -13,7 +15,7 @@ final readonly class TelegramSourceMessageInteractionGateway
     public function __construct(
         private TelegramInteractionSessionService $sessions,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
-        private TelegramBroadcastNavigationHandler $broadcast,
+        private TelegramBroadcastNavigationResolver $broadcastResolver,
     ) {}
 
     public function awaitingSource(int $telegramAccountId): bool
@@ -42,7 +44,7 @@ final readonly class TelegramSourceMessageInteractionGateway
             return $this->adminCustomers->handleSourceMessage($interaction);
         }
         if ($interaction->sessionState === self::BROADCAST_SOURCE_STATE) {
-            return $this->broadcast->handleSourceMessage($interaction);
+            return $this->broadcastResolver->resolve()->handleSourceMessage($interaction);
         }
 
         return false;
