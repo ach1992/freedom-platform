@@ -471,9 +471,9 @@ final readonly class TelegramBroadcastDeliveryRunner
     }
 
     /**
-     * @param object{id:int|string,state:string,state_version:int|string} $campaign
-     * @param object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient
-     * @param object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string} $message
+     * @param  object{id:int|string,state:string,state_version:int|string}  $campaign
+     * @param  object{id:int|string,delivery_state:string,claim_token_hash:?string}  $recipient
+     * @param  object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string}  $message
      */
     private function pauseLockedSourceClaim(
         Connection $connection,
