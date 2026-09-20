@@ -119,7 +119,7 @@ final class TelegramBroadcastNavigationTest extends TestCase
 
         self::assertSame('admin_broadcast_review', $this->sessionState((int) $account->id));
         self::assertSame(1, (int) DB::table('broadcast_audiences')->value('estimated_recipient_count'));
-        self::assertStringContainsString('مرور نهایی کمپین', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('پیش‌نمایش آماده است.', $this->latestConfidentialPresentation());
         self::assertStringContainsString($campaignText, $this->latestConfidentialPresentation());
         self::assertSame(0, DB::table('broadcast_recipients')->count());
         self::assertSame(0, DB::table('broadcast_campaign_tests')->count());
