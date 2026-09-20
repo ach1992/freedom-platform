@@ -54,6 +54,7 @@ use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
+use App\Modules\Telegram\Application\TelegramNowPaymentsNavigationHandler;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
 use App\Modules\Telegram\Application\TelegramPrivateMediaReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
@@ -163,6 +164,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramSupportNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
+        $this->app->singleton(TelegramNowPaymentsNavigationHandler::class);
         $this->app->singleton(
             TelegramBroadcastNavigationResolver::class,
             ContainerTelegramBroadcastNavigationResolver::class,
