@@ -198,8 +198,8 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             || (int) $row->telegram_user_id !== $request->recipientChatId
             || $request->action !== TelegramDeliveryAction::Send
             || $request->targetMessageId !== null
-            || ! hash_equals($this->runtime->botId(), $row->campaign_bot_id)
-            || ! hash_equals($row->campaign_bot_id, $row->account_bot_id)
+            || ! hash_equals($this->runtime->botId(), (string) $row->campaign_bot_id)
+            || ! hash_equals((string) $row->campaign_bot_id, (string) $row->account_bot_id)
             || $row->owner_status !== 'active'
             || ! (bool) $row->owner_is_owner
         ) {
@@ -273,11 +273,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             return self::STALE_BEFORE_EFFECT;
         }
 
-        $requestMatches = match ($row->action) {
-            'edit', 'buttons' => $request->action === TelegramDeliveryAction::Edit,
-            'delete' => $request->action === TelegramDeliveryAction::Delete,
-            default => false,
-        };
+        $requestMatches = in_array($row->action, ['edit', 'buttons'], true)
+            ? $request->action === TelegramDeliveryAction::Edit
+            : $request->action === TelegramDeliveryAction::Delete;
         if (! $requestMatches) {
             return self::STALE_BEFORE_EFFECT;
         }
