@@ -8,6 +8,7 @@ use App\Modules\Agents\Application\AgentPricingService;
 use App\Modules\Agents\Domain\AgentPricingAction;
 use App\Modules\Orders\Application\AgentBulkOrderService;
 use App\Modules\Orders\Application\AgentPurchaseCountService;
+use App\Modules\Orders\Application\AgentReportService;
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
@@ -23,6 +24,7 @@ use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseSettlementReceipt;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
 use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -37,7 +39,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
-/** @requirement AGT-003 AGT-004 BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+/** @requirement AGT-003 AGT-004 AGT-006 BUY-001 BUY-002 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
 final class AgentBulkOrderServiceTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
@@ -124,6 +126,89 @@ final class AgentBulkOrderServiceTest extends TestCase
             self::fail('Customer accounts must not read Agent purchase counts.');
         } catch (AuthorizationException $exception) {
             self::assertSame('Agent purchase count requires a current Agent account.', $exception->getMessage());
+        }
+    }
+
+    public function test_agent_report_uses_authoritative_agent_purchase_and_materialized_order_metrics_with_date_filters(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('report');
+        $reports = $this->app->make(AgentReportService::class);
+        $orders = $this->app->make(PurchaseOrderService::class);
+
+        $empty = $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_ALL);
+        self::assertSame(0, $empty->purchaseCount);
+        self::assertSame(0, $empty->grossSpendingIrr);
+        self::assertSame(0, $empty->salesCount);
+        self::assertSame(0, $empty->grossSalesIrr);
+        self::assertSame(0, $empty->purchasedServiceCount);
+        self::assertSame([], $empty->recentPurchasedOfferingCodes);
+
+        $first = $this->agentSettlement('report-first', $agent, $offering['id']);
+        $beforeMaterialization = $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_ALL);
+        self::assertSame(1, $beforeMaterialization->purchaseCount);
+        self::assertSame($first->amount->amount(), $beforeMaterialization->grossSpendingIrr);
+        self::assertSame(0, $beforeMaterialization->salesCount);
+        self::assertSame(0, $beforeMaterialization->grossSalesIrr);
+        self::assertSame(0, $beforeMaterialization->purchasedServiceCount);
+
+        $orders->createFromSettlement(
+            $first->settlementPublicId,
+            $this->purchaseOrderCorrelation('report-first-order'),
+        );
+        $firstReport = $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_ALL);
+        self::assertSame(1, $firstReport->salesCount);
+        self::assertSame($first->amount->amount(), $firstReport->grossSalesIrr);
+        self::assertSame(1, $firstReport->purchasedServiceCount);
+        self::assertSame([$offering['code']], $firstReport->recentPurchasedOfferingCodes);
+
+        $this->purchaseOrderClock->value = $this->purchaseOrderClock->value->modify('+10 days');
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('SET timestamp = '.$this->purchaseOrderClock->value->getTimestamp());
+        }
+        $second = $this->agentSettlement('report-second', $agent, $offering['id']);
+        $orders->createFromSettlement(
+            $second->settlementPublicId,
+            $this->purchaseOrderCorrelation('report-second-order'),
+        );
+
+        $today = $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_TODAY);
+        self::assertSame(1, $today->purchaseCount);
+        self::assertSame($second->amount->amount(), $today->grossSpendingIrr);
+        self::assertSame(1, $today->salesCount);
+        self::assertSame($second->amount->amount(), $today->grossSalesIrr);
+        self::assertSame(1, $today->purchasedServiceCount);
+
+        $sevenDays = $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_SEVEN_DAYS);
+        self::assertSame(1, $sevenDays->purchaseCount);
+        self::assertSame($second->amount->amount(), $sevenDays->grossSpendingIrr);
+
+        $thirtyDays = $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_THIRTY_DAYS);
+        self::assertSame(2, $thirtyDays->purchaseCount);
+        self::assertSame($first->amount->amount() + $second->amount->amount(), $thirtyDays->grossSpendingIrr);
+        self::assertSame(2, $thirtyDays->salesCount);
+        self::assertSame($first->amount->amount() + $second->amount->amount(), $thirtyDays->grossSalesIrr);
+        self::assertSame(2, $thirtyDays->purchasedServiceCount);
+        self::assertSame([$offering['code'], $offering['code']], $thirtyDays->recentPurchasedOfferingCodes);
+
+        DB::table('agent_profiles')->where('user_id', $agent)->update([
+            'status' => 'suspended',
+            'suspended_at' => $this->purchaseOrderTimestamp(),
+            'updated_at' => $this->purchaseOrderTimestamp(),
+        ]);
+        self::assertSame(2, $reports->forSelf($agent, $agent, TelegramAgentReport::PERIOD_ALL)->purchaseCount);
+
+        try {
+            $reports->forSelf($agent + 1, $agent, TelegramAgentReport::PERIOD_ALL);
+            self::fail('Cross-user Agent report reads must fail closed.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Agent report is self-only.', $exception->getMessage());
+        }
+
+        try {
+            $reports->forSelf($agent, $agent, 'quarter');
+            self::fail('Unsupported Agent report periods must fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Agent report period is unsupported.', $exception->getMessage());
         }
     }
 

@@ -21,6 +21,16 @@ return [
     'services' => [
         'button' => 'Purchased services',
     ],
+    'report' => [
+        'button' => 'Agent report',
+        'summary' => "Agent Report\n\nPeriod: :period\nPurchases: :purchase_count\nGross paid: :spending_irr IRR\nMaterialized sales/orders: :sales_count\nGross materialized order value: :sales_irr IRR\nPurchased services: :service_count\nRecent offerings: :recent",
+        'period' => [
+            'today' => 'Today',
+            '7d' => 'Last 7 days',
+            '30d' => 'Last 30 days',
+            'all' => 'All time',
+        ],
+    ],
     'states' => [
         'application' => [
             'submitted' => 'Submitted',

@@ -21,6 +21,16 @@ return [
     'services' => [
         'button' => 'سرویس‌های خریداری‌شده',
     ],
+    'report' => [
+        'button' => 'گزارش نماینده',
+        'summary' => "گزارش نماینده\n\nبازه: :period\nتعداد خرید: :purchase_count\nمبلغ ناخالص پرداخت‌شده: :spending_irr ریال\nفروش/سفارش ثبت‌شده: :sales_count\nارزش ناخالص سفارش‌های ثبت‌شده: :sales_irr ریال\nسرویس‌های خریداری‌شده: :service_count\nآخرین پلن‌ها: :recent",
+        'period' => [
+            'today' => 'امروز',
+            '7d' => '۷ روز اخیر',
+            '30d' => '۳۰ روز اخیر',
+            'all' => 'همه زمان‌ها',
+        ],
+    ],
     'states' => [
         'application' => [
             'submitted' => 'ثبت‌شده',
