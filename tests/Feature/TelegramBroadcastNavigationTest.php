@@ -10,6 +10,7 @@ use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /** @requirement COM-002 COM-003 ADM-001 ACL-001 ACL-002 DAT-002 DAT-003 SEC-002 SEC-003 LOC-001 OPS-003 QUA-001 QUA-004 */
@@ -123,6 +124,114 @@ final class TelegramBroadcastNavigationTest extends TestCase
         self::assertStringContainsString($campaignText, $this->latestConfidentialPresentation());
         self::assertSame(0, DB::table('broadcast_recipients')->count());
         self::assertSame(0, DB::table('broadcast_campaign_tests')->count());
+    }
+
+    /**
+     * @param  array<string,mixed>  $content
+     */
+    #[DataProvider('supportedBroadcastSourceUpdateProvider')]
+    public function test_each_supported_broadcast_source_kind_is_captured_from_canonical_update_shape(
+        string $sourceKind,
+        array $content,
+    ): void {
+        $telegramUserId = 920301;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $accountId = $this->openCopySourceWait(
+            $processor,
+            9300,
+            $telegramUserId,
+            'broadcast_sources',
+            $sourceKind,
+        );
+
+        $this->accept($this->sourcePayload(9307, $telegramUserId, 'broadcast_sources', 'fa', $content));
+        $processor->process('123456789', 9307);
+
+        self::assertSame('admin_broadcast_audience', $this->sessionState($accountId));
+        self::assertSame(1, DB::table('broadcast_campaigns')->count());
+        $message = DB::table('broadcast_message_versions')->first([
+            'source_kind',
+            'source_chat_id',
+            'source_message_id',
+        ]);
+        self::assertNotNull($message);
+        self::assertSame($sourceKind, $message->source_kind);
+        self::assertSame($telegramUserId, (int) $message->source_chat_id);
+        self::assertSame(9307, (int) $message->source_message_id);
+    }
+
+    /** @return iterable<string,array{string,array<string,mixed>}> */
+    public static function supportedBroadcastSourceUpdateProvider(): iterable
+    {
+        yield 'text' => ['text', ['text' => 'source text']];
+        yield 'photo' => ['photo', ['photo' => [self::sourcePhoto('photo')]]];
+        yield 'video' => ['video', ['video' => self::sourceMedia('video', dimensions: true, duration: true)]];
+        yield 'animation compatibility pair' => [
+            'animation',
+            [
+                'animation' => self::sourceMedia('animation', dimensions: true, duration: true),
+                'document' => self::sourceMedia('animation-document'),
+            ],
+        ];
+        yield 'audio' => ['audio', ['audio' => self::sourceMedia('audio', duration: true)]];
+        yield 'document' => ['document', ['document' => self::sourceMedia('document')]];
+    }
+
+    /**
+     * @param  array<string,mixed>  $content
+     */
+    #[DataProvider('invalidBroadcastSourceUpdateProvider')]
+    public function test_invalid_broadcast_source_shapes_remain_in_source_wait_without_creating_campaign(
+        string $selectedKind,
+        array $content,
+    ): void {
+        $telegramUserId = 920302;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $accountId = $this->openCopySourceWait(
+            $processor,
+            9320,
+            $telegramUserId,
+            'broadcast_invalid_sources',
+            $selectedKind,
+        );
+
+        $this->accept($this->sourcePayload(9327, $telegramUserId, 'broadcast_invalid_sources', 'fa', $content));
+        $processor->process('123456789', 9327);
+
+        self::assertSame('admin_broadcast_source_wait', $this->sessionState($accountId));
+        self::assertSame(0, DB::table('broadcast_campaigns')->count());
+    }
+
+    /** @return iterable<string,array{string,array<string,mixed>}> */
+    public static function invalidBroadcastSourceUpdateProvider(): iterable
+    {
+        yield 'live photo cannot masquerade as photo' => [
+            'photo',
+            [
+                'live_photo' => self::sourceMedia('live-photo', dimensions: true, duration: true),
+                'photo' => [self::sourcePhoto('live-photo-static')],
+            ],
+        ];
+        yield 'animation missing compatibility document' => [
+            'animation',
+            ['animation' => self::sourceMedia('animation', dimensions: true, duration: true)],
+        ];
+        yield 'malformed video identity' => [
+            'video',
+            ['video' => [
+                'file_id' => 'video-file',
+                'width' => 640,
+                'height' => 480,
+                'duration' => 12,
+            ]],
+        ];
+        yield 'mixed photo and video' => [
+            'photo',
+            [
+                'photo' => [self::sourcePhoto('mixed-photo')],
+                'video' => self::sourceMedia('mixed-video', dimensions: true, duration: true),
+            ],
+        ];
     }
 
     public function test_copy_source_kind_is_validated_from_update_and_safe_buttons_preserve_copy_metadata(): void
@@ -311,6 +420,80 @@ final class TelegramBroadcastNavigationTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+    }
+
+    private function openCopySourceWait(
+        TelegramUpdateProcessor $processor,
+        int $baseUpdateId,
+        int $telegramUserId,
+        string $username,
+        string $sourceKind,
+    ): int {
+        $this->accept($this->payload($baseUpdateId, $telegramUserId, $username, 'fa', '/start'));
+        $processor->process('123456789', $baseUpdateId);
+
+        $accountId = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->value('id');
+        self::assertIsNumeric($accountId);
+        $userId = DB::table('telegram_accounts')
+            ->where('id', (int) $accountId)
+            ->value('user_id');
+        self::assertIsNumeric($userId);
+        $this->salesContentAdministrator((int) $userId);
+
+        $this->accept($this->payload($baseUpdateId + 1, $telegramUserId, $username, 'fa', '/menu'));
+        $processor->process('123456789', $baseUpdateId + 1);
+
+        foreach ([
+            [$baseUpdateId + 2, 'navigation.admin', null],
+            [$baseUpdateId + 3, 'navigation.admin.broadcast', null],
+            [$baseUpdateId + 4, 'navigation.admin.broadcast.new', null],
+            [$baseUpdateId + 5, 'navigation.admin.broadcast.content.copy', null],
+            [$baseUpdateId + 6, 'navigation.admin.broadcast.source_kind', ['source_kind' => $sourceKind]],
+        ] as [$updateId, $action, $payload]) {
+            $token = $this->callbackToken($action, (int) $accountId, $payload);
+            $this->accept($this->callbackPayload($updateId, $telegramUserId, $username, 'fa', $token));
+            $processor->process('123456789', $updateId);
+        }
+
+        self::assertSame('admin_broadcast_source_wait', $this->sessionState((int) $accountId));
+
+        return (int) $accountId;
+    }
+
+    /** @return array<string,mixed> */
+    private static function sourcePhoto(string $prefix): array
+    {
+        return [
+            'file_id' => $prefix.'-file',
+            'file_unique_id' => $prefix.'-unique',
+            'width' => 640,
+            'height' => 480,
+            'file_size' => 12_345,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private static function sourceMedia(
+        string $prefix,
+        bool $dimensions = false,
+        bool $duration = false,
+    ): array {
+        $media = [
+            'file_id' => $prefix.'-file',
+            'file_unique_id' => $prefix.'-unique',
+            'file_size' => 12_345,
+        ];
+        if ($dimensions) {
+            $media['width'] = 640;
+            $media['height'] = 480;
+        }
+        if ($duration) {
+            $media['duration'] = 12;
+        }
+
+        return $media;
     }
 
     /** @param array<string,mixed> $payload */

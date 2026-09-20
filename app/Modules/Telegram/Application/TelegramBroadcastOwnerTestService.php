@@ -263,6 +263,11 @@ final readonly class TelegramBroadcastOwnerTestService
                 return false;
             }
 
+            $this->assertOwnerForUpdate(
+                $connection,
+                $this->positiveInt($context['administrator_id'] ?? null, 'Broadcast Owner administrator ID'),
+                $actorUserId,
+            );
             $this->administrators->authorizeUser(
                 $actorUserId,
                 TelegramBroadcastCampaignService::PERMISSION,
@@ -614,6 +619,21 @@ final readonly class TelegramBroadcastOwnerTestService
         );
         if ($authorizedAdministratorId !== $expectedAdministratorId) {
             throw new DomainException('Broadcast campaign creator authorization changed before provider effect.');
+        }
+    }
+
+    private function assertOwnerForUpdate(
+        Connection $connection,
+        int $administratorId,
+        int $actorUserId,
+    ): void {
+        $owner = $connection->table('administrators')
+            ->where('id', $administratorId)
+            ->where('user_id', $actorUserId)
+            ->lockForUpdate()
+            ->first(['status', 'is_owner']);
+        if ($owner === null || $owner->status !== 'active' || ! (bool) $owner->is_owner) {
+            throw new DomainException('Broadcast test delivery is restricted to the current active Owner.');
         }
     }
 

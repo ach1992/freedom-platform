@@ -30,6 +30,7 @@ use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
+use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessageRouter;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
@@ -1315,6 +1316,93 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->value('cancelled_at'));
     }
 
+    public function test_source_owner_test_revalidates_current_owner_before_provider_boundary(): void
+    {
+        $actor = $this->owner(910261);
+        $this->grantSalesContentRole($actor['administrator_id']);
+
+        $campaigns = $this->app->make(TelegramBroadcastCampaignService::class);
+        $created = $campaigns->createDraft(
+            $actor['user_id'],
+            TelegramBroadcastMessageDefinition::copy(
+                $actor['telegram_user_id'],
+                92001,
+                TelegramBroadcastSourceKind::Photo,
+            ),
+            new TelegramBroadcastAudienceDefinition,
+            'broadcast-source-owner-boundary',
+        );
+
+        $sender = new class implements TelegramSourceMessageSender
+        {
+            public int $attempts = 0;
+
+            public function send(
+                int $recipientChatId,
+                TelegramResolvedSourceMessagePresentation $source,
+                ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
+            ): TelegramMutationResult {
+                $this->attempts++;
+
+                return new TelegramMutationResult(
+                    TelegramMutationOutcome::Success,
+                    'telegram_source_message_success',
+                    messageId: 99261,
+                );
+            }
+        };
+        $this->app->instance(TelegramSourceMessageSender::class, $sender);
+
+        $administratorId = $actor['administrator_id'];
+        $clock = new class($administratorId) implements Clock
+        {
+            private bool $demoted = false;
+
+            public function __construct(private readonly int $administratorId) {}
+
+            public function now(): DateTimeImmutable
+            {
+                $now = new DateTimeImmutable('2026-09-20T12:00:00+00:00');
+                if (! $this->demoted) {
+                    DB::table('administrators')
+                        ->where('id', $this->administratorId)
+                        ->update([
+                            'is_owner' => false,
+                            'permission_version' => DB::raw('permission_version + 1'),
+                            'updated_at' => $now->format('Y-m-d H:i:s.u'),
+                        ]);
+                    $this->demoted = true;
+                }
+
+                return $now;
+            }
+        };
+        $this->app->instance(Clock::class, $clock);
+
+        $ownerTests = $this->app->make(TelegramBroadcastOwnerTestService::class);
+        try {
+            $ownerTests->send(
+                $actor['user_id'],
+                $created->publicId,
+                $created->stateVersion,
+                'broadcast-source-owner-boundary-test',
+            );
+            self::fail('A former Owner must not cross the source-message provider boundary.');
+        } catch (DomainException) {
+            self::assertFalse((bool) DB::table('administrators')
+                ->where('id', $actor['administrator_id'])
+                ->value('is_owner'));
+        }
+
+        self::assertSame(0, $sender->attempts);
+        $test = DB::table('broadcast_campaign_tests')
+            ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
+            ->first(['state', 'provider_boundary_started_at']);
+        self::assertNotNull($test);
+        self::assertSame('prepared', $test->state);
+        self::assertNull($test->provider_boundary_started_at);
+    }
+
     /**
      * @return array{user_id:int,administrator_id:int,telegram_account_id:int,telegram_user_id:int}
      */
@@ -1331,11 +1419,23 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+        $this->grantSalesContentRole($administratorId);
+
+        return [
+            ...$identity,
+            'administrator_id' => $administratorId,
+        ];
+    }
+
+    private function grantSalesContentRole(int $administratorId): void
+    {
+        $now = now('UTC');
         $roleId = DB::table('roles')
             ->where('code', 'sales_content')
             ->where('is_active', true)
             ->value('id');
         self::assertIsNumeric($roleId);
+
         DB::table('administrator_role_assignments')->insert([
             'administrator_id' => $administratorId,
             'role_id' => (int) $roleId,
@@ -1345,11 +1445,6 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
-
-        return [
-            ...$identity,
-            'administrator_id' => $administratorId,
-        ];
     }
 
     /**
