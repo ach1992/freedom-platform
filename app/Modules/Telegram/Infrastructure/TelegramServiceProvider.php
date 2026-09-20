@@ -67,6 +67,7 @@ use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
+use App\Modules\Telegram\Application\TelegramWalletTransferNavigationHandler;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
@@ -164,6 +165,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramSupportNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
+        $this->app->singleton(TelegramWalletTransferNavigationHandler::class);
         $this->app->singleton(TelegramNowPaymentsNavigationHandler::class);
         $this->app->singleton(
             TelegramBroadcastNavigationResolver::class,

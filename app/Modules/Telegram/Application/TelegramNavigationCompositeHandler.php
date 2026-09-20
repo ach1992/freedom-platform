@@ -27,6 +27,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramSupportAttachmentNavigationHandler $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
         private TelegramGiftCardNavigationHandler $giftCards,
+        private TelegramWalletTransferNavigationHandler $walletTransfers,
         private TelegramUsdtNavigationHandler $usdt,
         private TelegramNowPaymentsNavigationHandler $nowPayments,
         private TelegramZarinpalNavigationHandler $zarinpal,
@@ -96,6 +97,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->giftCards->supports($action)) {
             $this->giftCards->handle($action);
+
+            return;
+        }
+        if ($this->walletTransfers->supports($action)) {
+            $this->walletTransfers->handle($action);
 
             return;
         }
