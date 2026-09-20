@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
-use App\Modules\Catalog\Application\ClientGuideCatalogService;
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
+use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
@@ -830,7 +830,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         if (! $this->managedUsdtRateSettings->availableFor($action->userId)
             && ! $this->administratorCustomerTargets->availableFor($action->userId)
             && ! $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
-            && ! $this->administratorUsers->allowsUser($action->userId, ClientGuideCatalogService::PERMISSION)) {
+            && ! $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $this->returnHome($action);
 
             return;
@@ -1065,7 +1065,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
 
-        if ($this->administratorUsers->allowsUser($action->userId, ClientGuideCatalogService::PERMISSION)) {
+        if ($this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $guides = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
@@ -3261,7 +3261,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         if ($this->managedUsdtRateSettings->availableFor($action->userId)
             || $this->administratorCustomerTargets->availableFor($action->userId)
             || $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
-            || $this->administratorUsers->allowsUser($action->userId, ClientGuideCatalogService::PERMISSION)) {
+            || $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $admin = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,

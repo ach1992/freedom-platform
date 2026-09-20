@@ -4,13 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Modules\Catalog\Application\CatalogChangeContext;
-use App\Modules\Catalog\Application\ClientGuideCatalogPage;
-use App\Modules\Catalog\Application\ClientGuideCatalogService;
-use App\Modules\Catalog\Application\ClientGuideResourceDefinition;
-use App\Modules\Catalog\Application\ClientGuideResourceView;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DomainException;
@@ -57,7 +53,7 @@ final readonly class TelegramClientGuideNavigationHandler
         private TelegramDeliveryQueueService $delivery,
         private TelegramInteractionSessionService $sessions,
         private TelegramInteractionCallbackService $callbacks,
-        private ClientGuideCatalogService $catalog,
+        private TelegramClientGuideCatalog $catalog,
         private CustomerAccountSummaryService $customers,
         private TelegramNavigationHandler $navigation,
     ) {}
@@ -171,21 +167,29 @@ final readonly class TelegramClientGuideNavigationHandler
 
         try {
             [$definition, $reason] = $this->definitionFromText($action->messageText);
-            $administratorId = $this->catalog->administratorIdForUser($action->userId);
-            $context = new CatalogChangeContext(
-                'tg-guide-'.substr(hash('sha256', $action->requestKey), 0, 56),
-                'tg-guide-'.substr(hash('sha256', $action->requestKey.':correlation'), 0, 48),
-                'telegram_client_guide',
-                $reason,
-                $administratorId,
-            );
+            $requestFingerprint = 'tg-guide-'.substr(hash('sha256', $action->requestKey), 0, 56);
+            $correlationId = 'tg-guide-'.substr(hash('sha256', $action->requestKey.':correlation'), 0, 48);
             if ($mode === 'create') {
-                $this->catalog->create($definition, $context);
+                $this->catalog->createForAdministratorUser(
+                    $action->userId,
+                    $definition,
+                    $requestFingerprint,
+                    $correlationId,
+                    $reason,
+                );
             } else {
                 if ($publicId === null || $version === null) {
                     throw new RuntimeException('Telegram client-guide edit identity is unavailable.');
                 }
-                $this->catalog->updateByPublicId($publicId, $version, $definition, $context);
+                $this->catalog->updateForAdministratorUser(
+                    $action->userId,
+                    $publicId,
+                    $version,
+                    $definition,
+                    $requestFingerprint,
+                    $correlationId,
+                    $reason,
+                );
             }
         } catch (AuthorizationException) {
             $this->returnHome($action);
@@ -238,7 +242,7 @@ final readonly class TelegramClientGuideNavigationHandler
         $this->renderAdminEditor($action, $session->version, $mode, $publicId, false);
     }
 
-    private function renderCatalog(TelegramInteractionAction $action, int $sessionVersion, ClientGuideCatalogPage $catalog): void
+    private function renderCatalog(TelegramInteractionAction $action, int $sessionVersion, TelegramClientGuidePage $catalog): void
     {
         $locale = $this->locale($action->userId);
         $rows = [];
@@ -267,7 +271,7 @@ final readonly class TelegramClientGuideNavigationHandler
         $this->queue($action, $text, 'catalog-'.$catalog->page, new TelegramInlineKeyboardSnapshot($rows));
     }
 
-    private function renderAdminList(TelegramInteractionAction $action, int $sessionVersion, ClientGuideCatalogPage $catalog): void
+    private function renderAdminList(TelegramInteractionAction $action, int $sessionVersion, TelegramClientGuidePage $catalog): void
     {
         $locale = $this->locale($action->userId);
         $rows = [];
@@ -329,7 +333,7 @@ final readonly class TelegramClientGuideNavigationHandler
         $this->queue($action, $text, 'admin-editor-'.$mode, $keyboard);
     }
 
-    /** @return array{0:ClientGuideResourceDefinition,1:string} */
+    /** @return array{0:TelegramClientGuideDefinition,1:string} */
     private function definitionFromText(string $text): array
     {
         if (mb_strlen($text) > 6000 || ! mb_check_encoding($text, 'UTF-8')) {
@@ -361,7 +365,7 @@ final readonly class TelegramClientGuideNavigationHandler
             throw new InvalidArgumentException('Client-guide administrator reason is required.');
         }
 
-        return [new ClientGuideResourceDefinition(
+        return [new TelegramClientGuideDefinition(
             $values['code'],
             $values['title_fa'],
             $nullable($values['title_en']),
@@ -382,7 +386,7 @@ final readonly class TelegramClientGuideNavigationHandler
         ), $reason];
     }
 
-    private function definitionText(ClientGuideResourceView $resource): string
+    private function definitionText(TelegramClientGuideResource $resource): string
     {
         $value = static fn (?string $item): string => $item === null || $item === '' ? '-' : str_replace(["\r", "\n"], ' ', $item);
 
@@ -408,7 +412,7 @@ final readonly class TelegramClientGuideNavigationHandler
         ]);
     }
 
-    private function resourceSummary(ClientGuideResourceView $resource, string $locale): string
+    private function resourceSummary(TelegramClientGuideResource $resource, string $locale): string
     {
         $description = $resource->description($locale);
         $tutorial = $resource->tutorial($locale);
@@ -423,7 +427,7 @@ final readonly class TelegramClientGuideNavigationHandler
         return implode("\n", $parts);
     }
 
-    private function resourceButtonLabel(ClientGuideResourceView $resource, string $locale): string
+    private function resourceButtonLabel(TelegramClientGuideResource $resource, string $locale): string
     {
         $prefix = $resource->normalEmoji === null ? '' : trim($resource->normalEmoji).' ';
 
@@ -435,7 +439,7 @@ final readonly class TelegramClientGuideNavigationHandler
         TelegramInteractionAction $action,
         int $sessionVersion,
         string $callbackAction,
-        ClientGuideCatalogPage $catalog,
+        TelegramClientGuidePage $catalog,
         string $surface,
     ): array {
         $buttons = [];

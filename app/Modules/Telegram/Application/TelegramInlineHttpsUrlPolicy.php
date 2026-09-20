@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Modules\Catalog\Application\ClientGuideUrlPolicy;
 use InvalidArgumentException;
 
 final readonly class TelegramInlineHttpsUrlPolicy
@@ -38,8 +37,21 @@ final readonly class TelegramInlineHttpsUrlPolicy
         match ($purpose) {
             TelegramInlineHttpsUrlPurpose::ZarinpalStartPay => self::assertZarinpalStartPay($url, $parts['host'], $path),
             TelegramInlineHttpsUrlPurpose::SupportContact => self::assertSupportContact($url, $parts['host'], $path),
-            TelegramInlineHttpsUrlPurpose::ClientGuideResource => ClientGuideUrlPolicy::assertAllowed($url),
+            TelegramInlineHttpsUrlPurpose::ClientGuideResource => self::assertClientGuideResource($url, $parts['host']),
         };
+    }
+
+    private static function assertClientGuideResource(string $url, string $host): void
+    {
+        if (strtolower($host) !== $host
+            || filter_var($host, FILTER_VALIDATE_IP) !== false
+            || $host === 'localhost'
+            || str_ends_with($host, '.localhost')
+            || str_ends_with($host, '.local')
+            || ! str_contains($host, '.')
+            || str_contains($url, '\\')) {
+            throw new InvalidArgumentException('Telegram inline HTTPS URL is not allowed for its purpose.');
+        }
     }
 
     private static function assertZarinpalStartPay(string $url, string $host, string $path): void

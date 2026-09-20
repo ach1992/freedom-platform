@@ -503,6 +503,7 @@ return [
         'cache_locks' => 'Framework',
         'channel_membership_rule_channels' => 'Telegram',
         'channel_membership_rules' => 'Telegram',
+        'client_guide_resources' => 'Catalog',
         'custom_plan_calculation_validations' => 'Catalog',
         'custom_plan_calculations' => 'Catalog',
         'custom_plan_policies' => 'Catalog',
