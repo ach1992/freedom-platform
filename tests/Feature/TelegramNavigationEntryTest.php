@@ -8937,6 +8937,7 @@ SQL);
         $callback = DB::table('telegram_interaction_callbacks')
             ->where('telegram_interaction_session_id', (int) $sessionId)
             ->where('action', $action)
+            ->where('action_payload', $expectedActionPayload)
             ->orderByDesc('id')
             ->first(['action_payload', 'token_ciphertext']);
         self::assertNotNull($callback);
