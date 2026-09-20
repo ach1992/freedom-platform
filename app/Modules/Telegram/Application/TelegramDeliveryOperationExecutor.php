@@ -235,7 +235,9 @@ final readonly class TelegramDeliveryOperationExecutor
                 $connection,
                 (string) $row->public_id,
                 (string) $row->correlation_id,
-                $request,
+                $request->action,
+                $request->recipientChatId,
+                $request->targetMessageId,
             );
             if ($rejectionCode !== null) {
                 throw new DomainException(
