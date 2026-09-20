@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use Closure;
+use RuntimeException;
 
 /**
  * Keeps the established navigation handler unchanged while routing bounded
@@ -15,7 +17,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
     public function __construct(
         private TelegramNavigationHandler $navigation,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
-        private TelegramBroadcastNavigationHandler $broadcast,
+        private Closure $broadcastResolver,
         private TelegramAgentNavigationHandler $agent,
         private TelegramTrialNavigationHandler $trial,
         private TelegramSupportNavigationHandler $support,
@@ -36,8 +38,12 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 
     public function handle(TelegramInteractionAction $action): void
     {
-        if ($this->broadcast->supports($action)) {
-            $this->broadcast->handle($action);
+        if (TelegramBroadcastNavigationHandler::supportsAction($action)) {
+            $broadcast = ($this->broadcastResolver)();
+            if (! $broadcast instanceof TelegramBroadcastNavigationHandler) {
+                throw new RuntimeException('Telegram broadcast navigation resolver returned an invalid handler.');
+            }
+            $broadcast->handle($action);
 
             return;
         }
