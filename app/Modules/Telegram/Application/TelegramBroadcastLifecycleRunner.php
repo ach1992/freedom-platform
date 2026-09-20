@@ -188,7 +188,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         TelegramBroadcastLifecycleAction $action,
         TelegramBroadcastMessageMode $mode,
     ): void {
-        $entered = $this->enterDirectBoundary($operationPublicId);
+        $entered = $this->enterDirectBoundary($operationPublicId, $context);
         if (! $entered) {
             return;
         }
@@ -264,9 +264,13 @@ final readonly class TelegramBroadcastLifecycleRunner
         );
     }
 
-    private function enterDirectBoundary(string $operationPublicId): bool
+    /** @param array<string,mixed> $context */
+    private function enterDirectBoundary(string $operationPublicId, array $context): bool
     {
-        return $this->database->connection()->transaction(function (Connection $connection) use ($operationPublicId): bool {
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $operationPublicId,
+            $context,
+        ): bool {
             /** @var object{id:int|string,state:string,provider_boundary_started_at:?string}|null $operation */
             $operation = $connection->table('broadcast_recipient_messages')
                 ->where('public_id', $operationPublicId)
@@ -281,6 +285,42 @@ final readonly class TelegramBroadcastLifecycleRunner
                 return false;
             }
             if ((string) $operation->state !== 'prepared') {
+                return false;
+            }
+
+            try {
+                $this->administrators->authorize(
+                    $context['requested_by_administrator_id'],
+                    TelegramBroadcastCampaignService::PERMISSION,
+                );
+            } catch (AuthorizationException) {
+                $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'failed',
+                        'result_code' => 'broadcast_lifecycle_authorization_lost',
+                        'retry_not_before' => null,
+                        'updated_at' => $this->timestamp(),
+                    ]);
+
+                return false;
+            }
+
+            if (! $this->hasSuccessfulOwnerTest(
+                $context['campaign_id'],
+                $context['message_version'],
+            )) {
+                $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'failed',
+                        'result_code' => 'broadcast_lifecycle_owner_test_invalid',
+                        'retry_not_before' => null,
+                        'updated_at' => $this->timestamp(),
+                    ]);
+
                 return false;
             }
 
