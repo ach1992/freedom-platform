@@ -40,13 +40,17 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
         Connection $connection,
         string $operationPublicId,
         string $correlationId,
-        TelegramMutationRequest $request,
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
     ): ?string {
         if (str_starts_with($correlationId, self::RECIPIENT_PREFIX)) {
             return $this->recipientDecision(
                 $connection,
                 $this->reference($correlationId, self::RECIPIENT_PREFIX),
-                $request,
+                $action,
+                $recipientChatId,
+                $targetMessageId,
             );
         }
 
@@ -54,7 +58,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             return $this->ownerTestDecision(
                 $connection,
                 $this->reference($correlationId, self::OWNER_TEST_PREFIX),
-                $request,
+                $action,
+                $recipientChatId,
+                $targetMessageId,
             );
         }
 
@@ -62,7 +68,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             return $this->lifecycleDecision(
                 $connection,
                 $this->reference($correlationId, self::LIFECYCLE_PREFIX),
-                $request,
+                $action,
+                $recipientChatId,
+                $targetMessageId,
             );
         }
 
@@ -72,7 +80,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
     private function recipientDecision(
         Connection $connection,
         ?string $reference,
-        TelegramMutationRequest $request,
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
     ): ?string {
         if ($reference === null) {
             return self::INVALID_REFERENCE;
@@ -111,9 +121,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             || ! in_array($row->action, ['send', 'retry'], true)
             || ! in_array($row->state, ['prepared', 'queued'], true)
             || (int) ($row->message_version ?? 0) !== (int) $row->current_message_version
-            || (int) $row->telegram_user_id !== $request->recipientChatId
-            || $request->action !== TelegramDeliveryAction::Send
-            || $request->targetMessageId !== null
+            || (int) $row->telegram_user_id !== $recipientChatId
+            || $action !== TelegramDeliveryAction::Send
+            || $targetMessageId !== null
             || ! hash_equals($this->runtime->botId(), (string) $row->bot_id)
         ) {
             return self::STALE_BEFORE_EFFECT;
@@ -142,7 +152,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
     private function ownerTestDecision(
         Connection $connection,
         ?string $reference,
-        TelegramMutationRequest $request,
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
     ): ?string {
         if ($reference === null) {
             return self::INVALID_REFERENCE;
@@ -195,9 +207,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
                 TelegramBroadcastCampaignState::Draft->value,
                 TelegramBroadcastCampaignState::Completed->value,
             ], true)
-            || (int) $row->telegram_user_id !== $request->recipientChatId
-            || $request->action !== TelegramDeliveryAction::Send
-            || $request->targetMessageId !== null
+            || (int) $row->telegram_user_id !== $recipientChatId
+            || $action !== TelegramDeliveryAction::Send
+            || $targetMessageId !== null
             || ! hash_equals($this->runtime->botId(), (string) $row->campaign_bot_id)
             || ! hash_equals((string) $row->campaign_bot_id, (string) $row->account_bot_id)
             || (int) $row->owner_user_id !== (int) $row->account_user_id
@@ -220,7 +232,9 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
     private function lifecycleDecision(
         Connection $connection,
         ?string $reference,
-        TelegramMutationRequest $request,
+        TelegramDeliveryAction $action,
+        int $recipientChatId,
+        ?int $targetMessageId,
     ): ?string {
         if ($reference === null) {
             return self::INVALID_REFERENCE;
@@ -268,16 +282,16 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             || $row->campaign_state !== TelegramBroadcastCampaignState::Completed->value
             || $row->delivery_state !== 'sent'
             || $row->lifecycle_state === 'deleted'
-            || (int) $row->telegram_user_id !== $request->recipientChatId
-            || (int) ($row->telegram_message_id ?? 0) !== (int) ($request->targetMessageId ?? 0)
+            || (int) $row->telegram_user_id !== $recipientChatId
+            || (int) ($row->telegram_message_id ?? 0) !== (int) ($targetMessageId ?? 0)
             || ! hash_equals($this->runtime->botId(), (string) $row->bot_id)
         ) {
             return self::STALE_BEFORE_EFFECT;
         }
 
         $requestMatches = in_array($row->action, ['edit', 'buttons'], true)
-            ? $request->action === TelegramDeliveryAction::Edit
-            : $request->action === TelegramDeliveryAction::Delete;
+            ? $action === TelegramDeliveryAction::Edit
+            : $action === TelegramDeliveryAction::Delete;
         if (! $requestMatches) {
             return self::STALE_BEFORE_EFFECT;
         }
