@@ -94,6 +94,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                 return null;
             }
 
+            /** @var object{id:int|string,delivery_state:string,claim_token_hash:?string}|null $recipient */
             $recipient = $connection->table('broadcast_recipients')
                 ->where('broadcast_campaign_id', (int) $campaign->id)
                 ->where('delivery_state', 'queued')
@@ -252,6 +253,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'claim_token_hash',
                     'delivery_operation_public_id',
                 ]);
+            /** @var object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string}|null $message */
             $message = $connection->table('broadcast_recipient_messages')
                 ->where('public_id', $claim->recipientMessagePublicId)
                 ->lockForUpdate()
@@ -370,6 +372,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         array $context,
     ): bool {
         return $this->database->connection()->transaction(function (Connection $connection) use ($claim, $context): bool {
+            /** @var object{id:int|string,state:string,state_version:int|string}|null $campaign */
             $campaign = $connection->table('broadcast_campaigns')
                 ->where('public_id', $claim->campaignPublicId)
                 ->where('bot_id', $this->runtime->botId())
@@ -394,6 +397,8 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'provider_boundary_started_at',
                 ]);
             $this->assertClaimRows($claim, $recipient, $message);
+            /** @var object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient */
+            /** @var object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string} $message */
 
             if ((string) $campaign->state !== TelegramBroadcastCampaignState::Active->value) {
                 $this->releaseLockedClaim(
