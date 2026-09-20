@@ -523,7 +523,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertGreaterThanOrEqual(1, $runner->reconcile(10));
         $recipient = DB::table('broadcast_recipients')
             ->where('id', (int) $recipient->id)
-            ->first(['delivery_state', 'delivery_operation_public_id']);
+            ->first(['id', 'delivery_state', 'delivery_operation_public_id']);
         self::assertNotNull($recipient);
         self::assertSame('queued', $recipient->delivery_state);
         self::assertNull($recipient->delivery_operation_public_id);
