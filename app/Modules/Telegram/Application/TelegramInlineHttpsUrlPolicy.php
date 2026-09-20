@@ -25,9 +25,7 @@ final readonly class TelegramInlineHttpsUrlPolicy
             || ! is_string($parts['host'] ?? null)
             || isset($parts['user'])
             || isset($parts['pass'])
-            || isset($parts['port'])
-            || isset($parts['query'])
-            || isset($parts['fragment'])) {
+            || isset($parts['port'])) {
             throw new InvalidArgumentException('Telegram inline HTTPS URL is invalid.');
         }
 
@@ -39,7 +37,21 @@ final readonly class TelegramInlineHttpsUrlPolicy
         match ($purpose) {
             TelegramInlineHttpsUrlPurpose::ZarinpalStartPay => self::assertZarinpalStartPay($url, $parts['host'], $path),
             TelegramInlineHttpsUrlPurpose::SupportContact => self::assertSupportContact($url, $parts['host'], $path),
+            TelegramInlineHttpsUrlPurpose::ClientGuideResource => self::assertClientGuideResource($url, $parts['host']),
         };
+    }
+
+    private static function assertClientGuideResource(string $url, string $host): void
+    {
+        if (strtolower($host) !== $host
+            || filter_var($host, FILTER_VALIDATE_IP) !== false
+            || $host === 'localhost'
+            || str_ends_with($host, '.localhost')
+            || str_ends_with($host, '.local')
+            || ! str_contains($host, '.')
+            || str_contains($url, '\\')) {
+            throw new InvalidArgumentException('Telegram inline HTTPS URL is not allowed for its purpose.');
+        }
     }
 
     private static function assertZarinpalStartPay(string $url, string $host, string $path): void

@@ -71,6 +71,7 @@ return [
     ],
     'telegram_non_restricted_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramBroadcastTextDeliveryGateway.php',
+        'app/Modules/Telegram/Application/TelegramClientGuideNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
@@ -502,6 +503,7 @@ return [
         'cache_locks' => 'Framework',
         'channel_membership_rule_channels' => 'Telegram',
         'channel_membership_rules' => 'Telegram',
+        'client_guide_resources' => 'Catalog',
         'custom_plan_calculation_validations' => 'Catalog',
         'custom_plan_calculations' => 'Catalog',
         'custom_plan_policies' => 'Catalog',
