@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\NowPayments\Application;
 
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
-use App\Modules\Orders\Application\PurchaseOrderService;
-use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
