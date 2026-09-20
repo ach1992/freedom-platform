@@ -34,7 +34,9 @@ return new class extends Migration
             $table->string('state', 16)->default('active');
             $table->unsignedBigInteger('version')->default(1);
             $table->dateTime('last_validated_at', 6);
-            $table->foreignId('last_validated_by_administrator_id')->constrained('administrators')->restrictOnDelete();
+            $table->unsignedBigInteger('last_validated_by_administrator_id');
+            $table->foreign('last_validated_by_administrator_id', 'client_guide_validator_fk')
+                ->references('id')->on('administrators')->restrictOnDelete();
             $table->timestamps(6);
             $table->index(['state', 'sort_order', 'id'], 'client_guide_state_order_idx');
             $table->index(['audience', 'language', 'state', 'sort_order'], 'client_guide_audience_language_idx');
