@@ -19,18 +19,27 @@ final readonly class TelegramWalletTransferNavigationHandler
     public const ACTION_ENTRY = 'navigation.wallet.transfer';
 
     private const STATE_RECIPIENT = 'wallet_transfer_recipient';
+
     private const STATE_AMOUNT = 'wallet_transfer_amount';
+
     private const STATE_PREPARING = 'wallet_transfer_preparing';
+
     private const STATE_CONFIRM = 'wallet_transfer_confirm';
+
     private const STATE_SUBMITTING = 'wallet_transfer_submitting';
+
     private const STATE_COMPLETED = 'wallet_transfer_completed';
 
     private const ACTION_CONFIRM = 'navigation.wallet.transfer.confirm';
+
     private const ACTION_CANCEL = 'navigation.wallet.transfer.cancel';
+
     private const ACTION_BACK = 'navigation.back';
 
     private const SUBMIT_CONFIRM = 'confirm';
+
     private const SUBMIT_CANCEL_HOME = 'cancel_home';
+
     private const SUBMIT_CANCEL_AMOUNT = 'cancel_amount';
 
     public function __construct(

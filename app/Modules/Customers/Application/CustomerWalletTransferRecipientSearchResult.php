@@ -9,7 +9,9 @@ use InvalidArgumentException;
 final readonly class CustomerWalletTransferRecipientSearchResult
 {
     private const MATCHED = 'matched';
+
     private const NOT_FOUND = 'not_found';
+
     private const AMBIGUOUS = 'ambiguous';
 
     private function __construct(

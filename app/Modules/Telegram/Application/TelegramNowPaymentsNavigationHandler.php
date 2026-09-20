@@ -22,13 +22,19 @@ use RuntimeException;
 final readonly class TelegramNowPaymentsNavigationHandler
 {
     private const STATE_PAYMENT_METHODS = 'purchase_payment_methods';
+
     private const STATE_PREPARING = 'purchase_nowpayments_preparing';
+
     private const STATE_PAYMENT = 'purchase_nowpayments_payment';
+
     private const STATE_PENDING = 'purchase_nowpayments_pending';
+
     private const STATE_FINISHED = 'purchase_nowpayments_finished';
 
     private const ACTION_PAYMENT_METHOD_SELECT = 'navigation.purchase.payment_method.select';
+
     private const ACTION_REFRESH = 'navigation.purchase.nowpayments.refresh';
+
     private const ACTION_BACK = 'navigation.back';
 
     public function __construct(

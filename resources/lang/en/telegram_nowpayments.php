@@ -7,6 +7,6 @@ return [
     'pending' => "NOWPayments status is still pending.\n\nUse Refresh status to ask the server to re-check the existing provider payment. A new provider payment will not be created.",
     'uncertain' => "NOWPayments requires reconciliation or manual review.\n\nDo not create or pay a second provider payment for this purchase. Use Refresh status; the server will only reconcile the existing authority.",
     'finished' => "NOWPayments verified the payment and the purchase was settled.\n\nSettlement reference: :settlement",
-    'unavailable' => "NOWPayments is not available for this purchase anymore. Choose another currently available payment method if the purchase is still payable.",
+    'unavailable' => 'NOWPayments is not available for this purchase anymore. Choose another currently available payment method if the purchase is still payable.',
     'refresh' => 'Refresh status',
 ];
