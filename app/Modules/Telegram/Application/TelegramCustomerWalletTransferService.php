@@ -34,6 +34,27 @@ final readonly class TelegramCustomerWalletTransferService
         if (! is_array($allowed) || ! in_array(self::BUCKET, $allowed, true)) {
             return false;
         }
+        $minimum = config('wallet.transfers.minimum_irr');
+        $maximum = config('wallet.transfers.maximum_irr');
+        $dailyLimit = config('wallet.transfers.daily_limit_irr');
+        $ttl = config('wallet.transfers.confirmation_ttl_seconds');
+        if (! is_int($minimum) || $minimum < 1
+            || ! is_int($maximum) || $maximum < $minimum
+            || ! is_int($dailyLimit) || $dailyLimit < $maximum
+            || ! is_int($ttl) || $ttl < 1 || $ttl > 86400) {
+            return false;
+        }
+        $fixedFee = config('wallet.transfers.fixed_fee_irr');
+        $feeBasisPoints = config('wallet.transfers.fee_basis_points');
+        if (! is_int($fixedFee) || $fixedFee < 0
+            || ! is_int($feeBasisPoints) || $feeBasisPoints < 0 || $feeBasisPoints > 10000) {
+            return false;
+        }
+        if (($fixedFee > 0 || $feeBasisPoints > 0)
+            && (! is_string(config('wallet.transfers.fee_account_code'))
+                || trim((string) config('wallet.transfers.fee_account_code')) === '')) {
+            return false;
+        }
         $user = $this->database->connection()->table('users')
             ->where('id', $subjectUserId)
             ->first(['account_type', 'account_status']);

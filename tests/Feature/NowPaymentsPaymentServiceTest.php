@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
@@ -212,6 +214,46 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
     }
 
+    public function test_purchase_aware_finished_status_materializes_pre_payment_order_once(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext('purchase-aware', 10_000_000);
+        $service = $this->service();
+
+        $created = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('purchase-aware-create'),
+        );
+        self::assertSame(NowPaymentsAuthorityState::Created, $created->state);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+
+        $this->transport->statusValue = 'finished';
+        $this->transport->actuallyPaid = $this->transport->payAmount;
+        $finished = $service->refresh(
+            $created->paymentIntentPublicId,
+            $this->correlation('purchase-aware-finished'),
+        );
+
+        self::assertSame(NowPaymentsAuthorityState::Finished, $finished->state);
+        self::assertNotNull($finished->settlementPublicId);
+        self::assertSame('paid', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+        self::assertSame(
+            $finished->settlementPublicId,
+            DB::table('orders')->where('public_id', $opening->orderPublicId)->value('purchase_settlement_public_id'),
+        );
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
+
+        $replay = $service->refresh(
+            $created->paymentIntentPublicId,
+            $this->correlation('purchase-aware-replay'),
+        );
+        self::assertSame($finished->settlementPublicId, $replay->settlementPublicId);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
+        self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
+    }
+
     public function test_partial_payment_enters_manual_review_and_never_captures(): void
     {
         $intentPublicId = $this->purchaseIntent('partial', 10_000_000);
@@ -338,6 +380,9 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             $this->app['db'],
             $this->transport,
             $this->rateResolver(),
+            $this->app->make(PurchasePaymentIntentService::class),
+            $this->app->make(PurchasePromotionUsageAuthority::class),
+            $this->app->make(PurchaseOrderService::class),
             $this->app->make(PurchaseSettlementService::class),
             $this->clock,
         );
@@ -360,6 +405,52 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         $circuit = new UsdtCircuitBreaker($cache, $this->clock, 3, 60);
 
         return new UsdtRateResolver([new NowPaymentsRateProvider($this->clock)], $policy, $circuit, $this->clock);
+    }
+
+    private function purchaseContext(string $suffix, int $amountIrr): array
+    {
+        $userId = $this->quoteUser('customer');
+        $administratorId = $this->ownerAdministrator();
+        $offering = $this->quoteOffering($amountIrr);
+        $quote = $this->app->make(QuoteService::class)->create(
+            'nowpayments.purchase.quote.'.$suffix,
+            $userId,
+            $offering['id'],
+            new QuotePricingInput(QuoteOverrideSource::None, null, null, null, 0, $this->clock->value->modify('+30 minutes')),
+            $this->correlation('purchase-quote-'.$suffix),
+        );
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $eligibility->configureMethod(
+            'nowpayments.purchase.method.'.$suffix,
+            $administratorId,
+            'nowpayments',
+            true,
+            false,
+            1,
+            'NOWPayments purchase-aware test configuration.',
+            $this->correlation('purchase-method-'.$suffix),
+        );
+        $eligibility->recordHealth(
+            'nowpayments.purchase.health.'.$suffix,
+            $administratorId,
+            'nowpayments',
+            true,
+            $this->clock->value->modify('+10 minutes'),
+            'Healthy NOWPayments purchase-aware test observation.',
+            $this->correlation('purchase-health-'.$suffix),
+        );
+        $decision = $eligibility->evaluate(
+            'nowpayments.purchase.eligibility.'.$suffix,
+            $userId,
+            $quote->quotePublicId,
+        );
+        $opening = $this->app->make(PurchaseOrderService::class)->openFromQuote(
+            $quote->quotePublicId,
+            $userId,
+            $this->correlation('purchase-order-'.$suffix),
+        );
+
+        return [$userId, $quote, $decision, $opening];
     }
 
     private function purchaseIntent(string $suffix, int $amountIrr): string

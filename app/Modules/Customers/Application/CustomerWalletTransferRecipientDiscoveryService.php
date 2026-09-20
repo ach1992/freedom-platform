@@ -70,7 +70,7 @@ final readonly class CustomerWalletTransferRecipientDiscoveryService
             });
         }
 
-        /** @var Collection<int,object{internal_user_id:int|string,public_id:string,telegram_user_id:int|string,username:string|null}> $rows */
+        /** @var Collection<int,object{internal_user_id:int|string,public_id:string,telegram_user_id:int|string,username:string|null,locale:string}> $rows */
         $rows = $builder
             ->orderBy('user.id')
             ->limit(3)
@@ -79,6 +79,7 @@ final readonly class CustomerWalletTransferRecipientDiscoveryService
                 'user.public_id',
                 'account.telegram_user_id',
                 'account.username',
+                'user.locale',
             ]);
 
         if ($rows->isEmpty()) {
@@ -112,6 +113,7 @@ final readonly class CustomerWalletTransferRecipientDiscoveryService
                     'Wallet transfer recipient Telegram user ID',
                 ),
                 $username === null ? null : $this->maskUsername($username),
+                ($row->locale ?? null) === 'en' ? 'en' : 'fa',
             ),
         );
     }

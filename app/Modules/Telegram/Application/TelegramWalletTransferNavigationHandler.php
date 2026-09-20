@@ -432,7 +432,7 @@ final readonly class TelegramWalletTransferNavigationHandler
             $action->telegramUserId,
             $senderText,
             'tg-wallet-transfer-receipt:sender:'.hash('sha256', $state['transfer_key']),
-            'tg-wallet-transfer:sender:'.substr(hash('sha256', $state['transfer_key']), 0, 40),
+            'tg-wallet:sender:'.substr(hash('sha256', $state['transfer_key']), 0, 40),
             new TelegramInlineKeyboardSnapshot([[
                 new TelegramInlineCallbackButton(
                     $this->translation('telegram_wallet_transfer.home', $locale),
@@ -444,7 +444,7 @@ final readonly class TelegramWalletTransferNavigationHandler
 
         $sender = $this->customers->forSelf($action->userId, $action->userId);
         $recipientTelegramUserId = $this->telegramUserId($state['recipient_telegram_user_id']);
-        $recipientText = $this->translation('telegram_wallet_transfer.completed_recipient', 'fa', [
+        $recipientText = $this->translation('telegram_wallet_transfer.completed_recipient', $state['recipient_locale'], [
             'amount' => $this->formatIrr($state['amount_irr']),
             'sender' => substr($sender->publicId, -6),
         ]);
@@ -452,7 +452,7 @@ final readonly class TelegramWalletTransferNavigationHandler
             $recipientTelegramUserId,
             $recipientText,
             'tg-wallet-transfer-receipt:recipient:'.hash('sha256', $state['transfer_key']),
-            'tg-wallet-transfer:recipient:'.substr(hash('sha256', $state['transfer_key']), 0, 37),
+            'tg-wallet:recipient:'.substr(hash('sha256', $state['transfer_key']), 0, 37),
         );
     }
 
@@ -464,7 +464,7 @@ final readonly class TelegramWalletTransferNavigationHandler
             $action->telegramUserId,
             $this->translation('telegram_wallet_transfer.'.$key, $this->locale($action->userId)),
             'tg-wallet-transfer-delivery:'.hash('sha256', $action->requestKey.':recipient:'.($error ?? 'prompt')),
-            'tg-wallet-transfer:recipient:'.substr(hash('sha256', $action->requestKey.':'.($error ?? 'prompt')), 0, 36),
+            'tg-wallet:recipient:'.substr(hash('sha256', $action->requestKey.':'.($error ?? 'prompt')), 0, 36),
             new TelegramInlineKeyboardSnapshot($rows),
         );
     }
@@ -480,7 +480,7 @@ final readonly class TelegramWalletTransferNavigationHandler
                 'recipient' => $this->recipientLabel($state),
             ]),
             'tg-wallet-transfer-delivery:'.hash('sha256', $action->requestKey.':amount:'.($error ?? 'prompt')),
-            'tg-wallet-transfer:amount:'.substr(hash('sha256', $action->requestKey.':'.($error ?? 'prompt')), 0, 39),
+            'tg-wallet:amount:'.substr(hash('sha256', $action->requestKey.':'.($error ?? 'prompt')), 0, 39),
             new TelegramInlineKeyboardSnapshot($rows),
         );
     }
@@ -525,7 +525,7 @@ final readonly class TelegramWalletTransferNavigationHandler
                 'expires_at' => $state['confirmation_expires_at'],
             ]),
             'tg-wallet-transfer-delivery:confirm:'.hash('sha256', $state['transfer_key']),
-            'tg-wallet-transfer:confirm:'.substr(hash('sha256', $state['transfer_key']), 0, 40),
+            'tg-wallet:confirm:'.substr(hash('sha256', $state['transfer_key']), 0, 40),
             new TelegramInlineKeyboardSnapshot($rows),
         );
     }
@@ -706,6 +706,7 @@ final readonly class TelegramWalletTransferNavigationHandler
             'recipient_public_id' => $recipient->accountPublicId,
             'recipient_telegram_user_id' => $recipient->telegramUserId,
             'recipient_masked_username' => $recipient->maskedUsername,
+            'recipient_locale' => $recipient->locale,
         ];
     }
 
@@ -714,13 +715,14 @@ final readonly class TelegramWalletTransferNavigationHandler
     {
         $keys = array_keys($payload);
         sort($keys, SORT_STRING);
-        if ($keys !== ['recipient_masked_username', 'recipient_public_id', 'recipient_telegram_user_id']
+        if ($keys !== ['recipient_locale', 'recipient_masked_username', 'recipient_public_id', 'recipient_telegram_user_id']
             || ! is_string($payload['recipient_public_id'] ?? null)
             || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $payload['recipient_public_id']) !== 1
             || ! is_string($payload['recipient_telegram_user_id'] ?? null)
             || preg_match('/\A[1-9][0-9]{0,19}\z/', $payload['recipient_telegram_user_id']) !== 1
             || (($payload['recipient_masked_username'] ?? null) !== null
-                && ! is_string($payload['recipient_masked_username']))) {
+                && ! is_string($payload['recipient_masked_username']))
+            || ! in_array($payload['recipient_locale'] ?? null, ['fa', 'en'], true)) {
             throw new RuntimeException('Telegram wallet transfer recipient state is invalid.');
         }
 
