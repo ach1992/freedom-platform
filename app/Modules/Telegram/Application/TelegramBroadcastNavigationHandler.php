@@ -129,6 +129,11 @@ final readonly class TelegramBroadcastNavigationHandler
 
     public function supports(TelegramInteractionAction $action): bool
     {
+        return self::supportsAction($action);
+    }
+
+    public static function supportsAction(TelegramInteractionAction $action): bool
+    {
         return ($action->sessionState === 'admin_control'
                 && $action->kind === TelegramInteractionActionKind::Callback
                 && $action->callbackAction === self::ACTION_ENTRY)
