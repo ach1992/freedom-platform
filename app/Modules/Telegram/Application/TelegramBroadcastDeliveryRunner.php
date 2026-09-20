@@ -94,7 +94,6 @@ final readonly class TelegramBroadcastDeliveryRunner
                 return null;
             }
 
-            /** @var object{id:int|string,delivery_state:string,claim_token_hash:?string}|null $recipient */
             $recipient = $connection->table('broadcast_recipients')
                 ->where('broadcast_campaign_id', (int) $campaign->id)
                 ->where('delivery_state', 'queued')
@@ -253,7 +252,6 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'claim_token_hash',
                     'delivery_operation_public_id',
                 ]);
-            /** @var object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string}|null $message */
             $message = $connection->table('broadcast_recipient_messages')
                 ->where('public_id', $claim->recipientMessagePublicId)
                 ->lockForUpdate()
