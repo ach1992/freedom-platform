@@ -387,7 +387,7 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
             DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'),
         );
         self::assertSame(1, $payment->prepareEffects);
-        self::assertStringContainsString('دوباره', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('پرداخت دوم', $this->latestConfidentialPresentation());
 
         $this->accept($this->payload(9810, $telegramUserId, 'nowpayments_uncertain', 'fa', 'status?'));
         $processor->process('123456789', 9810);
