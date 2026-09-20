@@ -85,7 +85,7 @@ final class TelegramBroadcastNavigationTest extends TestCase
         $this->accept($this->callbackPayload(9203, $telegramUserId, $username, 'fa', $broadcast));
         $processor->process('123456789', 9203);
         self::assertSame('admin_broadcast_home', $this->sessionState((int) $account->id));
-        self::assertStringContainsString('مدیریت کمپین‌های تلگرام', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('مدیریت ارسال همگانی', $this->latestConfidentialPresentation());
 
         $new = $this->callbackToken('navigation.admin.broadcast.new', (int) $account->id);
         $this->accept($this->callbackPayload(9204, $telegramUserId, $username, 'fa', $new));
@@ -156,7 +156,7 @@ final class TelegramBroadcastNavigationTest extends TestCase
         $this->accept($this->callbackPayload(9213, $telegramUserId, $username, 'en', $broadcast));
         $processor->process('123456789', 9213);
 
-        self::assertSame('admin_control', $this->sessionState((int) $account->id));
+        self::assertSame('home', $this->sessionState((int) $account->id));
         self::assertSame(0, DB::table('broadcast_campaigns')->count());
         self::assertSame(
             0,
