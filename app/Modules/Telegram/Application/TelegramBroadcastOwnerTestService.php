@@ -224,7 +224,11 @@ final readonly class TelegramBroadcastOwnerTestService
         $this->assertSourceStillBound($context['creator_user_id'], $context['bot_id'], $context['source_chat_id']);
 
         $connection = $this->database->connection();
-        $entered = $connection->transaction(function (Connection $connection) use ($testPublicId): bool {
+        $entered = $connection->transaction(function (Connection $connection) use (
+            $testPublicId,
+            $actorUserId,
+            $context,
+        ): bool {
             $row = $connection->table('broadcast_campaign_tests')
                 ->where('public_id', $testPublicId)
                 ->lockForUpdate()
@@ -258,6 +262,17 @@ final readonly class TelegramBroadcastOwnerTestService
             if ((string) $row->state !== 'prepared') {
                 return false;
             }
+
+            $this->administrators->authorizeUser(
+                $actorUserId,
+                TelegramBroadcastCampaignService::PERMISSION,
+            );
+            $this->assertCampaignCreatorAuthorized($context);
+            $this->assertSourceStillBound(
+                $context['creator_user_id'],
+                $context['bot_id'],
+                $context['source_chat_id'],
+            );
 
             $now = $this->timestamp();
             $updated = $connection->table('broadcast_campaign_tests')
