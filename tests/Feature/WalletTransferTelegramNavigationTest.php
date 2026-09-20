@@ -19,7 +19,7 @@ use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /** @requirement WAL-003 BUY-003 ARCH-003 SEC-003 DAT-002 DAT-003 DAT-004 QUA-001 QUA-004 */
-final class TelegramWalletTransferNavigationTest extends TestCase
+final class WalletTransferTelegramNavigationTest extends TestCase
 {
     use DatabaseTruncation;
 
