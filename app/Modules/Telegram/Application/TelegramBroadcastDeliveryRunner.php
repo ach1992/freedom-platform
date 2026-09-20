@@ -808,6 +808,16 @@ final readonly class TelegramBroadcastDeliveryRunner
             $recipientPublicId,
             &$campaignPublicId,
         ): bool {
+            /** @var object{
+             *     id:int|string,
+             *     broadcast_campaign_id:int|string,
+             *     delivery_state:string,
+             *     delivery_operation_public_id:string|null,
+             *     campaign_public_id:string,
+             *     campaign_state:string,
+             *     campaign_state_version:int|string
+             * }|null $recipient
+             */
             $recipient = $connection->table('broadcast_recipients as recipient')
                 ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
                 ->where('recipient.public_id', $recipientPublicId)
@@ -839,11 +849,25 @@ final readonly class TelegramBroadcastDeliveryRunner
                 throw new RuntimeException('Broadcast linked Telegram delivery operation is missing.');
             }
 
+            /** @var object{
+             *     id:int|string,
+             *     public_id:string,
+             *     broadcast_message_version_id:int|string,
+             *     requested_by_administrator_id:int|string|null,
+             *     state:string
+             * }|null $message
+             */
             $message = $connection->table('broadcast_recipient_messages')
                 ->where('broadcast_recipient_id', (int) $recipient->id)
                 ->where('delivery_operation_public_id', (string) $recipient->delivery_operation_public_id)
                 ->lockForUpdate()
-                ->first(['id', 'state']);
+                ->first([
+                    'id',
+                    'public_id',
+                    'broadcast_message_version_id',
+                    'requested_by_administrator_id',
+                    'state',
+                ]);
             if ($message === null) {
                 throw new RuntimeException('Broadcast linked recipient-message evidence is missing.');
             }
@@ -923,9 +947,6 @@ final readonly class TelegramBroadcastDeliveryRunner
                 'claim_expires_at' => null,
                 'updated_at' => $now,
             ];
-            if ($recipientState === 'queued') {
-                $recipientValues['delivery_operation_public_id'] = null;
-            }
             $connection->table('broadcast_recipients')
                 ->where('id', (int) $recipient->id)
                 ->update($recipientValues);
