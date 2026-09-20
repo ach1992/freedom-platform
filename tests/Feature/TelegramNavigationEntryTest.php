@@ -7834,7 +7834,7 @@ SQL);
         $processor = $this->app->make(TelegramUpdateProcessor::class);
 
         $this->accept($this->payload(7630, $telegramUserId, 'agent_bulk', 'en', '/start'));
-        $processor->process('123456789', 7630);
+        $this->processTelegramUpdateOrFail($processor, 7630);
         $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
         self::assertNotNull($account);
         $accountId = (int) $account->id;
@@ -7878,15 +7878,15 @@ SQL);
         ));
 
         $this->accept($this->payload(7631, $telegramUserId, 'agent_bulk', 'en', '/menu'));
-        $processor->process('123456789', 7631);
+        $this->processTelegramUpdateOrFail($processor, 7631);
         $agentToken = $this->callbackToken('navigation.agent', $accountId);
         $this->accept($this->callbackPayload(7632, $telegramUserId, 'agent_bulk', 'en', $agentToken));
-        $processor->process('123456789', 7632);
+        $this->processTelegramUpdateOrFail($processor, 7632);
         self::assertStringContainsString('Agent Menu', $this->latestConfidentialPresentation());
 
         $bulkToken = $this->callbackToken('navigation.agent.bulk', $accountId);
         $this->accept($this->callbackPayload(7633, $telegramUserId, 'agent_bulk', 'en', $bulkToken));
-        $processor->process('123456789', 7633);
+        $this->processTelegramUpdateOrFail($processor, 7633);
         $session = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['id', 'state', 'version', 'payload']);
         self::assertNotNull($session);
         self::assertSame('agent_bulk_select', (string) $session->state);
@@ -7903,14 +7903,14 @@ SQL);
         $secondId = '01ARZ3NDEKTSV4RRFFQ69G5FAW';
         $firstToggle = $this->callbackToken('navigation.agent.bulk.toggle', $accountId, '{"settlement":"'.$firstId.'"}');
         $this->accept($this->callbackPayload(7634, $telegramUserId, 'agent_bulk', 'en', $firstToggle));
-        $processor->process('123456789', 7634);
+        $this->processTelegramUpdateOrFail($processor, 7634);
         $secondToggle = $this->callbackToken('navigation.agent.bulk.toggle', $accountId, '{"settlement":"'.$secondId.'"}');
         $this->accept($this->callbackPayload(7635, $telegramUserId, 'agent_bulk', 'en', $secondToggle));
-        $processor->process('123456789', 7635);
+        $this->processTelegramUpdateOrFail($processor, 7635);
 
         $reviewToken = $this->callbackToken('navigation.agent.bulk.review', $accountId);
         $this->accept($this->callbackPayload(7636, $telegramUserId, 'agent_bulk', 'en', $reviewToken));
-        $processor->process('123456789', 7636);
+        $this->processTelegramUpdateOrFail($processor, 7636);
         $reviewSession = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['state', 'version', 'payload']);
         self::assertNotNull($reviewSession);
         self::assertSame('agent_bulk_review', (string) $reviewSession->state);
@@ -7919,7 +7919,7 @@ SQL);
 
         $confirmToken = $this->callbackToken('navigation.agent.bulk.confirm', $accountId);
         $this->accept($this->callbackPayload(7637, $telegramUserId, 'agent_bulk', 'en', $confirmToken));
-        $processor->process('123456789', 7637);
+        $this->processTelegramUpdateOrFail($processor, 7637);
         self::assertSame(1, $bulk->executeCalls);
         self::assertSame(1, $bulk->effectCount);
         self::assertCount(1, $bulk->executeArguments);
@@ -7944,7 +7944,7 @@ SQL);
 
         $doneToken = $this->callbackToken('navigation.agent.bulk.cancel', $accountId);
         $this->accept($this->callbackPayload(7638, $telegramUserId, 'agent_bulk', 'en', $doneToken));
-        $processor->process('123456789', 7638);
+        $this->processTelegramUpdateOrFail($processor, 7638);
         self::assertSame('agent_cooperation', (string) DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('state'));
         self::assertStringContainsString('Agent Menu', $this->latestConfidentialPresentation());
     }
@@ -7959,14 +7959,14 @@ SQL);
         $processor = $this->app->make(TelegramUpdateProcessor::class);
 
         $this->accept($this->payload(7650, $telegramUserId, 'agent_bulk_recovery', 'en', '/start'));
-        $processor->process('123456789', 7650);
+        $this->processTelegramUpdateOrFail($processor, 7650);
         $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
         self::assertNotNull($account);
         $accountId = (int) $account->id;
         $userId = (int) $account->user_id;
 
         $this->accept($this->payload(7660, $reviewerTelegramUserId, 'agent_bulk_recovery_reviewer', 'en', '/start'));
-        $processor->process('123456789', 7660);
+        $this->processTelegramUpdateOrFail($processor, 7660);
         $reviewerUserId = DB::table('telegram_accounts')->where('telegram_user_id', $reviewerTelegramUserId)->value('user_id');
         self::assertIsNumeric($reviewerUserId);
         $now = now('UTC');
@@ -8003,20 +8003,20 @@ SQL);
         ));
 
         $this->accept($this->payload(7651, $telegramUserId, 'agent_bulk_recovery', 'en', '/menu'));
-        $processor->process('123456789', 7651);
+        $this->processTelegramUpdateOrFail($processor, 7651);
         $agentToken = $this->callbackToken('navigation.agent', $accountId);
         $this->accept($this->callbackPayload(7652, $telegramUserId, 'agent_bulk_recovery', 'en', $agentToken));
-        $processor->process('123456789', 7652);
+        $this->processTelegramUpdateOrFail($processor, 7652);
         $bulkToken = $this->callbackToken('navigation.agent.bulk', $accountId);
         $this->accept($this->callbackPayload(7653, $telegramUserId, 'agent_bulk_recovery', 'en', $bulkToken));
-        $processor->process('123456789', 7653);
+        $this->processTelegramUpdateOrFail($processor, 7653);
         $settlementId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
         $toggle = $this->callbackToken('navigation.agent.bulk.toggle', $accountId, '{"settlement":"'.$settlementId.'"}');
         $this->accept($this->callbackPayload(7654, $telegramUserId, 'agent_bulk_recovery', 'en', $toggle));
-        $processor->process('123456789', 7654);
+        $this->processTelegramUpdateOrFail($processor, 7654);
         $review = $this->callbackToken('navigation.agent.bulk.review', $accountId);
         $this->accept($this->callbackPayload(7655, $telegramUserId, 'agent_bulk_recovery', 'en', $review));
-        $processor->process('123456789', 7655);
+        $this->processTelegramUpdateOrFail($processor, 7655);
         $confirm = $this->callbackToken('navigation.agent.bulk.confirm', $accountId);
         $this->accept($this->callbackPayload(7656, $telegramUserId, 'agent_bulk_recovery', 'en', $confirm));
 
@@ -8054,7 +8054,7 @@ SQL);
             'attempt_count' => 1,
         ]);
 
-        $processor->process('123456789', 7656);
+        $this->processTelegramUpdateOrFail($processor, 7656);
 
         self::assertSame(2, $bulk->executeCalls);
         self::assertSame(1, $bulk->effectCount);
