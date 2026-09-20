@@ -200,6 +200,16 @@ final readonly class TelegramBroadcastNavigationHandler
         }
 
         [$mode, $sourceKind] = $this->sourcePayload($interaction->sessionPayload);
+        if ($interaction->sourceKind !== $sourceKind) {
+            $this->renderSourceWait(
+                $this->actionForSourceMessage($interaction),
+                $interaction->sessionVersion,
+                $this->locale($interaction->userId),
+                'invalid',
+            );
+
+            return true;
+        }
         $message = $mode === TelegramBroadcastMessageMode::Copy
             ? TelegramBroadcastMessageDefinition::copy(
                 $interaction->sourceChatId,

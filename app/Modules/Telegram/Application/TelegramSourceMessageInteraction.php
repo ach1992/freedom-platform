@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use InvalidArgumentException;
 
 final readonly class TelegramSourceMessageInteraction
@@ -23,6 +24,7 @@ final readonly class TelegramSourceMessageInteraction
         public array $sessionPayload,
         public int $sourceChatId,
         public int $sourceMessageId,
+        public ?TelegramBroadcastSourceKind $sourceKind,
         public bool $replayed,
     ) {
         if ($requestKey === ''

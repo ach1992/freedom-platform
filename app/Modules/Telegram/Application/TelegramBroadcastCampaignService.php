@@ -279,7 +279,9 @@ final readonly class TelegramBroadcastCampaignService
                 'broadcast_campaign_id' => (int) $campaign->id,
                 'version' => $version,
                 'mode' => $message->mode->value,
+                'source_kind' => $message->sourceKind?->value,
                 'text' => $message->text,
+                'caption_override' => $message->captionOverride,
                 'source_chat_id' => $message->sourceChatId,
                 'source_message_id' => $message->sourceMessageId,
                 'inline_keyboard_snapshot' => $message->inlineKeyboardJson(),
@@ -563,23 +565,15 @@ final readonly class TelegramBroadcastCampaignService
             ->orderBy('scheduled_at')
             ->orderBy('id')
             ->limit($limit)
-            ->get(['id', 'actor_administrator_id']);
+            ->get(['id']);
 
         $activated = 0;
         foreach ($rows as $row) {
-            try {
-                $this->administrators->authorize(
-                    $this->positiveInt($row->actor_administrator_id, 'Broadcast creator administrator ID'),
-                    self::PERMISSION,
-                );
-            } catch (AuthorizationException) {
-                continue;
-            }
-
             $activated += $this->database->connection()->transaction(function (Connection $connection) use (
                 $row,
                 $now,
             ): int {
+                /** @var object{id:int|string,state:string,state_version:int|string,actor_administrator_id:int|string,current_message_version:int|string,recipient_count:int|string,scheduled_at:?string,audience_materialized_at:?string}|null $campaign */
                 $campaign = $connection->table('broadcast_campaigns')
                     ->where('id', (int) $row->id)
                     ->lockForUpdate()
@@ -587,6 +581,7 @@ final readonly class TelegramBroadcastCampaignService
                         'id',
                         'state',
                         'state_version',
+                        'actor_administrator_id',
                         'current_message_version',
                         'recipient_count',
                         'scheduled_at',
@@ -600,11 +595,37 @@ final readonly class TelegramBroadcastCampaignService
                 ) {
                     return 0;
                 }
-                $this->assertSuccessfulOwnerTest(
-                    $connection,
-                    (int) $campaign->id,
-                    (int) $campaign->current_message_version,
-                );
+
+                $invalidReason = null;
+                try {
+                    $this->administrators->authorize(
+                        $this->positiveInt(
+                            $campaign->actor_administrator_id,
+                            'Broadcast creator administrator ID',
+                        ),
+                        self::PERMISSION,
+                    );
+                } catch (AuthorizationException) {
+                    $invalidReason = 'broadcast_schedule_creator_authorization_lost';
+                }
+
+                if ($invalidReason === null) {
+                    try {
+                        $this->assertSuccessfulOwnerTest(
+                            $connection,
+                            (int) $campaign->id,
+                            (int) $campaign->current_message_version,
+                        );
+                    } catch (DomainException) {
+                        $invalidReason = 'broadcast_schedule_owner_test_invalid';
+                    }
+                }
+
+                if ($invalidReason !== null) {
+                    $this->cancelInvalidScheduledCampaign($connection, $campaign, $now, $invalidReason);
+
+                    return 0;
+                }
 
                 $version = $this->positiveInt($campaign->state_version, 'Broadcast state version');
                 $recipientCount = $this->nonNegativeInt(
@@ -885,6 +906,58 @@ final readonly class TelegramBroadcastCampaignService
         if ($updated !== 1) {
             throw new DomainException('Broadcast draft changed before version update completed.');
         }
+    }
+
+    /** @param object{id:int|string,state_version:int|string} $campaign */
+    private function cancelInvalidScheduledCampaign(
+        Connection $connection,
+        object $campaign,
+        string $now,
+        string $reasonCode,
+    ): void {
+        $version = $this->positiveInt($campaign->state_version, 'Broadcast state version');
+        $updated = $connection->table('broadcast_campaigns')
+            ->where('id', (int) $campaign->id)
+            ->where('state', TelegramBroadcastCampaignState::Scheduled->value)
+            ->where('state_version', $version)
+            ->update([
+                'state' => TelegramBroadcastCampaignState::Cancelled->value,
+                'state_version' => $version + 1,
+                'cancelled_at' => $now,
+                'updated_at' => $now,
+            ]);
+        if ($updated !== 1) {
+            throw new RuntimeException('Invalid scheduled broadcast cancellation transition failed.');
+        }
+
+        $queuedRecipientIds = $connection->table('broadcast_recipients')
+            ->where('broadcast_campaign_id', (int) $campaign->id)
+            ->where('delivery_state', 'queued')
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+        if ($queuedRecipientIds === []) {
+            return;
+        }
+
+        $connection->table('broadcast_recipient_messages')
+            ->whereIn('broadcast_recipient_id', $queuedRecipientIds)
+            ->where('state', 'prepared')
+            ->update([
+                'state' => 'skipped',
+                'result_code' => $reasonCode,
+                'updated_at' => $now,
+            ]);
+        $connection->table('broadcast_recipients')
+            ->whereIn('id', $queuedRecipientIds)
+            ->where('delivery_state', 'queued')
+            ->update([
+                'delivery_state' => 'skipped',
+                'failure_code' => $reasonCode,
+                'claim_token_hash' => null,
+                'claim_expires_at' => null,
+                'updated_at' => $now,
+            ]);
     }
 
     private function assertSuccessfulOwnerTest(Connection $connection, int $campaignId, int $messageVersion): void

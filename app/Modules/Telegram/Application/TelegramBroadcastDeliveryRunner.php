@@ -921,6 +921,8 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'outbox_event_id',
                     'telegram_message_id',
                     'result_code',
+                    'retry_after_seconds',
+                    'completed_at',
                 ]);
             if ($operation === null) {
                 throw new RuntimeException('Broadcast linked Telegram delivery operation is missing.');
@@ -1006,19 +1008,23 @@ final readonly class TelegramBroadcastDeliveryRunner
             };
 
             $now = $this->timestamp();
+            $retryNotBefore = $operationState === TelegramDeliveryOperationState::ReviewRequired
+                ? $this->retryNotBeforeStoredOperation($operation->completed_at, $operation->retry_after_seconds, 'Broadcast delivery retry delay')
+                : null;
             $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $message->id)
                 ->update([
                     'state' => $messageState,
                     'telegram_message_id' => $messageId,
                     'result_code' => $operation->result_code,
+                    'retry_not_before' => $retryNotBefore,
                     'updated_at' => $now,
                 ]);
             $recipientValues = [
                 'delivery_state' => $recipientState,
                 'telegram_message_id' => $messageId,
                 'failure_code' => $failureCode,
-                'retry_not_before' => null,
+                'retry_not_before' => $retryNotBefore,
                 'sent_at' => $recipientState === 'sent' ? $now : null,
                 'claim_token_hash' => null,
                 'claim_expires_at' => null,
@@ -1623,9 +1629,42 @@ final readonly class TelegramBroadcastDeliveryRunner
             return null;
         }
 
-        $seconds = $result->retryAfterSeconds;
-        if ($seconds === null) {
-            throw new RuntimeException('Broadcast provider retry delay is unavailable.');
+        return $this->retryNotBeforeSeconds($result->retryAfterSeconds, 'Broadcast provider retry delay');
+    }
+
+    private function retryNotBeforeStoredOperation(
+        mixed $completedAt,
+        mixed $retryAfterSeconds,
+        string $label,
+    ): string {
+        $seconds = filter_var($retryAfterSeconds, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => 86400],
+        ]);
+        if ($seconds === false || ! is_string($completedAt) || $completedAt === '') {
+            throw new RuntimeException($label.' is unavailable.');
+        }
+
+        $completed = \DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s.u',
+            $completedAt,
+            new \DateTimeZone('UTC'),
+        );
+        if ($completed === false) {
+            throw new RuntimeException($label.' completion timestamp is invalid.');
+        }
+
+        return $completed
+            ->modify('+'.$seconds.' seconds')
+            ->format('Y-m-d H:i:s.u');
+    }
+
+    private function retryNotBeforeSeconds(mixed $value, string $label): string
+    {
+        $seconds = filter_var($value, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => 86400],
+        ]);
+        if ($seconds === false) {
+            throw new RuntimeException($label.' is unavailable.');
         }
 
         return $this->clock->now()

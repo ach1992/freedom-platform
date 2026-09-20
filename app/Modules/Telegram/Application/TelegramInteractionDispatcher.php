@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Telegram\Domain\TelegramInteractionDispatchStatus;
 use App\Shared\Application\RestrictedValue;
@@ -26,6 +27,24 @@ final readonly class TelegramInteractionDispatcher
         'voice',
         'video_note',
         'sticker',
+    ];
+
+    /** @var list<string> */
+    private const UNSUPPORTED_BROADCAST_SOURCE_FIELDS = [
+        'voice',
+        'video_note',
+        'sticker',
+        'story',
+        'contact',
+        'dice',
+        'game',
+        'poll',
+        'venue',
+        'location',
+        'invoice',
+        'successful_payment',
+        'refunded_payment',
+        'paid_media',
     ];
 
     /** @requirement ARCH-003 DAT-003 SEC-002 SEC-003 QUA-001 */
@@ -81,6 +100,9 @@ final readonly class TelegramInteractionDispatcher
             if (! is_int($sourceMessageId) || $sourceMessageId < 1) {
                 return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
             }
+            $sourceKind = $this->sourceMessageGateway->awaitingBroadcastSource((int) $account->id)
+                ? $this->broadcastSourceKindFromMessage($message)
+                : null;
 
             return $this->dispatchSourceMessage(
                 $botId,
@@ -88,6 +110,7 @@ final readonly class TelegramInteractionDispatcher
                 $sourceMessageId,
                 (int) $account->id,
                 (int) $account->telegram_user_id,
+                $sourceKind,
             );
         }
 
@@ -224,6 +247,7 @@ final readonly class TelegramInteractionDispatcher
         int $sourceMessageId,
         int $telegramAccountId,
         int $telegramUserId,
+        ?TelegramBroadcastSourceKind $sourceKind,
     ): TelegramInteractionDispatchResult {
         $requestKey = $this->updateRequestKey($botId, $updateId, 'message');
         $binding = $this->updateBindings->bind(
@@ -254,6 +278,7 @@ final readonly class TelegramInteractionDispatcher
             $binding->sessionPayload,
             $telegramUserId,
             $sourceMessageId,
+            $sourceKind,
             $binding->replayed,
         ));
 
@@ -341,6 +366,36 @@ final readonly class TelegramInteractionDispatcher
         }
 
         return $caption === '' ? null : $caption;
+    }
+
+    /** @param array<string,mixed> $message */
+    private function broadcastSourceKindFromMessage(array $message): ?TelegramBroadcastSourceKind
+    {
+        foreach (self::UNSUPPORTED_BROADCAST_SOURCE_FIELDS as $field) {
+            if (array_key_exists($field, $message)) {
+                return null;
+            }
+        }
+
+        $candidates = [];
+        if (isset($message['text']) && is_string($message['text']) && $message['text'] !== '') {
+            $candidates[] = TelegramBroadcastSourceKind::Text;
+        }
+        if (isset($message['photo']) && is_array($message['photo']) && $message['photo'] !== []) {
+            $candidates[] = TelegramBroadcastSourceKind::Photo;
+        }
+        foreach ([
+            'video' => TelegramBroadcastSourceKind::Video,
+            'animation' => TelegramBroadcastSourceKind::Animation,
+            'audio' => TelegramBroadcastSourceKind::Audio,
+            'document' => TelegramBroadcastSourceKind::Document,
+        ] as $field => $kind) {
+            if (isset($message[$field]) && is_array($message[$field]) && ! array_is_list($message[$field])) {
+                $candidates[] = $kind;
+            }
+        }
+
+        return count($candidates) === 1 ? $candidates[0] : null;
     }
 
     /** @param array<string, mixed> $callbackQuery */

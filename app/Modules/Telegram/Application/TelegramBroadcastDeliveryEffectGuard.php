@@ -88,23 +88,38 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             return self::INVALID_REFERENCE;
         }
 
-        /** @var object{
+        $campaignId = $connection->table('broadcast_recipient_messages as operation')
+            ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
+            ->where('operation.public_id', $reference)
+            ->value('recipient.broadcast_campaign_id');
+        if (! is_int($campaignId) && ! is_string($campaignId)) {
+            return self::STALE_BEFORE_EFFECT;
+        }
+
+        /** @var object{state:string,current_message_version:int|string,bot_id:int|string}|null $campaign */
+        $campaign = $connection->table('broadcast_campaigns')
+            ->where('id', (int) $campaignId)
+            ->lockForUpdate()
+            ->first(['state', 'current_message_version', 'bot_id']);
+        if ($campaign === null) {
+            return self::STALE_BEFORE_EFFECT;
+        }
+
+        /**
+         * @var object{
          *     action:string,
          *     state:string,
          *     requested_by_administrator_id:int|string|null,
          *     message_version:int|string|null,
          *     delivery_state:string,
-         *     telegram_user_id:int|string,
-         *     campaign_state:string,
-         *     current_message_version:int|string,
-         *     bot_id:int|string
+         *     telegram_user_id:int|string
          * }|null $row
          */
         $row = $connection->table('broadcast_recipient_messages as operation')
             ->join('broadcast_recipients as recipient', 'recipient.id', '=', 'operation.broadcast_recipient_id')
-            ->join('broadcast_campaigns as campaign', 'campaign.id', '=', 'recipient.broadcast_campaign_id')
             ->leftJoin('broadcast_message_versions as message', 'message.id', '=', 'operation.broadcast_message_version_id')
             ->where('operation.public_id', $reference)
+            ->where('recipient.broadcast_campaign_id', (int) $campaignId)
             ->first([
                 'operation.action',
                 'operation.state',
@@ -112,30 +127,27 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
                 'message.version as message_version',
                 'recipient.delivery_state',
                 'recipient.telegram_user_id',
-                'campaign.state as campaign_state',
-                'campaign.current_message_version',
-                'campaign.bot_id',
             ]);
 
         if ($row === null
             || ! in_array($row->action, ['send', 'retry'], true)
             || ! in_array($row->state, ['prepared', 'queued'], true)
-            || (int) ($row->message_version ?? 0) !== (int) $row->current_message_version
+            || (int) ($row->message_version ?? 0) !== (int) $campaign->current_message_version
             || (int) $row->telegram_user_id !== $recipientChatId
             || $action !== TelegramDeliveryAction::Send
             || $targetMessageId !== null
-            || ! hash_equals($this->runtime->botId(), (string) $row->bot_id)
+            || ! hash_equals($this->runtime->botId(), (string) $campaign->bot_id)
         ) {
             return self::STALE_BEFORE_EFFECT;
         }
 
-        if ($row->campaign_state === TelegramBroadcastCampaignState::Paused->value) {
+        if ($campaign->state === TelegramBroadcastCampaignState::Paused->value) {
             return self::PAUSED_BEFORE_EFFECT;
         }
-        if ($row->campaign_state === TelegramBroadcastCampaignState::Cancelled->value) {
+        if ($campaign->state === TelegramBroadcastCampaignState::Cancelled->value) {
             return self::CANCELLED_BEFORE_EFFECT;
         }
-        if ($row->campaign_state !== TelegramBroadcastCampaignState::Active->value
+        if ($campaign->state !== TelegramBroadcastCampaignState::Active->value
             || $row->delivery_state !== 'sending'
         ) {
             return self::STALE_BEFORE_EFFECT;

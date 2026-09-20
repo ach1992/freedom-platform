@@ -34,6 +34,19 @@ final readonly class TelegramSourceMessageInteractionGateway
             ], true);
     }
 
+    public function awaitingBroadcastSource(int $telegramAccountId): bool
+    {
+        if ($telegramAccountId < 1) {
+            return false;
+        }
+
+        $session = $this->sessions->activeForAccount($telegramAccountId);
+
+        return $session !== null
+            && $session->flow === TelegramNavigationEntryGateway::FLOW
+            && $session->state === self::BROADCAST_SOURCE_STATE;
+    }
+
     /** @requirement COM-001 ACL-001 ACL-002 SEC-002 SEC-003 DAT-002 DAT-003 QUA-001 QUA-004 */
     public function handle(TelegramSourceMessageInteraction $interaction): bool
     {

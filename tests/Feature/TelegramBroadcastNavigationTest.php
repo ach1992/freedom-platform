@@ -125,6 +125,123 @@ final class TelegramBroadcastNavigationTest extends TestCase
         self::assertSame(0, DB::table('broadcast_campaign_tests')->count());
     }
 
+    public function test_copy_source_kind_is_validated_from_update_and_safe_buttons_preserve_copy_metadata(): void
+    {
+        $telegramUserId = 920201;
+        $username = 'broadcast_copy';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(9220, $telegramUserId, $username, 'fa', '/start'));
+        $processor->process('123456789', 9220);
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $this->salesContentAdministrator((int) $account->user_id);
+
+        $this->accept($this->payload(9221, $telegramUserId, $username, 'fa', '/menu'));
+        $processor->process('123456789', 9221);
+        $admin = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(9222, $telegramUserId, $username, 'fa', $admin));
+        $processor->process('123456789', 9222);
+
+        $broadcast = $this->callbackToken('navigation.admin.broadcast', (int) $account->id);
+        $this->accept($this->callbackPayload(9223, $telegramUserId, $username, 'fa', $broadcast));
+        $processor->process('123456789', 9223);
+        $new = $this->callbackToken('navigation.admin.broadcast.new', (int) $account->id);
+        $this->accept($this->callbackPayload(9224, $telegramUserId, $username, 'fa', $new));
+        $processor->process('123456789', 9224);
+
+        $copy = $this->callbackToken('navigation.admin.broadcast.content.copy', (int) $account->id);
+        $this->accept($this->callbackPayload(9225, $telegramUserId, $username, 'fa', $copy));
+        $processor->process('123456789', 9225);
+        self::assertSame('admin_broadcast_source_kind', $this->sessionState((int) $account->id));
+
+        $photoKind = $this->callbackToken(
+            'navigation.admin.broadcast.source_kind',
+            (int) $account->id,
+            ['source_kind' => 'photo'],
+        );
+        $this->accept($this->callbackPayload(9226, $telegramUserId, $username, 'fa', $photoKind));
+        $processor->process('123456789', 9226);
+        self::assertSame('admin_broadcast_source_wait', $this->sessionState((int) $account->id));
+
+        $this->accept($this->sourcePayload(9227, $telegramUserId, $username, 'fa', [
+            'sticker' => [
+                'file_id' => 'sticker-file',
+                'file_unique_id' => 'sticker-unique',
+                'type' => 'regular',
+                'width' => 64,
+                'height' => 64,
+                'is_animated' => false,
+                'is_video' => false,
+            ],
+        ]));
+        $processor->process('123456789', 9227);
+        self::assertSame('admin_broadcast_source_wait', $this->sessionState((int) $account->id));
+        self::assertSame(0, DB::table('broadcast_campaigns')->count());
+
+        $this->accept($this->payload(9228, $telegramUserId, $username, 'fa', 'this is text, not a photo'));
+        $processor->process('123456789', 9228);
+        self::assertSame('admin_broadcast_source_wait', $this->sessionState((int) $account->id));
+        self::assertSame(0, DB::table('broadcast_campaigns')->count());
+
+        $this->accept($this->sourcePayload(9229, $telegramUserId, $username, 'fa', [
+            'photo' => [[
+                'file_id' => 'photo-file',
+                'file_unique_id' => 'photo-unique',
+                'width' => 640,
+                'height' => 480,
+                'file_size' => 12345,
+            ]],
+        ]));
+        $processor->process('123456789', 9229);
+        self::assertSame('admin_broadcast_audience', $this->sessionState((int) $account->id));
+
+        $campaign = DB::table('broadcast_campaigns')->first(['id', 'public_id']);
+        self::assertNotNull($campaign);
+        $first = DB::table('broadcast_message_versions')
+            ->where('broadcast_campaign_id', (int) $campaign->id)
+            ->where('version', 1)
+            ->first(['mode', 'source_kind', 'source_chat_id', 'source_message_id']);
+        self::assertNotNull($first);
+        self::assertSame('copy', $first->mode);
+        self::assertSame('photo', $first->source_kind);
+        self::assertSame($telegramUserId, (int) $first->source_chat_id);
+        self::assertSame(9229, (int) $first->source_message_id);
+
+        $audienceAll = $this->callbackToken('navigation.admin.broadcast.audience.all', (int) $account->id);
+        $this->accept($this->callbackPayload(9230, $telegramUserId, $username, 'fa', $audienceAll));
+        $processor->process('123456789', 9230);
+        self::assertSame('admin_broadcast_review', $this->sessionState((int) $account->id));
+
+        $buttons = $this->callbackToken('navigation.admin.broadcast.buttons', (int) $account->id);
+        $this->accept($this->callbackPayload(9231, $telegramUserId, $username, 'fa', $buttons));
+        $processor->process('123456789', 9231);
+        self::assertSame('admin_broadcast_buttons_input', $this->sessionState((int) $account->id));
+
+        $this->accept($this->payload(
+            9232,
+            $telegramUserId,
+            $username,
+            'fa',
+            'support_contact | پشتیبانی | https://t.me/example_support',
+        ));
+        $processor->process('123456789', 9232);
+        self::assertSame('admin_broadcast_review', $this->sessionState((int) $account->id));
+
+        $replacement = DB::table('broadcast_message_versions')
+            ->where('broadcast_campaign_id', (int) $campaign->id)
+            ->where('version', 2)
+            ->first(['mode', 'source_kind', 'source_chat_id', 'source_message_id', 'inline_keyboard_snapshot']);
+        self::assertNotNull($replacement);
+        self::assertSame('copy', $replacement->mode);
+        self::assertSame('photo', $replacement->source_kind);
+        self::assertSame($telegramUserId, (int) $replacement->source_chat_id);
+        self::assertSame(9229, (int) $replacement->source_message_id);
+        self::assertIsString($replacement->inline_keyboard_snapshot);
+    }
+
     public function test_broadcast_entry_disappears_immediately_after_role_revocation(): void
     {
         $telegramUserId = 920101;
@@ -229,6 +346,34 @@ final class TelegramBroadcastNavigationTest extends TestCase
         ];
     }
 
+    /**
+     * @param  array<string,mixed>  $content
+     * @return array<string,mixed>
+     */
+    private function sourcePayload(
+        int $updateId,
+        int $telegramUserId,
+        string $username,
+        string $languageCode,
+        array $content,
+    ): array {
+        return [
+            'update_id' => $updateId,
+            'message' => [
+                'message_id' => $updateId,
+                'date' => 1_700_000_000,
+                'from' => [
+                    'id' => $telegramUserId,
+                    'is_bot' => false,
+                    'username' => $username,
+                    'language_code' => $languageCode,
+                ],
+                'chat' => ['id' => $telegramUserId, 'type' => 'private'],
+                ...$content,
+            ],
+        ];
+    }
+
     /** @return array<string,mixed> */
     private function callbackPayload(
         int $updateId,
@@ -257,15 +402,20 @@ final class TelegramBroadcastNavigationTest extends TestCase
         ];
     }
 
-    private function callbackToken(string $action, int $telegramAccountId): string
+    /** @param array<string,mixed>|null $actionPayload */
+    private function callbackToken(string $action, int $telegramAccountId, ?array $actionPayload = null): string
     {
         $sessionId = DB::table('telegram_interaction_sessions')
             ->where('telegram_account_id', $telegramAccountId)
             ->value('id');
         self::assertIsNumeric($sessionId);
-        $callback = DB::table('telegram_interaction_callbacks')
+        $query = DB::table('telegram_interaction_callbacks')
             ->where('telegram_interaction_session_id', (int) $sessionId)
-            ->where('action', $action)
+            ->where('action', $action);
+        if ($actionPayload !== null) {
+            $query->where('action_payload', json_encode($actionPayload, JSON_THROW_ON_ERROR));
+        }
+        $callback = $query
             ->orderByDesc('id')
             ->first(['token_ciphertext']);
         self::assertNotNull($callback);
