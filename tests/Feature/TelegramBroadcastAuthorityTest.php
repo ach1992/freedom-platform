@@ -50,6 +50,11 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             $this->markTestSkipped('Telegram broadcast authority verification requires MariaDB/MySQL.');
         }
 
+        $telegramDeliveryAuthority = require database_path(
+            'migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php',
+        );
+        $telegramDeliveryAuthority->up();
+
         $this->seed();
         config([
             'app.url' => 'https://bot.example.test',
