@@ -11,6 +11,7 @@ use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
+use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -31,6 +32,8 @@ final readonly class TelegramAgentNavigationHandler
 
     private const STATE_UNAVAILABLE = 'agent_cooperation_unavailable';
 
+    private const STATE_REPORT = 'agent_report';
+
     private const ACTION_AGENT = 'navigation.agent';
 
     private const ACTION_SUBMIT = 'navigation.agent.submit';
@@ -38,6 +41,10 @@ final readonly class TelegramAgentNavigationHandler
     private const ACTION_PURCHASE = 'navigation.agent.purchase';
 
     private const ACTION_SERVICES = 'navigation.agent.services';
+
+    private const ACTION_REPORT = 'navigation.agent.report';
+
+    private const ACTION_REPORT_RANGE = 'navigation.agent.report_range';
 
     private const ACTION_CANONICAL_PURCHASE = 'navigation.purchase';
 
@@ -56,6 +63,7 @@ final readonly class TelegramAgentNavigationHandler
         private CustomerAccountSummaryService $customers,
         private AgentApplicationService $applications,
         private TelegramAgentPurchaseCount $purchaseCounts,
+        private TelegramAgentReport $reports,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
     ) {}
@@ -66,8 +74,14 @@ final readonly class TelegramAgentNavigationHandler
                 && $action->kind === TelegramInteractionActionKind::Callback
                 && $action->callbackAction === self::ACTION_AGENT)
             || ($action->kind === TelegramInteractionActionKind::Callback
-                && in_array($action->callbackAction, [self::ACTION_PURCHASE, self::ACTION_SERVICES, self::ACTION_CANONICAL_DISCOUNT], true))
-            || in_array($action->sessionState, [self::STATE_AGENT, self::STATE_UNAVAILABLE], true);
+                && in_array($action->callbackAction, [
+                    self::ACTION_PURCHASE,
+                    self::ACTION_SERVICES,
+                    self::ACTION_REPORT,
+                    self::ACTION_REPORT_RANGE,
+                    self::ACTION_CANONICAL_DISCOUNT,
+                ], true))
+            || in_array($action->sessionState, [self::STATE_AGENT, self::STATE_UNAVAILABLE, self::STATE_REPORT], true);
     }
 
     public function handle(TelegramInteractionAction $action): void
@@ -99,11 +113,53 @@ final readonly class TelegramAgentNavigationHandler
             return;
         }
 
+        if ($action->kind === TelegramInteractionActionKind::Callback
+            && $action->callbackAction === self::ACTION_REPORT) {
+            if ($action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram Agent report callback payload is invalid.');
+            }
+            $this->openReport($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Callback
+            && $action->callbackAction === self::ACTION_REPORT_RANGE) {
+            $this->changeReportPeriod($action, $this->reportPeriodFromPayload($action->callbackPayload));
+
+            return;
+        }
+
         if ($action->sessionState === TelegramNavigationEntryGateway::STATE) {
             if ($action->callbackPayload !== []) {
                 throw new RuntimeException('Telegram Agent home callback payload is invalid.');
             }
             $this->showAgent($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_REPORT) {
+            if ($action->kind === TelegramInteractionActionKind::Callback
+                && $action->callbackAction === self::ACTION_BACK
+                && $action->callbackPayload === []) {
+                $this->returnAgent($action);
+
+                return;
+            }
+            if ($action->kind === TelegramInteractionActionKind::Back) {
+                $this->returnAgent($action);
+
+                return;
+            }
+            if ($this->isEntryCommand($action->messageText)) {
+                $this->returnHome($action);
+
+                return;
+            }
+            if ($action->kind === TelegramInteractionActionKind::Callback) {
+                throw new RuntimeException('Telegram Agent report callback action is unsupported.');
+            }
 
             return;
         }
@@ -196,6 +252,60 @@ final readonly class TelegramAgentNavigationHandler
 
         $this->delegateToCanonicalNavigation($action, 'agent-services', self::ACTION_CANONICAL_SERVICES);
 
+    }
+
+    private function openReport(TelegramInteractionAction $action): void
+    {
+        if ($action->sessionState !== self::STATE_AGENT) {
+            throw new RuntimeException('Telegram Agent report callback state is unsupported.');
+        }
+
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        if (! $this->canViewAgentReport($summary)) {
+            $this->renderStatus($action, $action->sessionVersion, $summary, false);
+
+            return;
+        }
+
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_REPORT,
+                ['period' => TelegramAgentReport::PERIOD_THIRTY_DAYS],
+                'tg-agent-report-open:'.hash('sha256', $action->requestKey),
+            );
+        } catch (DomainException) {
+            return;
+        }
+        $this->assertActor($action, $session->userId);
+        $this->renderReport($action, $session->version, $summary, TelegramAgentReport::PERIOD_THIRTY_DAYS);
+    }
+
+    private function changeReportPeriod(TelegramInteractionAction $action, string $period): void
+    {
+        if ($action->sessionState !== self::STATE_REPORT) {
+            throw new RuntimeException('Telegram Agent report-range callback state is unsupported.');
+        }
+
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        if (! $this->canViewAgentReport($summary)) {
+            throw new AuthorizationException('Telegram Agent report access denied.');
+        }
+
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_REPORT,
+                ['period' => $period],
+                'tg-agent-report-range:'.hash('sha256', $action->requestKey.':'.$period),
+            );
+        } catch (DomainException) {
+            return;
+        }
+        $this->assertActor($action, $session->userId);
+        $this->renderReport($action, $session->version, $summary, $period);
     }
 
     private function handleCanonicalDiscount(TelegramInteractionAction $action): void
@@ -375,6 +485,24 @@ final readonly class TelegramAgentNavigationHandler
         $this->renderStatus($action, $session->version, $summary, true);
     }
 
+    private function returnAgent(TelegramInteractionAction $action): void
+    {
+        try {
+            $session = $this->sessions->transition(
+                $action->sessionPublicId,
+                $action->sessionVersion,
+                self::STATE_AGENT,
+                [],
+                'tg-agent-report-back:'.hash('sha256', $action->requestKey),
+            );
+        } catch (DomainException) {
+            return;
+        }
+        $this->assertActor($action, $session->userId);
+        $summary = $this->customers->forSelf($action->userId, $action->userId);
+        $this->renderStatus($action, $session->version, $summary, false);
+    }
+
     private function returnHome(TelegramInteractionAction $action): void
     {
         try {
@@ -466,6 +594,21 @@ final readonly class TelegramAgentNavigationHandler
             )];
         }
 
+        if ($this->canViewAgentReport($summary)) {
+            $report = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_REPORT,
+                [],
+                'tg-agent-report-button:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram_agent.report.button', $locale),
+                $report->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
         $this->appendBack($action, $sessionVersion, $rows, $locale);
 
         if ($summary->accountType === 'agent' && $summary->agentStatus !== null) {
@@ -491,6 +634,55 @@ final readonly class TelegramAgentNavigationHandler
             $action,
             $text,
             $submissionUnavailable ? 'status-unavailable' : 'status',
+            new TelegramInlineKeyboardSnapshot($rows),
+        );
+    }
+
+    private function renderReport(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        CustomerAccountSummary $summary,
+        string $period,
+    ): void {
+        $locale = $summary->locale === 'en' ? 'en' : 'fa';
+        $report = $this->reports->forSelf($action->userId, $action->userId, $period);
+        $recent = $report->recentPurchasedOfferingCodes === []
+            ? $this->translation('telegram_agent.not_available', $locale)
+            : implode(', ', $report->recentPurchasedOfferingCodes);
+        $text = $this->translation('telegram_agent.report.summary', $locale, [
+            'period' => $this->reportPeriodLabel($period, $locale),
+            'purchase_count' => (string) $report->purchaseCount,
+            'spending_irr' => number_format($report->grossSpendingIrr, 0, '.', ','),
+            'sales_count' => (string) $report->salesCount,
+            'sales_irr' => number_format($report->grossSalesIrr, 0, '.', ','),
+            'service_count' => (string) $report->purchasedServiceCount,
+            'recent' => $recent,
+        ]);
+
+        $periodButtons = [];
+        foreach (TelegramAgentReport::PERIODS as $candidate) {
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_REPORT_RANGE,
+                ['period' => $candidate],
+                'tg-agent-report-period:'.hash('sha256', $action->requestKey.':'.$candidate),
+            );
+            $periodButtons[] = new TelegramInlineCallbackButton(
+                $this->reportPeriodLabel($candidate, $locale),
+                $callback->publicId,
+                $candidate === $period ? TelegramInlineButtonStyle::Primary : null,
+            );
+        }
+        $rows = [
+            [$periodButtons[0], $periodButtons[1]],
+            [$periodButtons[2], $periodButtons[3]],
+        ];
+        $this->appendBack($action, $sessionVersion, $rows, $locale);
+        $this->queueConfidential(
+            $action,
+            $text,
+            'report-'.$period,
             new TelegramInlineKeyboardSnapshot($rows),
         );
     }
@@ -560,6 +752,32 @@ final readonly class TelegramAgentNavigationHandler
     {
         return $summary->accountType === 'agent'
             && $summary->agentStatus !== null;
+    }
+
+    private function canViewAgentReport(CustomerAccountSummary $summary): bool
+    {
+        return $summary->accountType === 'agent'
+            && $summary->agentStatus !== null;
+    }
+
+    /** @param array<string,int|string> $payload */
+    private function reportPeriodFromPayload(array $payload): string
+    {
+        if (count($payload) !== 1 || ! isset($payload['period']) || ! is_string($payload['period'])
+            || ! in_array($payload['period'], TelegramAgentReport::PERIODS, true)) {
+            throw new RuntimeException('Telegram Agent report period payload is invalid.');
+        }
+
+        return $payload['period'];
+    }
+
+    private function reportPeriodLabel(string $period, string $locale): string
+    {
+        if (! in_array($period, TelegramAgentReport::PERIODS, true)) {
+            throw new RuntimeException('Telegram Agent report period is invalid.');
+        }
+
+        return $this->translation('telegram_agent.report.period.'.$period, $locale);
     }
 
     private function applicationStateLabel(string $state, string $locale): string
