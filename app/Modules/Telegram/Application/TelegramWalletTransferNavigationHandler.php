@@ -719,7 +719,10 @@ final readonly class TelegramWalletTransferNavigationHandler
         ];
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function recipientState(array $payload): array
     {
         $keys = array_keys($payload);
@@ -738,7 +741,10 @@ final readonly class TelegramWalletTransferNavigationHandler
         return $payload;
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function preparingState(array $payload): array
     {
         if (! is_int($payload['amount_irr'] ?? null) || $payload['amount_irr'] < 1
@@ -752,7 +758,10 @@ final readonly class TelegramWalletTransferNavigationHandler
         return $payload;
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function confirmState(array $payload): array
     {
         foreach (['fee_irr', 'total_debit_irr', 'available_balance_irr'] as $key) {
@@ -771,7 +780,10 @@ final readonly class TelegramWalletTransferNavigationHandler
         return $payload;
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function submittingState(array $payload): array
     {
         if (! is_string($payload['submit_action'] ?? null)

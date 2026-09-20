@@ -537,7 +537,10 @@ final readonly class TelegramNowPaymentsNavigationHandler
         );
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function paymentMethodsStateFromPayload(array $payload): array
     {
         $keys = array_keys($payload);
@@ -564,7 +567,10 @@ final readonly class TelegramNowPaymentsNavigationHandler
         return $payload;
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function selectedStateFromPayload(array $payload): array
     {
         if (($payload['payment_method_code'] ?? null) !== 'nowpayments') {
@@ -578,7 +584,10 @@ final readonly class TelegramNowPaymentsNavigationHandler
         return $state;
     }
 
-    /** @param array<string,mixed> $payload @return array<string,mixed> */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
     private function activeStateFromPayload(array $payload): array
     {
         foreach ([
