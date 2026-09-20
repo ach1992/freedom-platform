@@ -71,6 +71,7 @@ return [
     ],
     'telegram_non_restricted_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramBroadcastTextDeliveryGateway.php',
+        'app/Modules/Telegram/Application/TelegramClientGuideNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
