@@ -443,18 +443,18 @@ final readonly class TelegramBroadcastOwnerTestService
                 [$state, $messageId, $resultCode] = $preEffectReview
                     ? ['failed', null, 'telegram_broadcast_owner_test_pre_effect_review_required']
                     : match ($operationState) {
-                    TelegramDeliveryOperationState::Prepared,
-                    TelegramDeliveryOperationState::Retryable => ['queued', null, $operation->result_code],
-                    TelegramDeliveryOperationState::Sending => ['sending', null, $operation->result_code],
-                    TelegramDeliveryOperationState::Succeeded => [
-                        'succeeded',
-                        $this->positiveNullableInt($operation->telegram_message_id, 'Broadcast Owner test message ID'),
-                        $operation->result_code,
-                    ],
-                    TelegramDeliveryOperationState::FailedFinal,
-                    TelegramDeliveryOperationState::ReviewRequired => ['failed', null, $operation->result_code],
-                    TelegramDeliveryOperationState::Uncertain => ['uncertain', null, $operation->result_code],
-                };
+                        TelegramDeliveryOperationState::Prepared,
+                        TelegramDeliveryOperationState::Retryable => ['queued', null, $operation->result_code],
+                        TelegramDeliveryOperationState::Sending => ['sending', null, $operation->result_code],
+                        TelegramDeliveryOperationState::Succeeded => [
+                            'succeeded',
+                            $this->positiveNullableInt($operation->telegram_message_id, 'Broadcast Owner test message ID'),
+                            $operation->result_code,
+                        ],
+                        TelegramDeliveryOperationState::FailedFinal,
+                        TelegramDeliveryOperationState::ReviewRequired => ['failed', null, $operation->result_code],
+                        TelegramDeliveryOperationState::Uncertain => ['uncertain', null, $operation->result_code],
+                    };
 
                 if ($state !== (string) $row->state
                     || $messageId !== ($row->telegram_message_id === null ? null : (int) $row->telegram_message_id)
