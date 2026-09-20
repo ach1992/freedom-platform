@@ -28,6 +28,7 @@ use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGen
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
 use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
+use App\Modules\Payments\NowPayments\Application\TelegramCustomerPurchaseNowPaymentsPaymentService;
 use App\Modules\Payments\NowPayments\Infrastructure\HttpNowPaymentsTransport;
 use App\Modules\Payments\Usdt\Application\TelegramCustomerPurchaseUsdtPaymentService;
 use App\Modules\Payments\Usdt\Application\TelegramManagedUsdtRateSettingsService;
@@ -52,6 +53,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCar
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseGiftCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseNowPaymentsPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
@@ -109,6 +111,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerPurchaseCardToCardPayment::class, TelegramCustomerPurchaseCardToCardPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseGiftCardPayment::class, TelegramCustomerPurchaseGiftCardPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseUsdtPayment::class, TelegramCustomerPurchaseUsdtPaymentService::class);
+        $this->app->bind(TelegramCustomerPurchaseNowPaymentsPayment::class, TelegramCustomerPurchaseNowPaymentsPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseZarinpalPayment::class, TelegramCustomerPurchaseZarinpalPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
         $this->app->bind(TelegramCustomerPurchaseWalletPayment::class, TelegramCustomerPurchaseWalletPaymentService::class);
