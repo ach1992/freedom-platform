@@ -200,6 +200,8 @@ final readonly class TelegramBroadcastDeliveryEffectGuard implements TelegramDel
             || $request->targetMessageId !== null
             || ! hash_equals($this->runtime->botId(), (string) $row->campaign_bot_id)
             || ! hash_equals((string) $row->campaign_bot_id, (string) $row->account_bot_id)
+            || (int) $row->owner_user_id !== (int) $row->account_user_id
+            || (bool) $row->account_is_bot
             || $row->owner_status !== 'active'
             || ! (bool) $row->owner_is_owner
         ) {
