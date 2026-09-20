@@ -399,7 +399,6 @@ final readonly class TelegramBroadcastDeliveryRunner
             $this->assertClaimRows($claim, $recipient, $message);
             /** @var object{id:int|string,delivery_state:string,claim_token_hash:?string} $recipient */
             /** @var object{id:int|string,broadcast_recipient_id:int|string,state:string,provider_boundary_started_at:?string} $message */
-
             if ((string) $campaign->state !== TelegramBroadcastCampaignState::Active->value) {
                 $this->releaseLockedClaim(
                     $connection,
