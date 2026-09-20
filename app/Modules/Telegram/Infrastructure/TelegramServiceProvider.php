@@ -17,6 +17,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryEffectGuard;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
@@ -167,6 +168,10 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramWalletTransferNavigationHandler::class);
         $this->app->singleton(TelegramNowPaymentsNavigationHandler::class);
+        $this->app->singleton(
+            TelegramNowPaymentsNavigationResolver::class,
+            ContainerTelegramNowPaymentsNavigationResolver::class,
+        );
         $this->app->singleton(
             TelegramBroadcastNavigationResolver::class,
             ContainerTelegramBroadcastNavigationResolver::class,

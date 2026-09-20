@@ -44,7 +44,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
         private TelegramNavigationHandler $navigation,
     ) {}
 
-    public function supports(TelegramInteractionAction $action): bool
+    public static function supportsAction(TelegramInteractionAction $action): bool
     {
         if (in_array($action->sessionState, [
             self::STATE_PREPARING,
@@ -59,6 +59,11 @@ final readonly class TelegramNowPaymentsNavigationHandler
             && $action->kind === TelegramInteractionActionKind::Callback
             && $action->callbackAction === self::ACTION_PAYMENT_METHOD_SELECT
             && ($action->callbackPayload['method_code'] ?? null) === 'nowpayments';
+    }
+
+    public function supports(TelegramInteractionAction $action): bool
+    {
+        return self::supportsAction($action);
     }
 
     public function handle(TelegramInteractionAction $action): void
