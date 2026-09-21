@@ -273,8 +273,7 @@ final readonly class TelegramWalletTransferNavigationHandler
         int $sessionVersion,
         array $state,
         bool $initialAttempt = false,
-    ): void
-    {
+    ): void {
         try {
             $receipt = $this->transfers->prepareForSelf(
                 $action->userId,
