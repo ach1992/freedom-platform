@@ -13,14 +13,20 @@ return new class extends Migration
      */
     public function up(): void
     {
-        DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
-        $this->createConflictAwareNowPaymentsAuthorityGuard();
+        $legacyConflicts = $this->preflightLegacyTerminalProviderFinishedConflicts();
 
+        // Install the cross-method creation fence first. It recognizes both the
+        // normalized pending-manual state and exact legacy conflict evidence.
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_insert_guard');
         $this->createConflictAwarePaymentIntentInsertGuard();
 
+        DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
+        $this->createConflictAwareNowPaymentsAuthorityGuard();
+
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_update_guard');
         $this->createConflictAwarePaymentIntentGuard();
+
+        $this->normalizeLegacyTerminalProviderFinishedConflicts($legacyConflicts);
     }
 
     public function down(): void
@@ -33,7 +39,7 @@ return new class extends Migration
             ])
             ->exists()) {
             throw new RuntimeException(
-                'Cannot roll back terminal NOWPayments conflict hardening after reconciliation evidence exists.',
+                'Cannot roll back terminal NOWPayments conflict hardening while terminal-conflict reconciliation evidence exists.',
             );
         }
 
@@ -45,6 +51,250 @@ return new class extends Migration
 
         DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
         $this->createPriorNowPaymentsAuthorityGuard();
+    }
+
+    /**
+     * Discover only conflict evidence that is exact enough to normalize without
+     * creating any provider, settlement, Order or promotion effect. Ambiguous
+     * legacy evidence aborts before any effective trigger replacement.
+     *
+     * @return list<array{
+     *     authority_id:int,
+     *     payment_intent_id:int,
+     *     finished_observation_id:int,
+     *     finished_observed_at:string,
+     *     correlation_id:string,
+     *     contradictory_observation:object|null
+     * }>
+     */
+    private function preflightLegacyTerminalProviderFinishedConflicts(): array
+    {
+        $authorityIds = DB::table('nowpayments_reconciliation_findings')
+            ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
+            ->where('severity', 'critical')
+            ->where('provider_status', 'finished')
+            ->distinct()
+            ->orderBy('nowpayments_payment_authority_id')
+            ->pluck('nowpayments_payment_authority_id');
+
+        $conflicts = [];
+        foreach ($authorityIds as $authorityIdValue) {
+            $authorityId = (int) $authorityIdValue;
+            $authority = DB::table('nowpayments_payment_authorities as authority')
+                ->join('payment_intents as intent', 'intent.id', '=', 'authority.payment_intent_id')
+                ->where('authority.id', $authorityId)
+                ->first([
+                    'authority.id as authority_id',
+                    'authority.payment_intent_id',
+                    'authority.provider_payment_id',
+                    'authority.provider_status',
+                    'authority.state as authority_state',
+                    'intent.purpose as intent_purpose',
+                    'intent.provider_code as intent_provider_code',
+                    'intent.payment_method_code as intent_payment_method_code',
+                    'intent.state as intent_state',
+                ]);
+            if ($authority === null
+                || $authority->provider_payment_id === null
+                || $authority->intent_purpose !== 'purchase'
+                || $authority->intent_provider_code !== 'nowpayments'
+                || $authority->intent_payment_method_code !== 'nowpayments') {
+                throw new RuntimeException(
+                    'Legacy NOWPayments terminal conflict does not resolve to one exact purchase authority.',
+                );
+            }
+
+            $findings = DB::table('nowpayments_reconciliation_findings')
+                ->where('nowpayments_payment_authority_id', $authorityId)
+                ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
+                ->where('severity', 'critical')
+                ->where('provider_status', 'finished')
+                ->orderBy('id')
+                ->get(['id', 'evidence_hash', 'correlation_id']);
+            if ($findings->isEmpty()) {
+                throw new RuntimeException('Legacy NOWPayments terminal conflict finding disappeared during preflight.');
+            }
+
+            $finishedObservation = null;
+            foreach ($findings as $finding) {
+                $observation = DB::table('nowpayments_payment_observations')
+                    ->where('nowpayments_payment_authority_id', $authorityId)
+                    ->where('event_type', 'status_lookup')
+                    ->where('provider_payment_id', (string) $authority->provider_payment_id)
+                    ->where('provider_status', 'finished')
+                    ->where('response_hash', (string) $finding->evidence_hash)
+                    ->orderBy('id')
+                    ->first(['id', 'occurred_at', 'correlation_id']);
+                if ($observation === null) {
+                    throw new RuntimeException(
+                        'Legacy NOWPayments terminal conflict lacks its exact finished status observation.',
+                    );
+                }
+                if ($finishedObservation === null || (int) $observation->id < (int) $finishedObservation->id) {
+                    $finishedObservation = $observation;
+                }
+            }
+            if ($finishedObservation === null) {
+                throw new RuntimeException('Legacy NOWPayments terminal conflict finished observation is unavailable.');
+            }
+
+            $settlementCount = DB::table('purchase_settlements')
+                ->where('payment_intent_id', (int) $authority->payment_intent_id)
+                ->count();
+            if ($settlementCount !== 0) {
+                $resolvedIntentStates = ['captured', 'refund_pending', 'partially_refunded', 'refunded'];
+                if ($settlementCount === 1
+                    && $authority->authority_state === 'finished'
+                    && in_array($authority->intent_state, $resolvedIntentStates, true)) {
+                    continue;
+                }
+
+                throw new RuntimeException(
+                    'Legacy NOWPayments terminal conflict has ambiguous settlement state and cannot be normalized automatically.',
+                );
+            }
+
+            if (! in_array($authority->authority_state, ['failed', 'expired', 'manual_review'], true)
+                || ! in_array($authority->intent_state, ['failed', 'expired', 'pending_manual_review'], true)) {
+                throw new RuntimeException(
+                    'Legacy NOWPayments terminal conflict has an unsupported unresolved lifecycle shape.',
+                );
+            }
+            if ($authority->authority_state === 'manual_review' && $authority->provider_status !== 'finished') {
+                throw new RuntimeException(
+                    'Legacy NOWPayments terminal conflict is partially normalized without retained provider-finished authority.',
+                );
+            }
+
+            $contradictoryObservation = DB::table('nowpayments_payment_observations')
+                ->where('nowpayments_payment_authority_id', $authorityId)
+                ->where('event_type', 'status_lookup')
+                ->where('id', '>', (int) $finishedObservation->id)
+                ->where(function ($query): void {
+                    $query->whereNull('provider_status')
+                        ->orWhere('provider_status', '<>', 'finished');
+                })
+                ->orderBy('id')
+                ->first(['id', 'provider_status', 'response_hash', 'occurred_at', 'correlation_id']);
+
+            $conflicts[] = [
+                'authority_id' => $authorityId,
+                'payment_intent_id' => (int) $authority->payment_intent_id,
+                'finished_observation_id' => (int) $finishedObservation->id,
+                'finished_observed_at' => (string) $finishedObservation->occurred_at,
+                'correlation_id' => (string) $finishedObservation->correlation_id,
+                'contradictory_observation' => $contradictoryObservation,
+            ];
+        }
+
+        return $conflicts;
+    }
+
+    /**
+     * @param list<array{
+     *     authority_id:int,
+     *     payment_intent_id:int,
+     *     finished_observation_id:int,
+     *     finished_observed_at:string,
+     *     correlation_id:string,
+     *     contradictory_observation:object|null
+     * }> $conflicts
+     */
+    private function normalizeLegacyTerminalProviderFinishedConflicts(array $conflicts): void
+    {
+        if ($conflicts === []) {
+            return;
+        }
+
+        DB::connection()->transaction(function () use ($conflicts): void {
+            foreach ($conflicts as $conflict) {
+                $authority = DB::table('nowpayments_payment_authorities')
+                    ->where('id', $conflict['authority_id'])
+                    ->lockForUpdate()
+                    ->first(['id', 'payment_intent_id', 'state', 'provider_status']);
+                $intent = DB::table('payment_intents')
+                    ->where('id', $conflict['payment_intent_id'])
+                    ->lockForUpdate()
+                    ->first(['id', 'state']);
+                if ($authority === null || $intent === null
+                    || (int) $authority->payment_intent_id !== $conflict['payment_intent_id']) {
+                    throw new RuntimeException('Legacy NOWPayments terminal conflict changed during normalization.');
+                }
+                if (DB::table('purchase_settlements')
+                    ->where('payment_intent_id', $conflict['payment_intent_id'])
+                    ->exists()) {
+                    throw new RuntimeException(
+                        'Legacy NOWPayments terminal conflict acquired settlement during normalization.',
+                    );
+                }
+
+                if (in_array($authority->state, ['failed', 'expired'], true)) {
+                    $updated = DB::table('nowpayments_payment_authorities')
+                        ->where('id', $conflict['authority_id'])
+                        ->where('state', (string) $authority->state)
+                        ->update([
+                            'state' => 'manual_review',
+                            'provider_status' => 'finished',
+                            'last_status_at' => $conflict['finished_observed_at'],
+                            'updated_at' => $this->timestamp(),
+                        ]);
+                    if ($updated !== 1) {
+                        throw new RuntimeException('Legacy NOWPayments authority changed during normalization.');
+                    }
+                } elseif ($authority->state !== 'manual_review' || $authority->provider_status !== 'finished') {
+                    throw new RuntimeException('Legacy NOWPayments authority is no longer normalizable.');
+                }
+
+                if (in_array($intent->state, ['failed', 'expired'], true)) {
+                    $fromState = (string) $intent->state;
+                    $updated = DB::table('payment_intents')
+                        ->where('id', $conflict['payment_intent_id'])
+                        ->where('state', $fromState)
+                        ->update([
+                            'state' => 'pending_manual_review',
+                            'updated_at' => $this->timestamp(),
+                        ]);
+                    if ($updated !== 1) {
+                        throw new RuntimeException('Legacy NOWPayments PaymentIntent changed during normalization.');
+                    }
+
+                    DB::table('payment_intent_state_histories')->insert([
+                        'payment_intent_id' => $conflict['payment_intent_id'],
+                        'from_state' => $fromState,
+                        'to_state' => 'pending_manual_review',
+                        'reason_code' => 'nowpayments_legacy_terminal_finished_conflict',
+                        'correlation_id' => $conflict['correlation_id'],
+                        'created_at' => $this->timestamp(),
+                    ]);
+                } elseif ($intent->state !== 'pending_manual_review') {
+                    throw new RuntimeException('Legacy NOWPayments PaymentIntent is no longer normalizable.');
+                }
+
+                $observation = $conflict['contradictory_observation'];
+                if ($observation !== null) {
+                    $responseHash = strtolower((string) $observation->response_hash);
+                    $findingKey = 'nowpayments:'.$conflict['authority_id']
+                        .':terminal_finished_conflict_status_changed:'.substr($responseHash, 0, 32);
+
+                    DB::table('nowpayments_reconciliation_findings')->insertOrIgnore([
+                        'nowpayments_payment_authority_id' => $conflict['authority_id'],
+                        'finding_key' => $findingKey,
+                        'code' => 'terminal_finished_conflict_status_changed',
+                        'severity' => 'critical',
+                        'provider_status' => $observation->provider_status,
+                        'evidence_hash' => $responseHash,
+                        'detected_at' => (string) $observation->occurred_at,
+                        'correlation_id' => (string) $observation->correlation_id,
+                        'created_at' => $this->timestamp(),
+                    ]);
+                }
+            }
+        }, 3);
+    }
+
+    private function timestamp(): string
+    {
+        return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
     }
 
     private function createConflictAwareNowPaymentsAuthorityGuard(): void
@@ -233,7 +483,33 @@ BEGIN
         WHERE existing_intent.purpose = 'purchase'
           AND existing_intent.source_quote_id = NEW.source_quote_id
           AND existing_intent.user_id = NEW.user_id
-          AND existing_intent.state = 'pending_manual_review';
+          AND (
+              existing_intent.state = 'pending_manual_review'
+              OR EXISTS (
+                  SELECT 1
+                  FROM nowpayments_payment_authorities existing_authority
+                  INNER JOIN nowpayments_reconciliation_findings conflict_finding
+                      ON conflict_finding.nowpayments_payment_authority_id = existing_authority.id
+                  INNER JOIN nowpayments_payment_observations conflict_observation
+                      ON conflict_observation.nowpayments_payment_authority_id = existing_authority.id
+                     AND conflict_observation.event_type = 'status_lookup'
+                     AND conflict_observation.provider_payment_id = existing_authority.provider_payment_id
+                     AND conflict_observation.provider_status = 'finished'
+                     AND conflict_observation.response_hash = conflict_finding.evidence_hash
+                  WHERE existing_authority.payment_intent_id = existing_intent.id
+                    AND existing_intent.provider_code = 'nowpayments'
+                    AND existing_intent.payment_method_code = 'nowpayments'
+                    AND existing_authority.state IN ('failed','expired','manual_review')
+                    AND conflict_finding.code = 'terminal_local_state_conflicts_with_finished_provider'
+                    AND conflict_finding.severity = 'critical'
+                    AND conflict_finding.provider_status = 'finished'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM purchase_settlements settlement_row
+                        WHERE settlement_row.payment_intent_id = existing_intent.id
+                    )
+              )
+          );
         IF unresolved_purchase_manual_review_count <> 0 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent is locked by unresolved payment reconciliation.';
         END IF;
