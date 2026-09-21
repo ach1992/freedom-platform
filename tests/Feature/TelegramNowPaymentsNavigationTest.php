@@ -38,7 +38,10 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
     /** @var array<string,TelegramCustomerPurchaseNowPaymentsReceipt> */
     private array $refreshed = [];
 
-    public function __construct(private readonly string $initialState = 'created') {}
+    public function __construct(
+        private readonly string $initialState = 'created',
+        private readonly string $refreshState = 'finished',
+    ) {}
 
     public function prepareForSelf(
         int $actorUserId,
@@ -107,21 +110,23 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
         }
 
         $this->refreshEffects++;
+        $finished = $this->refreshState === 'finished';
+        $created = $this->refreshState === 'created';
         $receipt = new TelegramCustomerPurchaseNowPaymentsReceipt(
             str_pad('01R', 26, '0'),
             $paymentIntentPublicId,
-            'finished',
+            $this->refreshState,
             'manual',
             '900000.00000000',
             '1.38888889',
             'usdtbsc',
-            '900001',
-            'finished',
-            '1.388888890000000000',
-            '0x'.str_repeat('1', 40),
-            str_pad('01S', 26, '0'),
+            $created || $finished ? '900001' : null,
+            $finished ? 'finished' : ($created ? 'waiting' : null),
+            $created || $finished ? '1.388888890000000000' : null,
+            $created || $finished ? '0x'.str_repeat('1', 40) : null,
+            $finished ? str_pad('01S', 26, '0') : null,
             false,
-            false,
+            in_array($this->refreshState, ['initiating', 'uncertain', 'manual_review'], true),
         );
         $this->refreshed[$key] = $receipt;
 
@@ -288,7 +293,7 @@ final readonly class TelegramNowPaymentsNavigationPaymentMethods implements Tele
             $quotePublicId,
             $quoteConfigurationHash,
             str_repeat('b', 64),
-            ['nowpayments'],
+            ['nowpayments', 'zarinpal'],
             true,
         );
     }
@@ -374,10 +379,10 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
         self::assertSame(1, DB::table('processed_telegram_updates')->where('update_id', 9710)->count());
     }
 
-    public function test_uncertain_selection_does_not_reprepare_on_later_input_and_back_is_safe(): void
+    public function test_live_uncertain_authority_cannot_be_abandoned_by_navigation_cancel_or_restart_commands(): void
     {
-        $payment = new TelegramNowPaymentsNavigationPayment('uncertain');
-        [$processor, $sessionId, $telegramUserId, $accountId] = $this->prepareSelection(
+        $payment = new TelegramNowPaymentsNavigationPayment('uncertain', 'uncertain');
+        [$processor, $sessionId, $telegramUserId] = $this->prepareSelection(
             $payment,
             9980,
             9800,
@@ -391,20 +396,46 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
         self::assertSame(1, $payment->prepareEffects);
         self::assertStringContainsString('پرداخت دوم', $this->latestConfidentialPresentation());
 
+        $payload = json_decode(
+            (string) DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('payload'),
+            true,
+            16,
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertTrue($payload['cancel_locked'] ?? false);
+        self::assertTrue($payload['expiry_locked'] ?? false);
+
         $this->accept($this->payload(9810, $telegramUserId, 'nowpayments_uncertain', 'fa', 'status?'));
         $processor->process('123456789', 9810);
         self::assertSame(1, $payment->prepareEffects);
         self::assertSame(0, $payment->refreshEffects);
 
-        $back = $this->callbackToken('navigation.back', $accountId);
-        $this->accept($this->callbackPayload(9811, $telegramUserId, 'nowpayments_uncertain', 'fa', $back));
-        $processor->process('123456789', 9811);
+        foreach ([
+            9811 => '/back',
+            9812 => '/start',
+            9813 => '/menu',
+        ] as $updateId => $command) {
+            $this->accept($this->payload($updateId, $telegramUserId, 'nowpayments_uncertain', 'fa', $command));
+            $processor->process('123456789', $updateId);
+            self::assertSame(
+                'purchase_nowpayments_pending',
+                DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'),
+            );
+            self::assertSame('active', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('status'));
+            self::assertSame(1, $payment->prepareEffects);
+            self::assertSame(1, $payment->refreshEffects);
+        }
+
+        $this->accept($this->payload(9814, $telegramUserId, 'nowpayments_uncertain', 'fa', '/cancel'));
+        $processor->process('123456789', 9814);
         self::assertSame(
-            'purchase_payment_methods',
+            'purchase_nowpayments_pending',
             DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'),
         );
+        self::assertSame('active', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('status'));
         self::assertSame(1, $payment->prepareEffects);
-        self::assertSame(0, $payment->refreshEffects);
+        self::assertSame(1, $payment->refreshEffects);
+        self::assertSame(3, $payment->refreshCalls);
     }
 
     /**
