@@ -581,6 +581,27 @@ final readonly class NowPaymentsPaymentService
             }
             if (in_array($state, [NowPaymentsAuthorityState::Failed, NowPaymentsAuthorityState::Expired], true)
                 && $result->paymentStatus === 'finished') {
+                $terminalState = $state;
+                $updated = $connection->table('nowpayments_payment_authorities')
+                    ->where('id', (int) $current->id)
+                    ->where('state', $terminalState->value)
+                    ->update([
+                        'state' => NowPaymentsAuthorityState::ManualReview->value,
+                        'provider_status' => 'finished',
+                        'provider_actually_paid' => $result->actuallyPaid,
+                        'last_status_at' => $this->databaseDateTime($result->updatedAt ?? $this->clock->now()),
+                        'updated_at' => $this->timestamp(),
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('NOWPayments terminal provider-finished conflict changed concurrently.');
+                }
+
+                $current = $this->requiredAuthority($connection, (int) $current->id, true);
+                $this->reopenIntentForTerminalProviderFinishedConflict(
+                    $connection,
+                    (int) $current->payment_intent_id,
+                    $correlationId,
+                );
                 $this->finding(
                     $connection,
                     $current,
@@ -1048,6 +1069,51 @@ final readonly class NowPaymentsPaymentService
                 $correlationId,
             );
         }
+    }
+
+    /**
+     * Reopen only the same purchase intent after an identity-validated provider-finished
+     * result contradicts a previously terminal NOWPayments authority. The database guard
+     * independently requires the matching manual-review NOWPayments authority and no
+     * settlement, so ordinary failed/expired intents remain terminal.
+     */
+    private function reopenIntentForTerminalProviderFinishedConflict(
+        Connection $connection,
+        int $intentId,
+        string $correlationId,
+    ): void {
+        $state = $this->intentStateForId($connection, $intentId);
+        if ($state === PaymentIntentState::PendingManualReview) {
+            return;
+        }
+        if (! in_array($state, [PaymentIntentState::Failed, PaymentIntentState::Expired], true)) {
+            throw new RuntimeException('NOWPayments terminal provider-finished conflict PaymentIntent is not terminal.');
+        }
+
+        $updated = $connection->table('payment_intents')
+            ->where('id', $intentId)
+            ->where('state', $state->value)
+            ->update([
+                'state' => PaymentIntentState::PendingManualReview->value,
+                'updated_at' => $this->timestamp(),
+            ]);
+        if ($updated !== 1) {
+            $actual = $connection->table('payment_intents')->where('id', $intentId)->value('state');
+            if ($actual === PaymentIntentState::PendingManualReview->value) {
+                return;
+            }
+
+            throw new RuntimeException('NOWPayments terminal provider-finished conflict PaymentIntent changed concurrently.');
+        }
+
+        $connection->table('payment_intent_state_histories')->insert([
+            'payment_intent_id' => $intentId,
+            'from_state' => $state->value,
+            'to_state' => PaymentIntentState::PendingManualReview->value,
+            'reason_code' => 'nowpayments_terminal_provider_finished_conflict',
+            'correlation_id' => $correlationId,
+            'created_at' => $this->timestamp(),
+        ]);
     }
 
     private function ensureIntentFailed(Connection $connection, int $intentId, string $correlationId, string $reason): void

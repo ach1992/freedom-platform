@@ -450,6 +450,121 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
     }
 
+    public function test_terminal_provider_finished_conflict_reopens_same_authority_fail_closed_and_reconciles_once(): void
+    {
+        foreach (['failed', 'expired'] as $terminalStatus) {
+            $this->transport = new FakeNowPaymentsTransport;
+            [$userId, $quote, $decision, $opening] = $this->purchaseContext(
+                'terminal-finished-conflict-'.$terminalStatus,
+                10_000_000,
+                true,
+            );
+            $service = $this->service();
+            $created = $service->initiatePurchase(
+                $userId,
+                $quote->quotePublicId,
+                $decision->publicId,
+                $this->correlation('terminal-conflict-create-'.$terminalStatus),
+            );
+            self::assertSame(NowPaymentsAuthorityState::Created, $created->state);
+            self::assertSame(1, $this->transport->createCalls);
+
+            $this->transport->statusValue = $terminalStatus;
+            $terminal = $service->refresh(
+                $created->paymentIntentPublicId,
+                $this->correlation('terminal-conflict-'.$terminalStatus),
+            );
+            self::assertSame($terminalStatus, $terminal->state->value);
+            self::assertSame(
+                $terminalStatus,
+                DB::table('payment_intents')
+                    ->where('public_id', $created->paymentIntentPublicId)
+                    ->value('state'),
+            );
+            self::assertNull($terminal->settlementPublicId);
+
+            $this->transport->statusValue = 'finished';
+            $this->transport->actuallyPaid = $this->transport->payAmount;
+            $conflict = $service->refresh(
+                $created->paymentIntentPublicId,
+                $this->correlation('terminal-conflict-finished-'.$terminalStatus),
+            );
+
+            self::assertSame(NowPaymentsAuthorityState::ManualReview, $conflict->state);
+            self::assertSame($created->authorityPublicId, $conflict->authorityPublicId);
+            self::assertSame($created->providerPaymentId, $conflict->providerPaymentId);
+            self::assertSame('finished', $conflict->providerStatus);
+            self::assertNull($conflict->settlementPublicId);
+            self::assertTrue($conflict->manualReviewRequired);
+            self::assertSame(1, $this->transport->createCalls);
+            self::assertSame(
+                'pending_manual_review',
+                DB::table('payment_intents')
+                    ->where('public_id', $created->paymentIntentPublicId)
+                    ->value('state'),
+            );
+            self::assertSame(
+                'awaiting_payment',
+                DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'),
+            );
+            self::assertSame(
+                1,
+                DB::table('nowpayments_reconciliation_findings')
+                    ->where('nowpayments_payment_authority_id', $created->authorityId)
+                    ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
+                    ->where('severity', 'critical')
+                    ->count(),
+            );
+            self::assertSame(
+                1,
+                DB::table('payment_intent_state_histories')
+                    ->join('payment_intents', 'payment_intents.id', '=', 'payment_intent_state_histories.payment_intent_id')
+                    ->where('payment_intents.public_id', $created->paymentIntentPublicId)
+                    ->where('payment_intent_state_histories.from_state', $terminalStatus)
+                    ->where('payment_intent_state_histories.to_state', 'pending_manual_review')
+                    ->where('payment_intent_state_histories.reason_code', 'nowpayments_terminal_provider_finished_conflict')
+                    ->count(),
+            );
+
+            $reconciled = $service->refresh(
+                $created->paymentIntentPublicId,
+                $this->correlation('terminal-conflict-reconcile-'.$terminalStatus),
+            );
+            self::assertSame(NowPaymentsAuthorityState::Finished, $reconciled->state);
+            self::assertNotNull($reconciled->settlementPublicId);
+            self::assertSame($created->authorityPublicId, $reconciled->authorityPublicId);
+            self::assertSame(1, $this->transport->createCalls);
+            $intentId = DB::table('payment_intents')
+                ->where('public_id', $created->paymentIntentPublicId)
+                ->value('id');
+            self::assertNotNull($intentId);
+            self::assertSame(
+                1,
+                DB::table('purchase_settlements')
+                    ->where('payment_intent_id', (int) $intentId)
+                    ->count(),
+            );
+            self::assertSame(
+                'paid',
+                DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'),
+            );
+
+            $replay = $service->refresh(
+                $created->paymentIntentPublicId,
+                $this->correlation('terminal-conflict-replay-'.$terminalStatus),
+            );
+            self::assertSame($reconciled->settlementPublicId, $replay->settlementPublicId);
+            self::assertSame(1, $this->transport->createCalls);
+            self::assertSame(
+                1,
+                DB::table('purchase_settlements')
+                    ->where('payment_intent_id', (int) $intentId)
+                    ->count(),
+            );
+            self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
+        }
+    }
+
     public function test_telegram_persisted_claim_replays_live_provider_authority_after_quote_expiry(): void
     {
         [$userId, $quote, $decision, $opening] = $this->purchaseContext(

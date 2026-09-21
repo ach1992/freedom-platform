@@ -53,6 +53,7 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
         private readonly string $initialState = 'created',
         private readonly string $refreshState = 'finished',
         private readonly bool $finishedSettlementAvailable = true,
+        private readonly bool $manualReviewProviderFinished = false,
     ) {}
 
     public function claimForSelf(
@@ -197,6 +198,7 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
         $this->refreshEffects++;
         $finished = $this->refreshState === 'finished';
         $created = $this->refreshState === 'created';
+        $providerFinished = $finished || ($this->refreshState === 'manual_review' && $this->manualReviewProviderFinished);
         $receipt = new TelegramCustomerPurchaseNowPaymentsReceipt(
             str_pad('01R', 26, '0'),
             $paymentIntentPublicId,
@@ -205,10 +207,10 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
             '900000.00000000',
             '1.38888889',
             'usdtbsc',
-            $created || $finished ? '900001' : null,
-            $finished ? 'finished' : ($created ? 'waiting' : null),
-            $created || $finished ? '1.388888890000000000' : null,
-            $created || $finished ? '0x'.str_repeat('1', 40) : null,
+            $created || $providerFinished ? '900001' : null,
+            $providerFinished ? 'finished' : ($created ? 'waiting' : null),
+            $created || $providerFinished ? '1.388888890000000000' : null,
+            $created || $providerFinished ? '0x'.str_repeat('1', 40) : null,
             $finished && $this->finishedSettlementAvailable ? str_pad('01S', 26, '0') : null,
             false,
             in_array($this->refreshState, ['initiating', 'uncertain', 'manual_review'], true),
@@ -753,6 +755,59 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
             DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'),
         );
         self::assertSame('active', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('status'));
+
+        $clock->advance('+1 day');
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('purchase_nowpayments_pending', $active->state);
+        self::assertSame('active', $active->status->value);
+        self::assertTrue($active->payload['cancel_locked'] ?? false);
+        self::assertTrue($active->payload['expiry_locked'] ?? false);
+    }
+
+    public function test_provider_finished_terminal_conflict_manual_review_remains_locked_from_payment_methods(): void
+    {
+        $clock = new TelegramNowPaymentsNavigationClock(new DateTimeImmutable('now', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
+        $payment = new TelegramNowPaymentsNavigationPayment('created', 'manual_review', false, true);
+        [$processor, $sessionId, $telegramUserId, $accountId] = $this->prepareSelection(
+            $payment,
+            9996,
+            9870,
+            'nowpayments_terminal_conflict',
+        );
+
+        $this->accept($this->payload(9880, $telegramUserId, 'nowpayments_terminal_conflict', 'fa', '/menu'));
+        $processor->process('123456789', 9880);
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('id', $sessionId)
+            ->first(['state', 'status', 'payload']);
+        self::assertNotNull($session);
+        $payload = json_decode((string) $session->payload, true, 16, JSON_THROW_ON_ERROR);
+        self::assertSame('purchase_nowpayments_pending', (string) $session->state);
+        self::assertSame('active', (string) $session->status);
+        self::assertSame('manual_review', $payload['nowpayments_state'] ?? null);
+        self::assertSame('finished', $payload['nowpayments_provider_status'] ?? null);
+        self::assertNull($payload['nowpayments_settlement_public_id'] ?? null);
+        self::assertTrue($payload['cancel_locked'] ?? false);
+        self::assertTrue($payload['expiry_locked'] ?? false);
+        self::assertStringContainsString('پرداخت دوم', $this->latestConfidentialPresentation());
+
+        foreach ([
+            9881 => '/back',
+            9882 => '/start',
+            9883 => '/menu',
+            9884 => '/cancel',
+        ] as $updateId => $command) {
+            $this->accept($this->payload($updateId, $telegramUserId, 'nowpayments_terminal_conflict', 'fa', $command));
+            $processor->process('123456789', $updateId);
+            self::assertSame(
+                'purchase_nowpayments_pending',
+                DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'),
+            );
+            self::assertSame('active', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('status'));
+        }
 
         $clock->advance('+1 day');
         $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
