@@ -232,20 +232,38 @@ final readonly class TelegramWalletTransferNavigationHandler
     private function resumePreparation(TelegramInteractionAction $action): void
     {
         $state = $this->preparingState($action->sessionPayload);
+        if (is_string($state['prepare_action'] ?? null)) {
+            $this->completePreparation($action, $action->sessionVersion, $state);
+
+            return;
+        }
+
+        $prepareAction = null;
         if ($this->isBackAction($action)) {
-            if ($this->cancelPreparedIfPresent($action, $state)) {
-                $this->returnAmountFromPreparation($action, $action->sessionVersion, $state, null);
+            $prepareAction = self::SUBMIT_CANCEL_AMOUNT;
+        } elseif ($this->isEntryCommand($action->messageText)) {
+            $prepareAction = self::SUBMIT_CANCEL_HOME;
+        }
+
+        if ($prepareAction !== null) {
+            $state['prepare_action'] = $prepareAction;
+            try {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $action->sessionVersion,
+                    self::STATE_PREPARING,
+                    $state,
+                    'tg-wallet-transfer-prepare-exit-claim:'.hash('sha256', $action->requestKey.':'.$prepareAction),
+                );
+            } catch (DomainException) {
+                return;
             }
+            $this->assertActor($action, $claim->userId);
+            $this->completePreparation($action, $claim->version, $state);
 
             return;
         }
-        if ($this->isEntryCommand($action->messageText)) {
-            if ($this->cancelPreparedIfPresent($action, $state)) {
-                $this->returnHome($action);
-            }
 
-            return;
-        }
         $this->completePreparation($action, $action->sessionVersion, $state);
     }
 
@@ -261,22 +279,50 @@ final readonly class TelegramWalletTransferNavigationHandler
                 $state['transfer_key'],
             );
         } catch (AuthorizationException) {
-            if ($this->cancelPreparedIfPresent($action, $state)) {
-                $this->returnHomeFromVersion($action, $sessionVersion);
-            }
+            $this->returnHomeFromVersion($action, $sessionVersion);
 
             return;
-        } catch (DomainException|RuntimeException) {
-            if ($this->cancelPreparedIfPresent($action, $state)) {
-                $this->returnAmountFromPreparation($action, $sessionVersion, $state, 'unavailable');
-            }
+        } catch (DomainException) {
+            if (is_string($state['prepare_action'] ?? null)) {
+                $this->finishPreparationExit($action, $sessionVersion, $state);
 
+                return;
+            }
+            $this->returnAmountFromPreparation($action, $sessionVersion, $state, 'unavailable');
+
+            return;
+        } catch (RuntimeException) {
+            // A projection/runtime failure can follow an accepted hold; keep the effect-locked state for replay.
             return;
         }
 
-        if ($receipt->status !== 'pending_confirmation'
-            || ! hash_equals($receipt->recipientPublicId, $state['recipient_public_id'])
+        if (! hash_equals($receipt->recipientPublicId, $state['recipient_public_id'])
             || $receipt->amountIrr !== $state['amount_irr']) {
+            throw new RuntimeException('Telegram wallet transfer preparation identity changed.');
+        }
+        if (is_string($state['prepare_action'] ?? null)) {
+            if ($receipt->status === 'pending_confirmation') {
+                try {
+                    $cancelled = $this->transfers->cancelForSelf(
+                        $action->userId,
+                        $action->userId,
+                        $state['transfer_key'],
+                        'telegram user cancelled transfer',
+                    );
+                } catch (DomainException|AuthorizationException|RuntimeException) {
+                    return;
+                }
+                if ($cancelled->status !== 'cancelled') {
+                    return;
+                }
+            } elseif ($receipt->status !== 'cancelled') {
+                return;
+            }
+            $this->finishPreparationExit($action, $sessionVersion, $state);
+
+            return;
+        }
+        if ($receipt->status !== 'pending_confirmation') {
             throw new RuntimeException('Telegram wallet transfer preparation identity changed.');
         }
 
@@ -585,7 +631,13 @@ final readonly class TelegramWalletTransferNavigationHandler
         array $state,
         ?string $error,
     ): void {
-        unset($state['amount_irr'], $state['transfer_key'], $state['cancel_locked'], $state['expiry_locked']);
+        unset(
+            $state['amount_irr'],
+            $state['transfer_key'],
+            $state['prepare_action'],
+            $state['cancel_locked'],
+            $state['expiry_locked'],
+        );
         try {
             $session = $this->sessions->transition(
                 $action->sessionPublicId,
@@ -631,24 +683,23 @@ final readonly class TelegramWalletTransferNavigationHandler
     }
 
     /** @param array<string,mixed> $state */
-    private function cancelPreparedIfPresent(TelegramInteractionAction $action, array $state): bool
-    {
-        try {
-            $receipt = $this->transfers->cancelForSelf(
-                $action->userId,
-                $action->userId,
-                $state['transfer_key'],
-                'telegram user cancelled transfer',
-            );
+    private function finishPreparationExit(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        array $state,
+    ): void {
+        if (($state['prepare_action'] ?? null) === self::SUBMIT_CANCEL_AMOUNT) {
+            $this->returnAmountFromPreparation($action, $sessionVersion, $state, null);
 
-            return $receipt->status === 'cancelled';
-        } catch (AuthorizationException) {
-            // No transfer authority owned by this actor was accepted for this stable key.
-            return true;
-        } catch (DomainException|RuntimeException) {
-            // Preserve the locked interaction until the domain authority can be reconciled.
-            return false;
+            return;
         }
+        if (($state['prepare_action'] ?? null) === self::SUBMIT_CANCEL_HOME) {
+            $this->returnHomeFromVersion($action, $sessionVersion);
+
+            return;
+        }
+
+        throw new RuntimeException('Telegram wallet transfer preparation exit action is invalid.');
     }
 
     private function returnHome(TelegramInteractionAction $action): void
@@ -779,13 +830,16 @@ final readonly class TelegramWalletTransferNavigationHandler
         if (! is_int($payload['amount_irr'] ?? null) || $payload['amount_irr'] < 1
             || ! is_string($payload['transfer_key'] ?? null)
             || ($payload['cancel_locked'] ?? null) !== true
-            || ($payload['expiry_locked'] ?? null) !== true) {
+            || ($payload['expiry_locked'] ?? null) !== true
+            || (array_key_exists('prepare_action', $payload)
+                && ! in_array($payload['prepare_action'], [self::SUBMIT_CANCEL_AMOUNT, self::SUBMIT_CANCEL_HOME], true))) {
             throw new RuntimeException('Telegram wallet transfer preparing state is invalid.');
         }
         $recipient = $payload;
         unset(
             $recipient['amount_irr'],
             $recipient['transfer_key'],
+            $recipient['prepare_action'],
             $recipient['cancel_locked'],
             $recipient['expiry_locked'],
         );
@@ -808,6 +862,9 @@ final readonly class TelegramWalletTransferNavigationHandler
         if (! is_string($payload['confirmation_expires_at'] ?? null)
             || trim($payload['confirmation_expires_at']) === '') {
             throw new RuntimeException('Telegram wallet transfer confirmation expiry is invalid.');
+        }
+        if (array_key_exists('prepare_action', $payload)) {
+            throw new RuntimeException('Telegram wallet transfer confirmation state has an unresolved preparation action.');
         }
         $preparing = $payload;
         unset($preparing['fee_irr'], $preparing['total_debit_irr'], $preparing['confirmation_expires_at'], $preparing['available_balance_irr']);
