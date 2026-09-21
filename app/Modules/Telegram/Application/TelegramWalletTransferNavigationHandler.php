@@ -233,14 +233,16 @@ final readonly class TelegramWalletTransferNavigationHandler
     {
         $state = $this->preparingState($action->sessionPayload);
         if ($this->isBackAction($action)) {
-            $this->cancelPreparedIfPresent($action, $state);
-            $this->returnAmountFromPreparation($action, $action->sessionVersion, $state, null);
+            if ($this->cancelPreparedIfPresent($action, $state)) {
+                $this->returnAmountFromPreparation($action, $action->sessionVersion, $state, null);
+            }
 
             return;
         }
         if ($this->isEntryCommand($action->messageText)) {
-            $this->cancelPreparedIfPresent($action, $state);
-            $this->returnHome($action);
+            if ($this->cancelPreparedIfPresent($action, $state)) {
+                $this->returnHome($action);
+            }
 
             return;
         }
@@ -259,11 +261,15 @@ final readonly class TelegramWalletTransferNavigationHandler
                 $state['transfer_key'],
             );
         } catch (AuthorizationException) {
-            $this->returnHomeFromVersion($action, $sessionVersion);
+            if ($this->cancelPreparedIfPresent($action, $state)) {
+                $this->returnHomeFromVersion($action, $sessionVersion);
+            }
 
             return;
         } catch (DomainException|RuntimeException) {
-            $this->returnAmountFromPreparation($action, $sessionVersion, $state, 'unavailable');
+            if ($this->cancelPreparedIfPresent($action, $state)) {
+                $this->returnAmountFromPreparation($action, $sessionVersion, $state, 'unavailable');
+            }
 
             return;
         }
@@ -366,8 +372,6 @@ final readonly class TelegramWalletTransferNavigationHandler
                     $this->correlationId($state['transfer_key']),
                 );
             } catch (AuthorizationException) {
-                $this->returnHomeFromVersion($action, $sessionVersion);
-
                 return;
             } catch (DomainException) {
                 $this->transfers->cancelForSelf(
@@ -627,17 +631,23 @@ final readonly class TelegramWalletTransferNavigationHandler
     }
 
     /** @param array<string,mixed> $state */
-    private function cancelPreparedIfPresent(TelegramInteractionAction $action, array $state): void
+    private function cancelPreparedIfPresent(TelegramInteractionAction $action, array $state): bool
     {
         try {
-            $this->transfers->cancelForSelf(
+            $receipt = $this->transfers->cancelForSelf(
                 $action->userId,
                 $action->userId,
                 $state['transfer_key'],
                 'telegram user cancelled transfer',
             );
-        } catch (DomainException|AuthorizationException|RuntimeException) {
-            // No accepted prepared transfer is available to cancel.
+
+            return $receipt->status === 'cancelled';
+        } catch (AuthorizationException) {
+            // No transfer authority owned by this actor was accepted for this stable key.
+            return true;
+        } catch (DomainException|RuntimeException) {
+            // Preserve the locked interaction until the domain authority can be reconciled.
+            return false;
         }
     }
 
