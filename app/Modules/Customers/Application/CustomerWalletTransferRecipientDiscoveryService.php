@@ -126,7 +126,8 @@ final readonly class CustomerWalletTransferRecipientDiscoveryService
             ->where('account.bot_id', $botId)
             ->where('user.id', '<>', $subjectUserId)
             ->where('user.account_type', 'customer')
-            ->where('user.account_status', 'active');
+            ->where('user.account_status', 'active')
+            ->where('account.is_bot', false);
     }
 
     private function assertActiveCustomer(int $userId): void
