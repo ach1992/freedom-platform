@@ -79,6 +79,20 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments provider pay address is immutable once accepted.';
     END IF;
 
+    IF OLD.state = 'manual_review' THEN
+        SELECT COUNT(*) INTO terminal_finished_finding_count
+        FROM nowpayments_reconciliation_findings finding_row
+        WHERE finding_row.nowpayments_payment_authority_id = OLD.id
+          AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
+          AND finding_row.severity = 'critical'
+          AND finding_row.provider_status = 'finished';
+
+        IF terminal_finished_finding_count > 0
+           AND (NEW.state IN ('failed','expired') OR NEW.provider_status <> 'finished') THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments finished conflict remains manual until canonical financial resolution.';
+        END IF;
+    END IF;
+
     IF OLD.state IN ('failed','expired') AND NEW.state = 'manual_review' THEN
         SELECT COUNT(*) INTO finished_status_observation_count
         FROM nowpayments_payment_observations observation_row
@@ -382,7 +396,8 @@ BEGIN
         END IF;
     END IF;
 
-    IF OLD.state IN ('failed','expired') AND NEW.state = 'pending_manual_review' THEN
+    IF (OLD.state IN ('failed','expired') AND NEW.state = 'pending_manual_review')
+       OR (OLD.state = 'pending_manual_review' AND NEW.state IN ('verifying','failed')) THEN
         SELECT COUNT(*) INTO nowpayments_finished_conflict_count
         FROM nowpayments_payment_authorities authority_row
         WHERE authority_row.payment_intent_id = OLD.id
@@ -405,10 +420,17 @@ BEGIN
               FROM purchase_settlements settlement_row
               WHERE settlement_row.payment_intent_id = OLD.id
           );
+    END IF;
 
-        IF nowpayments_finished_conflict_count <> 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments intent can reopen only for one exact finished-provider reconciliation conflict.';
-        END IF;
+    IF OLD.state IN ('failed','expired') AND NEW.state = 'pending_manual_review'
+       AND nowpayments_finished_conflict_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments intent can reopen only for one exact finished-provider reconciliation conflict.';
+    END IF;
+
+    IF OLD.state = 'pending_manual_review'
+       AND NEW.state IN ('verifying','failed')
+       AND nowpayments_finished_conflict_count = 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments finished conflict keeps its PaymentIntent in manual review until settlement.';
     END IF;
 
     IF NEW.state <> OLD.state AND NOT (

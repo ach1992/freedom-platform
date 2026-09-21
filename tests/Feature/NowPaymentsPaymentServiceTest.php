@@ -547,6 +547,76 @@ final class NowPaymentsPaymentServiceTest extends TestCase
                     ->count(),
             );
 
+            try {
+                DB::table('nowpayments_payment_authorities')
+                    ->where('id', $created->authorityId)
+                    ->update([
+                        'state' => NowPaymentsAuthorityState::Failed->value,
+                        'provider_status' => 'failed',
+                    ]);
+                self::fail('A proven provider-finished conflict must not return to a safe terminal authority.');
+            } catch (QueryException) {
+                // The database guard keeps the accepted provider-finished contradiction fail-closed.
+            }
+            self::assertSame(
+                NowPaymentsAuthorityState::ManualReview->value,
+                DB::table('nowpayments_payment_authorities')
+                    ->where('id', $created->authorityId)
+                    ->value('state'),
+            );
+            self::assertSame(
+                'finished',
+                DB::table('nowpayments_payment_authorities')
+                    ->where('id', $created->authorityId)
+                    ->value('provider_status'),
+            );
+
+            $intentId = DB::table('payment_intents')
+                ->where('public_id', $created->paymentIntentPublicId)
+                ->value('id');
+            self::assertNotNull($intentId);
+            try {
+                DB::table('payment_intents')
+                    ->where('id', (int) $intentId)
+                    ->update(['state' => 'failed']);
+                self::fail('A terminal provider-finished conflict PaymentIntent must remain in manual review.');
+            } catch (QueryException) {
+                // The database guard independently preserves the unresolved financial lock.
+            }
+            self::assertSame(
+                'pending_manual_review',
+                DB::table('payment_intents')->where('id', (int) $intentId)->value('state'),
+            );
+
+            $followUpStatus = $terminalStatus === 'failed' ? 'expired' : 'confirming';
+            $this->transport->statusValue = $followUpStatus;
+            $stillUnresolved = $service->refresh(
+                $created->paymentIntentPublicId,
+                $this->correlation('terminal-conflict-follow-up-'.$terminalStatus),
+            );
+            self::assertSame(NowPaymentsAuthorityState::ManualReview, $stillUnresolved->state);
+            self::assertSame('finished', $stillUnresolved->providerStatus);
+            self::assertNull($stillUnresolved->settlementPublicId);
+            self::assertSame(
+                'pending_manual_review',
+                DB::table('payment_intents')->where('id', (int) $intentId)->value('state'),
+            );
+            self::assertSame(
+                1,
+                DB::table('nowpayments_reconciliation_findings')
+                    ->where('nowpayments_payment_authority_id', $created->authorityId)
+                    ->where('code', 'terminal_finished_conflict_status_changed')
+                    ->where('provider_status', $followUpStatus)
+                    ->where('severity', 'critical')
+                    ->count(),
+            );
+            self::assertSame(
+                0,
+                DB::table('purchase_settlements')->where('payment_intent_id', (int) $intentId)->count(),
+            );
+
+            $this->transport->statusValue = 'finished';
+            $this->transport->actuallyPaid = $this->transport->payAmount;
             $reconciled = $service->refresh(
                 $created->paymentIntentPublicId,
                 $this->correlation('terminal-conflict-reconcile-'.$terminalStatus),
@@ -555,10 +625,6 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             self::assertNotNull($reconciled->settlementPublicId);
             self::assertSame($created->authorityPublicId, $reconciled->authorityPublicId);
             self::assertSame(1, $this->transport->createCalls);
-            $intentId = DB::table('payment_intents')
-                ->where('public_id', $created->paymentIntentPublicId)
-                ->value('id');
-            self::assertNotNull($intentId);
             self::assertSame(
                 1,
                 DB::table('purchase_settlements')

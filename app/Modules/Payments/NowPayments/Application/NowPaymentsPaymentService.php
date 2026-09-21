@@ -566,6 +566,23 @@ final readonly class NowPaymentsPaymentService
             $state = $this->authorityState((string) $current->state);
             $this->observe($connection, $current, 'status_lookup', $result->paymentStatus, $result->responseHash, $correlationId);
 
+            if ($state === NowPaymentsAuthorityState::ManualReview
+                && $this->hasTerminalProviderFinishedConflict($connection, $current)
+                && $result->paymentStatus !== 'finished') {
+                $this->ensureIntentManualReview($connection, (int) $current->payment_intent_id, $correlationId);
+                $this->finding(
+                    $connection,
+                    $current,
+                    'terminal_finished_conflict_status_changed',
+                    'critical',
+                    $result->paymentStatus,
+                    $result->responseHash,
+                    $correlationId,
+                );
+
+                return $current;
+            }
+
             if ($state === NowPaymentsAuthorityState::Finished && $result->paymentStatus !== 'finished') {
                 $this->finding(
                     $connection,
@@ -1091,16 +1108,25 @@ final readonly class NowPaymentsPaymentService
      * identity-validated provider-finished evidence, any other purchase intent for the
      * same Quote means automatic materialization is no longer unambiguously safe.
      */
+    private function hasTerminalProviderFinishedConflict(
+        Connection $connection,
+        stdClass $authority,
+    ): bool {
+        return $connection->table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
+            ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
+            ->where('severity', 'critical')
+            ->where('provider_status', 'finished')
+            ->exists();
+    }
+
     private function terminalProviderFinishedConflictHasCompetingPurchaseIntent(
         Connection $connection,
         stdClass $authority,
         stdClass $intent,
     ): bool {
-        $isTerminalConflict = $connection->table('nowpayments_reconciliation_findings')
-            ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
-            ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
-            ->exists();
-        if (! $isTerminalConflict || ! is_string($intent->source_quote_public_id)) {
+        if (! $this->hasTerminalProviderFinishedConflict($connection, $authority)
+            || ! is_string($intent->source_quote_public_id)) {
             return false;
         }
 
