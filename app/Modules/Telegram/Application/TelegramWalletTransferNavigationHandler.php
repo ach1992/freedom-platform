@@ -296,7 +296,7 @@ final readonly class TelegramWalletTransferNavigationHandler
 
     private function handleConfirm(TelegramInteractionAction $action): void
     {
-        $state = $this->completedState($action->sessionPayload);
+        $state = $this->confirmState($action->sessionPayload);
 
         if ($action->kind === TelegramInteractionActionKind::Back
             || ($action->kind === TelegramInteractionActionKind::Callback
@@ -425,7 +425,7 @@ final readonly class TelegramWalletTransferNavigationHandler
 
     private function handleCompleted(TelegramInteractionAction $action): void
     {
-        $state = $this->confirmState($action->sessionPayload);
+        $state = $this->completedState($action->sessionPayload);
         $this->sendCompletedReceipts($action, $action->sessionVersion, $state);
 
         if ($this->isBackAction($action) || $this->isEntryCommand($action->messageText)) {
