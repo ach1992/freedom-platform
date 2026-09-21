@@ -1100,13 +1100,13 @@ final readonly class NowPaymentsPaymentService
             ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
             ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
             ->exists();
-        if (! $isTerminalConflict || $intent->source_quote_id === null) {
+        if (! $isTerminalConflict || ! is_string($intent->source_quote_public_id)) {
             return false;
         }
 
         return $connection->table('payment_intents')
             ->where('purpose', 'purchase')
-            ->where('source_quote_id', $this->positiveInt($intent->source_quote_id, 'NOWPayments source Quote ID'))
+            ->where('source_quote_public_id', $intent->source_quote_public_id)
             ->where('user_id', $this->positiveInt($intent->user_id, 'NOWPayments purchase user ID'))
             ->where('id', '<>', $this->positiveInt($intent->id, 'NOWPayments payment intent ID'))
             ->exists();
@@ -1561,7 +1561,7 @@ final readonly class NowPaymentsPaymentService
         }
 
         return $query->first([
-            'id', 'public_id', 'purpose', 'user_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code',
+            'id', 'public_id', 'purpose', 'user_id', 'source_quote_public_id', 'payment_method_code',
             'provider_code', 'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }
