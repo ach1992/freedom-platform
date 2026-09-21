@@ -307,6 +307,9 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame(1, DB::table('nowpayments_payment_authorities')->count());
 
         $this->clock->value = $this->clock->value->modify('+31 minutes');
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('SET timestamp = '.$this->clock->value->getTimestamp());
+        }
 
         try {
             $adapter->claimForSelf(
