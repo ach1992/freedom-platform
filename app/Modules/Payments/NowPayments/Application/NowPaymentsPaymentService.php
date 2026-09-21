@@ -710,7 +710,7 @@ final readonly class NowPaymentsPaymentService
                 $this->finding(
                     $connection,
                     $current,
-                    'terminal_provider_finished_conflict_has_competing_purchase_intent',
+                    'terminal_provider_finished_conflict_competing_intent',
                     'critical',
                     $result->paymentStatus,
                     $result->responseHash,

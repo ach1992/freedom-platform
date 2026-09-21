@@ -669,7 +669,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             1,
             DB::table('nowpayments_reconciliation_findings')
                 ->where('nowpayments_payment_authority_id', $created->authorityId)
-                ->where('code', 'terminal_provider_finished_conflict_has_competing_purchase_intent')
+                ->where('code', 'terminal_provider_finished_conflict_competing_intent')
                 ->where('severity', 'critical')
                 ->count(),
         );
