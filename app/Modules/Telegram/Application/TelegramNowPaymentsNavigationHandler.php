@@ -124,7 +124,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
     {
         $state = $this->selectedStateFromPayload($action->sessionPayload);
         if ($this->isBackAction($action) || $this->isEntryCommand($action->messageText)) {
-            $this->refresh($action, $state);
+            $this->completePreparation($action, $action->sessionVersion, $state);
 
             return;
         }
@@ -162,13 +162,8 @@ final readonly class TelegramNowPaymentsNavigationHandler
     private function handleActiveSurface(TelegramInteractionAction $action): void
     {
         $state = $this->activeStateFromPayload($action->sessionPayload);
-        if ($this->isBackAction($action)) {
-            $this->returnPaymentMethods($action, $state);
-
-            return;
-        }
-        if ($this->isEntryCommand($action->messageText)) {
-            $this->returnHome($action);
+        if ($this->isBackAction($action) || $this->isEntryCommand($action->messageText)) {
+            $this->refresh($action, $state);
 
             return;
         }
