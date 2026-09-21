@@ -12,6 +12,7 @@ use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchasePaymentIntentReceipt;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -54,12 +55,12 @@ final readonly class NowPaymentsPaymentService
     ) {}
 
     /** @requirement BUY-001 BUY-003 IPG-002 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
-    public function initiatePurchase(
+    public function claimPurchase(
         int $actorUserId,
         string $quotePublicId,
         string $eligibilityDecisionPublicId,
         string $correlationId,
-    ): NowPaymentsPaymentReceipt {
+    ): PurchasePaymentIntentReceipt {
         if ($actorUserId < 1) {
             throw new DomainException('NOWPayments purchase actor user ID is invalid.');
         }
@@ -67,12 +68,12 @@ final readonly class NowPaymentsPaymentService
         $this->assertUlid($eligibilityDecisionPublicId, 'NOWPayments payment eligibility decision public ID');
         $this->assertToken($correlationId, 'NOWPayments purchase correlation ID', 8, 64);
 
-        $intent = $this->database->connection()->transaction(function () use (
+        return $this->database->connection()->transaction(function () use (
             $actorUserId,
             $quotePublicId,
             $eligibilityDecisionPublicId,
             $correlationId,
-        ) {
+        ): PurchasePaymentIntentReceipt {
             $intent = $this->purchaseIntents->create(
                 $this->purchaseIntentCreationKey($quotePublicId),
                 $actorUserId,
@@ -92,13 +93,67 @@ final readonly class NowPaymentsPaymentService
 
             return $intent;
         }, 3);
+    }
+
+    /** @requirement BUY-001 BUY-003 IPG-002 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
+    public function executePurchaseClaim(
+        int $actorUserId,
+        string $intentPublicId,
+        string $quotePublicId,
+        string $eligibilityDecisionPublicId,
+        string $correlationId,
+    ): NowPaymentsPaymentReceipt {
+        if ($actorUserId < 1) {
+            throw new DomainException('NOWPayments purchase actor user ID is invalid.');
+        }
+        $this->assertUlid($intentPublicId, 'NOWPayments purchase PaymentIntent public ID');
+        $this->assertUlid($quotePublicId, 'NOWPayments purchase Quote public ID');
+        $this->assertUlid($eligibilityDecisionPublicId, 'NOWPayments payment eligibility decision public ID');
+        $this->assertToken($correlationId, 'NOWPayments purchase correlation ID', 8, 64);
+
+        $intent = $this->intentByPublicId($this->database->connection(), $intentPublicId);
+        if ($intent === null) {
+            throw new DomainException('NOWPayments purchase PaymentIntent does not exist.');
+        }
+        $this->assertEligibleIntent($intent);
+        $this->assertPurchaseContext($intent, $actorUserId, $quotePublicId);
+        $storedDecisionPublicId = $this->database->connection()->table('payment_intents')
+            ->where('id', $this->positiveInt($intent->id, 'Payment intent ID'))
+            ->value('payment_eligibility_decision_public_id');
+        if (! is_string($storedDecisionPublicId)
+            || ! hash_equals($storedDecisionPublicId, $eligibilityDecisionPublicId)) {
+            throw new DomainException('NOWPayments purchase PaymentIntent decision identity changed.');
+        }
 
         return $this->createForIntent(
-            $intent->intentPublicId,
+            $intentPublicId,
             $this->purchaseRequestKey($quotePublicId),
             $correlationId,
             $actorUserId,
             $quotePublicId,
+        );
+    }
+
+    /** @requirement BUY-001 BUY-003 IPG-002 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
+    public function initiatePurchase(
+        int $actorUserId,
+        string $quotePublicId,
+        string $eligibilityDecisionPublicId,
+        string $correlationId,
+    ): NowPaymentsPaymentReceipt {
+        $intent = $this->claimPurchase(
+            $actorUserId,
+            $quotePublicId,
+            $eligibilityDecisionPublicId,
+            $correlationId,
+        );
+
+        return $this->executePurchaseClaim(
+            $actorUserId,
+            $intent->intentPublicId,
+            $quotePublicId,
+            $eligibilityDecisionPublicId,
+            $correlationId,
         );
     }
 
