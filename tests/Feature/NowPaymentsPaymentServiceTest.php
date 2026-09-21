@@ -266,7 +266,11 @@ final class NowPaymentsPaymentServiceTest extends TestCase
 
     public function test_telegram_persisted_claim_replays_live_provider_authority_after_quote_expiry(): void
     {
-        [$userId, $quote, $decision, $opening] = $this->purchaseContext('telegram-preparing-recovery', 10_000_000);
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext(
+            'telegram-preparing-recovery',
+            10_000_000,
+            true,
+        );
         $adapter = new TelegramCustomerPurchaseNowPaymentsPaymentService(
             $this->app->make(TelegramCustomerPurchaseOrderService::class),
             $this->app->make(TelegramCustomerPurchasePaymentMethodsService::class),
@@ -527,7 +531,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         return new UsdtRateResolver([new NowPaymentsRateProvider($this->clock)], $policy, $circuit, $this->clock);
     }
 
-    private function purchaseContext(string $suffix, int $amountIrr): array
+    private function purchaseContext(string $suffix, int $amountIrr, bool $telegramReplayCompatible = false): array
     {
         $userId = $this->quoteUser('customer');
         $administratorId = $this->ownerAdministrator();
@@ -563,6 +567,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             'nowpayments.purchase.eligibility.'.$suffix,
             $userId,
             $quote->quotePublicId,
+            $telegramReplayCompatible ? $quote->configurationSnapshotHash : null,
         );
         $opening = $this->app->make(PurchaseOrderService::class)->openFromQuote(
             $quote->quotePublicId,
