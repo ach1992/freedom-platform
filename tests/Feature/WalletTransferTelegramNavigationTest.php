@@ -182,7 +182,7 @@ final class WalletTransferTelegramNavigationTest extends TestCase
 
     public function test_interrupted_submission_reconciles_completed_transfer_without_second_ledger_effect(): void
     {
-        [$processor, $sessionId, $senderUserId, $senderTelegramId, , ,] =
+        [$processor, $sessionId, $senderUserId, $senderTelegramId] =
             $this->prepareConfirmation(9994, 9980, 'wallet_sender_interrupted');
 
         $session = DB::table('telegram_interaction_sessions')
