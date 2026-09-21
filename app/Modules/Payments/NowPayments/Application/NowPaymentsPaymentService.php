@@ -188,9 +188,14 @@ final readonly class NowPaymentsPaymentService
             if (! hash_equals((string) $existing->request_key, $requestKey)) {
                 throw new DomainException('NOWPayments payment intent is already bound to another initiation request.');
             }
-            if ($this->authorityState((string) $existing->state) === NowPaymentsAuthorityState::Initiating
+            $existingState = $this->authorityState((string) $existing->state);
+            if ($existingState === NowPaymentsAuthorityState::Initiating
                 && $existing->provider_payment_id === null) {
                 return $this->recoverStaleInitiatingWithoutProviderId($existing, $configuration, $correlationId);
+            }
+            if ($existingState === NowPaymentsAuthorityState::Finished
+                && $this->settlementPublicIdForIntentId($connection, $intentId) === null) {
+                return $this->refresh($intentPublicId, $correlationId);
             }
 
             return $this->receipt($existing, true);
