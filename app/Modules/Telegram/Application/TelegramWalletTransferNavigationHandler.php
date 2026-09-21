@@ -211,6 +211,8 @@ final readonly class TelegramWalletTransferNavigationHandler
         }
         $state['amount_irr'] = $amount;
         $state['transfer_key'] = $this->transferKey($action, $state);
+        $state['cancel_locked'] = true;
+        $state['expiry_locked'] = true;
 
         try {
             $claim = $this->sessions->transition(
@@ -230,6 +232,12 @@ final readonly class TelegramWalletTransferNavigationHandler
     private function resumePreparation(TelegramInteractionAction $action): void
     {
         $state = $this->preparingState($action->sessionPayload);
+        if ($this->isBackAction($action)) {
+            $this->cancelPreparedIfPresent($action, $state);
+            $this->returnAmountFromPreparation($action, $action->sessionVersion, $state, null);
+
+            return;
+        }
         if ($this->isEntryCommand($action->messageText)) {
             $this->cancelPreparedIfPresent($action, $state);
             $this->returnHome($action);
@@ -288,7 +296,7 @@ final readonly class TelegramWalletTransferNavigationHandler
 
     private function handleConfirm(TelegramInteractionAction $action): void
     {
-        $state = $this->confirmState($action->sessionPayload);
+        $state = $this->completedState($action->sessionPayload);
 
         if ($action->kind === TelegramInteractionActionKind::Back
             || ($action->kind === TelegramInteractionActionKind::Callback
@@ -361,6 +369,16 @@ final readonly class TelegramWalletTransferNavigationHandler
                 $this->returnHomeFromVersion($action, $sessionVersion);
 
                 return;
+            } catch (DomainException) {
+                $this->transfers->cancelForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['transfer_key'],
+                    'telegram confirmation rejected',
+                );
+                $this->returnAmountFromSubmission($action, $sessionVersion, $state, 'unavailable');
+
+                return;
             }
 
             if ($receipt->status !== 'completed') {
@@ -372,7 +390,7 @@ final readonly class TelegramWalletTransferNavigationHandler
                 || ! hash_equals($receipt->recipientPublicId, $state['recipient_public_id'])) {
                 throw new RuntimeException('Telegram wallet transfer completion identity changed.');
             }
-            unset($state['submit_action']);
+            unset($state['submit_action'], $state['cancel_locked'], $state['expiry_locked']);
             try {
                 $session = $this->sessions->transition(
                     $action->sessionPublicId,
@@ -563,7 +581,7 @@ final readonly class TelegramWalletTransferNavigationHandler
         array $state,
         ?string $error,
     ): void {
-        unset($state['amount_irr'], $state['transfer_key']);
+        unset($state['amount_irr'], $state['transfer_key'], $state['cancel_locked'], $state['expiry_locked']);
         try {
             $session = $this->sessions->transition(
                 $action->sessionPublicId,
@@ -589,6 +607,7 @@ final readonly class TelegramWalletTransferNavigationHandler
         foreach ([
             'amount_irr', 'transfer_key', 'fee_irr', 'total_debit_irr',
             'confirmation_expires_at', 'available_balance_irr', 'submit_action',
+            'cancel_locked', 'expiry_locked',
         ] as $key) {
             unset($state[$key]);
         }
@@ -748,11 +767,18 @@ final readonly class TelegramWalletTransferNavigationHandler
     private function preparingState(array $payload): array
     {
         if (! is_int($payload['amount_irr'] ?? null) || $payload['amount_irr'] < 1
-            || ! is_string($payload['transfer_key'] ?? null)) {
+            || ! is_string($payload['transfer_key'] ?? null)
+            || ($payload['cancel_locked'] ?? null) !== true
+            || ($payload['expiry_locked'] ?? null) !== true) {
             throw new RuntimeException('Telegram wallet transfer preparing state is invalid.');
         }
         $recipient = $payload;
-        unset($recipient['amount_irr'], $recipient['transfer_key']);
+        unset(
+            $recipient['amount_irr'],
+            $recipient['transfer_key'],
+            $recipient['cancel_locked'],
+            $recipient['expiry_locked'],
+        );
         $this->recipientState($recipient);
 
         return $payload;
@@ -776,6 +802,25 @@ final readonly class TelegramWalletTransferNavigationHandler
         $preparing = $payload;
         unset($preparing['fee_irr'], $preparing['total_debit_irr'], $preparing['confirmation_expires_at'], $preparing['available_balance_irr']);
         $this->preparingState($preparing);
+
+        return $payload;
+    }
+
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
+    private function completedState(array $payload): array
+    {
+        if (array_key_exists('cancel_locked', $payload) || array_key_exists('expiry_locked', $payload)) {
+            throw new RuntimeException('Telegram wallet transfer completed state must not remain effect-locked.');
+        }
+        $locked = [
+            ...$payload,
+            'cancel_locked' => true,
+            'expiry_locked' => true,
+        ];
+        $this->confirmState($locked);
 
         return $payload;
     }
