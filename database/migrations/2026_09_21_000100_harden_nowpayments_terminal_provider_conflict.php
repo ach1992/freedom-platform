@@ -44,6 +44,7 @@ FOR EACH ROW
 BEGIN
     DECLARE finished_status_observation_count INT DEFAULT 0;
     DECLARE terminal_finished_finding_count INT DEFAULT 0;
+    DECLARE terminal_finished_status_changed_count INT DEFAULT 0;
 
     IF NOT (NEW.public_id <=> OLD.public_id)
        OR NOT (NEW.request_key <=> OLD.request_key)
@@ -87,9 +88,19 @@ BEGIN
           AND finding_row.severity = 'critical'
           AND finding_row.provider_status = 'finished';
 
+        SELECT COUNT(*) INTO terminal_finished_status_changed_count
+        FROM nowpayments_reconciliation_findings finding_row
+        WHERE finding_row.nowpayments_payment_authority_id = OLD.id
+          AND finding_row.code = 'terminal_finished_conflict_status_changed'
+          AND finding_row.severity = 'critical';
+
         IF terminal_finished_finding_count > 0
            AND (NEW.state IN ('failed','expired') OR NEW.provider_status <> 'finished') THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments finished conflict remains manual until canonical financial resolution.';
+        END IF;
+
+        IF terminal_finished_status_changed_count > 0 AND NEW.state = 'finished' THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Contradictory provider history requires manual NOWPayments financial resolution.';
         END IF;
     END IF;
 

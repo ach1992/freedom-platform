@@ -724,6 +724,10 @@ final readonly class NowPaymentsPaymentService
             }
             $this->assertEligibleIntent($intent);
             if ($state === NowPaymentsAuthorityState::ManualReview
+                && $this->terminalProviderFinishedConflictHasStatusChange($connection, $current)) {
+                return $current;
+            }
+            if ($state === NowPaymentsAuthorityState::ManualReview
                 && $this->terminalProviderFinishedConflictHasCompetingPurchaseIntent($connection, $current, $intent)) {
                 $this->finding(
                     $connection,
@@ -1117,6 +1121,21 @@ final readonly class NowPaymentsPaymentService
             ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
             ->where('severity', 'critical')
             ->where('provider_status', 'finished')
+            ->exists();
+    }
+
+    private function terminalProviderFinishedConflictHasStatusChange(
+        Connection $connection,
+        stdClass $authority,
+    ): bool {
+        if (! $this->hasTerminalProviderFinishedConflict($connection, $authority)) {
+            return false;
+        }
+
+        return $connection->table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
+            ->where('code', 'terminal_finished_conflict_status_changed')
+            ->where('severity', 'critical')
             ->exists();
     }
 
