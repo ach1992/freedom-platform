@@ -11,6 +11,7 @@ use App\Modules\Orders\Application\TelegramCustomerPurchaseOrderService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
@@ -157,7 +158,7 @@ final class FailOnceNowPaymentsPromotionUsageAuthority implements PurchasePromot
 
     public function releaseEligibleExpiredTerminalPurchases(
         int $limit = 100,
-    ): \App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult {
+    ): PurchasePromotionUsageMaintenanceResult {
         return $this->inner->releaseEligibleExpiredTerminalPurchases($limit);
     }
 }
