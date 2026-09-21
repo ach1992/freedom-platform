@@ -124,20 +124,59 @@ final readonly class TelegramNowPaymentsNavigationHandler
 
     private function resumePreparation(TelegramInteractionAction $action): void
     {
-        $state = $this->selectedStateFromPayload($action->sessionPayload);
-        if (($state['cancel_locked'] ?? null) !== true || ($state['expiry_locked'] ?? null) !== true) {
-            throw new RuntimeException('Telegram NOWPayments preparing authority lock state is invalid.');
-        }
+        $state = $this->preparingStateFromPayload($action->sessionPayload);
         $this->completePreparation($action, $action->sessionVersion, $state);
     }
 
     /** @param array<string,mixed> $state */
     private function completePreparation(TelegramInteractionAction $action, int $sessionVersion, array $state): void
     {
+        if (! isset($state['nowpayments_payment_intent_public_id'])) {
+            try {
+                $paymentIntentPublicId = $this->nowPayments->claimForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $this->operationKey($state),
+                );
+            } catch (AuthorizationException) {
+                $this->returnHome($action, $sessionVersion);
+
+                return;
+            } catch (DomainException|InvalidArgumentException) {
+                $this->returnPaymentMethods($action, $state, true, $sessionVersion);
+
+                return;
+            }
+            if (! $this->isUlid($paymentIntentPublicId)) {
+                throw new RuntimeException('Telegram NOWPayments claimed PaymentIntent identity is invalid.');
+            }
+
+            $state['nowpayments_payment_intent_public_id'] = $paymentIntentPublicId;
+            try {
+                $claim = $this->sessions->transition(
+                    $action->sessionPublicId,
+                    $sessionVersion,
+                    self::STATE_PREPARING,
+                    $state,
+                    'tg-nowpayments-intent-claim:'.hash('sha256', $state['order_public_id'].':'.$paymentIntentPublicId),
+                );
+            } catch (DomainException) {
+                return;
+            }
+            $this->assertActor($action, $claim->userId);
+            $sessionVersion = $claim->version;
+        }
+
         try {
-            $receipt = $this->nowPayments->prepareForSelf(
+            $receipt = $this->nowPayments->executeClaimForSelf(
                 $action->userId,
                 $action->userId,
+                $state['nowpayments_payment_intent_public_id'],
                 $state['order_public_id'],
                 $state['quote_public_id'],
                 $state['quote_configuration_hash'],
@@ -145,16 +184,14 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 $state['payment_decision_configuration_hash'],
                 $this->operationKey($state),
             );
-        } catch (AuthorizationException) {
-            $this->returnHome($action, $sessionVersion);
-
-            return;
-        } catch (DomainException|InvalidArgumentException) {
-            $this->returnPaymentMethods($action, $state, true, $sessionVersion);
-
+        } catch (AuthorizationException|DomainException|InvalidArgumentException) {
+            // A persisted claim may already own a provider-capable authority. Keep PREPARING locked until it can be reconciled.
             return;
         }
 
+        if (! hash_equals($state['nowpayments_payment_intent_public_id'], $receipt->paymentIntentPublicId)) {
+            throw new RuntimeException('Telegram NOWPayments claimed PaymentIntent identity changed.');
+        }
         $this->routeReceipt($action, $sessionVersion, $state, $receipt);
     }
 
@@ -217,6 +254,11 @@ final readonly class TelegramNowPaymentsNavigationHandler
         array $state,
         TelegramCustomerPurchaseNowPaymentsReceipt $receipt,
     ): void {
+        if (isset($state['nowpayments_payment_intent_public_id'])
+            && ! hash_equals($state['nowpayments_payment_intent_public_id'], $receipt->paymentIntentPublicId)) {
+            throw new RuntimeException('Telegram NOWPayments receipt PaymentIntent identity changed.');
+        }
+
         $state = [
             ...$state,
             'nowpayments_authority_public_id' => $receipt->authorityPublicId,
@@ -554,6 +596,27 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 || ! $this->isUlid($payload['promotion_resolution_public_id'] ?? null))) {
             throw new RuntimeException('Telegram NOWPayments discounted payment state is invalid.');
         }
+
+        return $payload;
+    }
+
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array<string,mixed>
+     */
+    private function preparingStateFromPayload(array $payload): array
+    {
+        if (($payload['cancel_locked'] ?? null) !== true || ($payload['expiry_locked'] ?? null) !== true) {
+            throw new RuntimeException('Telegram NOWPayments preparing authority lock state is invalid.');
+        }
+        $selected = $payload;
+        if (array_key_exists('nowpayments_payment_intent_public_id', $selected)) {
+            if (! $this->isUlid($selected['nowpayments_payment_intent_public_id'])) {
+                throw new RuntimeException('Telegram NOWPayments preparing PaymentIntent identity is invalid.');
+            }
+            unset($selected['nowpayments_payment_intent_public_id']);
+        }
+        $this->selectedStateFromPayload($selected);
 
         return $payload;
     }
