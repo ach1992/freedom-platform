@@ -64,7 +64,7 @@ return new class extends Migration
      *     finished_observation_id:int,
      *     finished_observed_at:string,
      *     correlation_id:string,
-     *     contradictory_observation:object|null
+     *     contradictory_observation:object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null
      * }>
      */
     private function preflightLegacyTerminalProviderFinishedConflicts(): array
@@ -197,7 +197,7 @@ return new class extends Migration
      *     finished_observation_id:int,
      *     finished_observed_at:string,
      *     correlation_id:string,
-     *     contradictory_observation:object|null
+     *     contradictory_observation:object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null
      * }> $conflicts
      */
     private function normalizeLegacyTerminalProviderFinishedConflicts(array $conflicts): void
@@ -270,6 +270,7 @@ return new class extends Migration
                     throw new RuntimeException('Legacy NOWPayments PaymentIntent is no longer normalizable.');
                 }
 
+                /** @var object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null $observation */
                 $observation = $conflict['contradictory_observation'];
                 if ($observation !== null) {
                     $responseHash = strtolower((string) $observation->response_hash);
