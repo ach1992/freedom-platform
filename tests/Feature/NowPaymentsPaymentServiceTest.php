@@ -456,6 +456,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
     {
         foreach (['failed', 'expired'] as $terminalStatus) {
             $this->transport = new FakeNowPaymentsTransport;
+            $this->transport->providerPaymentId = $terminalStatus === 'failed' ? '900101' : '900102';
             [$userId, $quote, $decision, $opening] = $this->purchaseContext(
                 'terminal-finished-conflict-'.$terminalStatus,
                 10_000_000,
