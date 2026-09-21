@@ -15,6 +15,8 @@ use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDat
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
+use App\Shared\Application\Clock;
+use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -382,6 +384,21 @@ final readonly class TelegramNowPaymentsNavigationPaymentMethods implements Tele
     }
 }
 
+final class TelegramNowPaymentsNavigationClock implements Clock
+{
+    public function __construct(public DateTimeImmutable $value) {}
+
+    public function now(): DateTimeImmutable
+    {
+        return $this->value;
+    }
+
+    public function advance(string $modifier): void
+    {
+        $this->value = $this->value->modify($modifier);
+    }
+}
+
 /** @requirement BUY-003 IPG-002 PAY-001 PAY-002 PAY-003 ARCH-003 SEC-003 QUA-001 QUA-004 */
 final class TelegramNowPaymentsNavigationTest extends TestCase
 {
@@ -614,6 +631,8 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
 
     public function test_finished_provider_without_settlement_remains_locked_across_navigation_cancel_replay_and_expiry(): void
     {
+        $clock = new TelegramNowPaymentsNavigationClock(new DateTimeImmutable('now', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
         $payment = new TelegramNowPaymentsNavigationPayment('created', 'finished', false);
         [$processor, $sessionId, $telegramUserId, $accountId] = $this->prepareSelection(
             $payment,
@@ -688,9 +707,7 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
         );
         self::assertSame('active', DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('status'));
 
-        DB::table('telegram_interaction_sessions')
-            ->where('id', $sessionId)
-            ->update(['expires_at' => '2000-01-01 00:00:00']);
+        $clock->advance('+1 day');
         $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
         self::assertNotNull($active);
         self::assertSame('purchase_nowpayments_pending', $active->state);
