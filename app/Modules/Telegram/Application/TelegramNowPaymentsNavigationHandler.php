@@ -276,7 +276,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
             'nowpayments_manual_review' => $receipt->manualReviewRequired,
         ];
 
-        if (in_array($receipt->state, ['initiating', 'created', 'uncertain', 'manual_review'], true)) {
+        if ($this->requiresFinancialResolutionLock($receipt->state, $receipt->settlementPublicId)) {
             $state['cancel_locked'] = true;
             $state['expiry_locked'] = true;
         } else {
@@ -337,7 +337,9 @@ final readonly class TelegramNowPaymentsNavigationHandler
         $this->renderPending(
             $action,
             $session->version,
-            (bool) $state['nowpayments_manual_review'] || in_array($state['nowpayments_state'], ['uncertain', 'manual_review', 'initiating'], true),
+            (bool) $state['nowpayments_manual_review']
+                || in_array($state['nowpayments_state'], ['uncertain', 'manual_review', 'initiating'], true)
+                || ($state['nowpayments_state'] === 'finished' && $state['nowpayments_settlement_public_id'] === null),
         );
     }
 
@@ -676,18 +678,17 @@ final readonly class TelegramNowPaymentsNavigationHandler
             || ! is_bool($payload['nowpayments_manual_review'] ?? null)) {
             throw new RuntimeException('Telegram NOWPayments active state is invalid.');
         }
-        $liveAuthority = in_array(
+        $requiresFinancialLock = $this->requiresFinancialResolutionLock(
             $payload['nowpayments_state'],
-            ['initiating', 'created', 'uncertain', 'manual_review'],
-            true,
+            $payload['nowpayments_settlement_public_id'],
         );
-        if ($liveAuthority) {
+        if ($requiresFinancialLock) {
             if (($payload['cancel_locked'] ?? null) !== true
                 || ($payload['expiry_locked'] ?? null) !== true) {
-                throw new RuntimeException('Telegram NOWPayments live authority lock state is invalid.');
+                throw new RuntimeException('Telegram NOWPayments unresolved financial authority lock state is invalid.');
             }
         } elseif (array_key_exists('cancel_locked', $payload) || array_key_exists('expiry_locked', $payload)) {
-            throw new RuntimeException('Telegram NOWPayments terminal authority lock state is invalid.');
+            throw new RuntimeException('Telegram NOWPayments resolved or terminal authority lock state is invalid.');
         }
         $selected = $payload;
         foreach ([
@@ -701,6 +702,12 @@ final readonly class TelegramNowPaymentsNavigationHandler
         $this->selectedStateFromPayload($selected);
 
         return $payload;
+    }
+
+    private function requiresFinancialResolutionLock(string $state, ?string $settlementPublicId): bool
+    {
+        return in_array($state, ['initiating', 'created', 'uncertain', 'manual_review'], true)
+            || ($state === 'finished' && $settlementPublicId === null);
     }
 
     /** @param array<string,mixed> $payload */
