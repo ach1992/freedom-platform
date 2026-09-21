@@ -320,8 +320,16 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 $state,
                 'tg-nowpayments-'.$surface.'-state:'.hash('sha256', $state['order_public_id'].':'.$state['nowpayments_authority_public_id'].':'.$action->requestKey),
             );
-        } catch (DomainException) {
-            return;
+        } catch (DomainException $exception) {
+            $current = $this->sessions->activeForAccount($action->telegramAccountId);
+            if ($current === null
+                || ($current->publicId === $action->sessionPublicId
+                    && $current->userId === $action->userId
+                    && $current->version > $sessionVersion)) {
+                return;
+            }
+
+            throw $exception;
         }
         $this->assertActor($action, $session->userId);
         if ($targetState === self::STATE_PAYMENT) {
