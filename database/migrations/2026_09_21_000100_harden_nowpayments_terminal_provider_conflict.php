@@ -16,6 +16,9 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
         $this->createConflictAwareNowPaymentsAuthorityGuard();
 
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_insert_guard');
+        $this->createConflictAwarePaymentIntentInsertGuard();
+
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_update_guard');
         $this->createConflictAwarePaymentIntentGuard();
     }
@@ -24,6 +27,9 @@ return new class extends Migration
     {
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_update_guard');
         $this->createPriorPaymentIntentGuard();
+
+        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_insert_guard');
+        $this->createPriorPaymentIntentInsertGuard();
 
         DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
         $this->createPriorNowPaymentsAuthorityGuard();
@@ -132,6 +138,152 @@ BEGIN
         (OLD.state = 'manual_review' AND NEW.state IN ('finished','failed','expired'))
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority state transition is invalid.';
+    END IF;
+END
+SQL);
+    }
+
+    private function createConflictAwarePaymentIntentInsertGuard(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_intents_insert_guard
+BEFORE INSERT ON payment_intents
+FOR EACH ROW
+BEGIN
+    DECLARE valid_wallet_count INT DEFAULT 0;
+    DECLARE valid_quote_count INT DEFAULT 0;
+    DECLARE valid_decision_count INT DEFAULT 0;
+    DECLARE valid_method_count INT DEFAULT 0;
+    DECLARE unresolved_purchase_manual_review_count INT DEFAULT 0;
+
+    IF NEW.purpose = 'wallet_top_up' THEN
+        IF NEW.source_quote_id IS NOT NULL OR NEW.payment_eligibility_decision_id IS NOT NULL OR NEW.payment_method_version_id IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet top-up intent cannot carry purchase authority bindings.';
+        END IF;
+        SELECT COUNT(*) INTO valid_wallet_count FROM ledger_accounts
+        WHERE id = NEW.wallet_account_id AND owner_user_id = NEW.user_id AND account_class = 'liability'
+          AND wallet_bucket = 'cash' AND currency = 'IRR' AND is_active = 1;
+        IF valid_wallet_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet top-up intent requires one active owned IRR cash wallet.'; END IF;
+    ELSEIF NEW.purpose = 'purchase' THEN
+        IF NEW.wallet_account_id IS NOT NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent cannot carry a wallet top-up binding.'; END IF;
+
+        SELECT COUNT(*) INTO unresolved_purchase_manual_review_count
+        FROM payment_intents existing_intent
+        WHERE existing_intent.purpose = 'purchase'
+          AND existing_intent.source_quote_id = NEW.source_quote_id
+          AND existing_intent.user_id = NEW.user_id
+          AND existing_intent.state = 'pending_manual_review';
+        IF unresolved_purchase_manual_review_count <> 0 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent is locked by unresolved payment reconciliation.';
+        END IF;
+
+        SELECT COUNT(*) INTO valid_quote_count
+        FROM quotes quote_row
+        WHERE quote_row.id = NEW.source_quote_id AND quote_row.public_id = NEW.source_quote_public_id
+          AND quote_row.user_id = NEW.user_id AND quote_row.final_price_irr = NEW.amount_irr
+          AND quote_row.currency = NEW.currency AND quote_row.configuration_snapshot_hash = NEW.source_quote_configuration_hash
+          AND quote_row.valid_from <= NEW.created_at AND quote_row.expires_at > NEW.created_at;
+        IF valid_quote_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent requires one current matching immutable Quote.'; END IF;
+
+        SELECT COUNT(*) INTO valid_decision_count
+        FROM payment_method_eligibility_decisions decision_row
+        INNER JOIN quotes quote_row ON quote_row.id = decision_row.source_quote_id
+        WHERE decision_row.id = NEW.payment_eligibility_decision_id
+          AND decision_row.public_id = NEW.payment_eligibility_decision_public_id
+          AND decision_row.source_quote_id = NEW.source_quote_id
+          AND decision_row.source_quote_public_id = NEW.source_quote_public_id
+          AND decision_row.user_id = NEW.user_id
+          AND decision_row.action_snapshot = quote_row.action_snapshot
+          AND decision_row.currency_snapshot = NEW.currency
+          AND decision_row.amount_irr_snapshot = NEW.amount_irr
+          AND decision_row.configuration_snapshot_hash = NEW.payment_eligibility_configuration_hash
+          AND decision_row.created_at <= NEW.created_at;
+        IF valid_decision_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent requires one matching PAY-001 eligibility decision.'; END IF;
+
+        SELECT COUNT(*) INTO valid_method_count
+        FROM payment_method_eligibility_decision_methods decision_method
+        INNER JOIN payment_method_versions method_version ON method_version.id = decision_method.payment_method_version_id
+        WHERE decision_method.payment_method_eligibility_decision_id = NEW.payment_eligibility_decision_id
+          AND decision_method.payment_method_version_id = NEW.payment_method_version_id
+          AND decision_method.method_code = NEW.payment_method_code
+          AND decision_method.method_version = NEW.payment_method_version
+          AND decision_method.route_order IS NOT NULL
+          AND decision_method.reason_code = 'eligible'
+          AND decision_method.configuration_snapshot_hash = NEW.payment_eligibility_method_configuration_hash
+          AND method_version.method_code = NEW.payment_method_code
+          AND method_version.version = NEW.payment_method_version
+          AND method_version.configuration_snapshot_hash = NEW.payment_method_configuration_hash
+          AND NEW.provider_code = NEW.payment_method_code;
+        IF valid_method_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent requires one selected PAY-001 payment method version.'; END IF;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment intent purpose is unsupported.';
+    END IF;
+END
+SQL);
+    }
+
+    private function createPriorPaymentIntentInsertGuard(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER payment_intents_insert_guard
+BEFORE INSERT ON payment_intents
+FOR EACH ROW
+BEGIN
+    DECLARE valid_wallet_count INT DEFAULT 0;
+    DECLARE valid_quote_count INT DEFAULT 0;
+    DECLARE valid_decision_count INT DEFAULT 0;
+    DECLARE valid_method_count INT DEFAULT 0;
+
+    IF NEW.purpose = 'wallet_top_up' THEN
+        IF NEW.source_quote_id IS NOT NULL OR NEW.payment_eligibility_decision_id IS NOT NULL OR NEW.payment_method_version_id IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet top-up intent cannot carry purchase authority bindings.';
+        END IF;
+        SELECT COUNT(*) INTO valid_wallet_count FROM ledger_accounts
+        WHERE id = NEW.wallet_account_id AND owner_user_id = NEW.user_id AND account_class = 'liability'
+          AND wallet_bucket = 'cash' AND currency = 'IRR' AND is_active = 1;
+        IF valid_wallet_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet top-up intent requires one active owned IRR cash wallet.'; END IF;
+    ELSEIF NEW.purpose = 'purchase' THEN
+        IF NEW.wallet_account_id IS NOT NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent cannot carry a wallet top-up binding.'; END IF;
+        SELECT COUNT(*) INTO valid_quote_count
+        FROM quotes quote_row
+        WHERE quote_row.id = NEW.source_quote_id AND quote_row.public_id = NEW.source_quote_public_id
+          AND quote_row.user_id = NEW.user_id AND quote_row.final_price_irr = NEW.amount_irr
+          AND quote_row.currency = NEW.currency AND quote_row.configuration_snapshot_hash = NEW.source_quote_configuration_hash
+          AND quote_row.valid_from <= NEW.created_at AND quote_row.expires_at > NEW.created_at;
+        IF valid_quote_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent requires one current matching immutable Quote.'; END IF;
+
+        SELECT COUNT(*) INTO valid_decision_count
+        FROM payment_method_eligibility_decisions decision_row
+        INNER JOIN quotes quote_row ON quote_row.id = decision_row.source_quote_id
+        WHERE decision_row.id = NEW.payment_eligibility_decision_id
+          AND decision_row.public_id = NEW.payment_eligibility_decision_public_id
+          AND decision_row.source_quote_id = NEW.source_quote_id
+          AND decision_row.source_quote_public_id = NEW.source_quote_public_id
+          AND decision_row.user_id = NEW.user_id
+          AND decision_row.action_snapshot = quote_row.action_snapshot
+          AND decision_row.currency_snapshot = NEW.currency
+          AND decision_row.amount_irr_snapshot = NEW.amount_irr
+          AND decision_row.configuration_snapshot_hash = NEW.payment_eligibility_configuration_hash
+          AND decision_row.created_at <= NEW.created_at;
+        IF valid_decision_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent requires one matching PAY-001 eligibility decision.'; END IF;
+
+        SELECT COUNT(*) INTO valid_method_count
+        FROM payment_method_eligibility_decision_methods decision_method
+        INNER JOIN payment_method_versions method_version ON method_version.id = decision_method.payment_method_version_id
+        WHERE decision_method.payment_method_eligibility_decision_id = NEW.payment_eligibility_decision_id
+          AND decision_method.payment_method_version_id = NEW.payment_method_version_id
+          AND decision_method.method_code = NEW.payment_method_code
+          AND decision_method.method_version = NEW.payment_method_version
+          AND decision_method.route_order IS NOT NULL
+          AND decision_method.reason_code = 'eligible'
+          AND decision_method.configuration_snapshot_hash = NEW.payment_eligibility_method_configuration_hash
+          AND method_version.method_code = NEW.payment_method_code
+          AND method_version.version = NEW.payment_method_version
+          AND method_version.configuration_snapshot_hash = NEW.payment_method_configuration_hash
+          AND NEW.provider_code = NEW.payment_method_code;
+        IF valid_method_count <> 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase intent requires one selected PAY-001 payment method version.'; END IF;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment intent purpose is unsupported.';
     END IF;
 END
 SQL);

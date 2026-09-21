@@ -33,6 +33,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
@@ -563,6 +564,134 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             );
             self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
         }
+    }
+
+    public function test_terminal_provider_finished_conflict_with_competing_method_stays_manual_and_blocks_new_intents(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext(
+            'terminal-conflict-competing-method',
+            10_000_000,
+            true,
+        );
+        $service = $this->service();
+        $created = $service->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('terminal-conflict-competing-create'),
+        );
+
+        $this->transport->statusValue = 'failed';
+        $failed = $service->refresh(
+            $created->paymentIntentPublicId,
+            $this->correlation('terminal-conflict-competing-failed'),
+        );
+        self::assertSame(NowPaymentsAuthorityState::Failed, $failed->state);
+
+        $administratorId = $this->ownerAdministrator();
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $eligibility->configureMethod(
+            'terminal-conflict-zarinpal-method',
+            $administratorId,
+            'zarinpal',
+            true,
+            false,
+            1,
+            'Competing Zarinpal method for terminal NOWPayments reconciliation test.',
+            $this->correlation('terminal-conflict-zarinpal-method'),
+        );
+        $eligibility->recordHealth(
+            'terminal-conflict-zarinpal-health',
+            $administratorId,
+            'zarinpal',
+            true,
+            $this->clock->value->modify('+10 minutes'),
+            'Healthy competing Zarinpal observation.',
+            $this->correlation('terminal-conflict-zarinpal-health'),
+        );
+        $competingDecision = $eligibility->evaluate(
+            'terminal-conflict-zarinpal-decision',
+            $userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+        );
+        $purchaseIntents = $this->app->make(PurchasePaymentIntentService::class);
+        $competing = $purchaseIntents->create(
+            'terminal-conflict-zarinpal-intent',
+            $userId,
+            $quote->quotePublicId,
+            $competingDecision->publicId,
+            'zarinpal',
+            $this->correlation('terminal-conflict-zarinpal-intent'),
+        );
+        self::assertSame('awaiting_user_action', $competing->state->value);
+
+        $this->transport->statusValue = 'finished';
+        $this->transport->actuallyPaid = $this->transport->payAmount;
+        $conflict = $service->refresh(
+            $created->paymentIntentPublicId,
+            $this->correlation('terminal-conflict-competing-finished'),
+        );
+        self::assertSame(NowPaymentsAuthorityState::ManualReview, $conflict->state);
+        self::assertNull($conflict->settlementPublicId);
+        self::assertSame(
+            'pending_manual_review',
+            DB::table('payment_intents')
+                ->where('public_id', $created->paymentIntentPublicId)
+                ->value('state'),
+        );
+
+        try {
+            $purchaseIntents->create(
+                'terminal-conflict-zarinpal-second-intent',
+                $userId,
+                $quote->quotePublicId,
+                $competingDecision->publicId,
+                'zarinpal',
+                $this->correlation('terminal-conflict-zarinpal-second-intent'),
+            );
+            self::fail('Unresolved terminal provider-finished reconciliation must block another purchase PaymentIntent.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Purchase payment is locked by unresolved payment reconciliation.',
+                $exception->getMessage(),
+            );
+        }
+
+        $stillManual = $service->refresh(
+            $created->paymentIntentPublicId,
+            $this->correlation('terminal-conflict-competing-reconcile'),
+        );
+        self::assertSame(NowPaymentsAuthorityState::ManualReview, $stillManual->state);
+        self::assertNull($stillManual->settlementPublicId);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(
+            1,
+            DB::table('nowpayments_reconciliation_findings')
+                ->where('nowpayments_payment_authority_id', $created->authorityId)
+                ->where('code', 'terminal_provider_finished_conflict_has_competing_purchase_intent')
+                ->where('severity', 'critical')
+                ->count(),
+        );
+        self::assertSame(
+            2,
+            DB::table('payment_intents')
+                ->where('purpose', 'purchase')
+                ->where('source_quote_public_id', $quote->quotePublicId)
+                ->count(),
+        );
+        self::assertSame(
+            0,
+            DB::table('purchase_settlements')
+                ->where('payment_intent_id', DB::table('payment_intents')
+                    ->where('public_id', $created->paymentIntentPublicId)
+                    ->value('id'))
+                ->count(),
+        );
+        self::assertSame(
+            'awaiting_payment',
+            DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'),
+        );
     }
 
     public function test_telegram_persisted_claim_replays_live_provider_authority_after_quote_expiry(): void

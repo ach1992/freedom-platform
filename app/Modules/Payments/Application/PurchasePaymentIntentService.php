@@ -117,6 +117,11 @@ final readonly class PurchasePaymentIntentService
                 $now = $this->clock->now();
                 $quote = $this->quote($connection, $sourceQuotePublicId);
                 $this->assertCurrentOwnedQuote($quote, $userId, $now);
+                $this->assertNoPendingManualReviewForQuote(
+                    $connection,
+                    $this->positiveDatabaseInt($quote->id, 'Source Quote ID'),
+                    $userId,
+                );
                 $decision = $this->decision($connection, $eligibilityDecisionPublicId);
                 $this->assertDecisionMatchesQuote($decision, $quote, $userId, $now);
                 $method = $this->selectedMethod(
@@ -244,6 +249,22 @@ final readonly class PurchasePaymentIntentService
         $expiresAt = $this->storedDateTime($quote->expires_at, 'Source Quote expiry timestamp');
         if ($validFrom > $now || $expiresAt <= $now) {
             throw new DomainException('Purchase payment requires a current Quote.');
+        }
+    }
+
+    private function assertNoPendingManualReviewForQuote(
+        Connection $connection,
+        int $quoteId,
+        int $userId,
+    ): void {
+        $unresolved = $connection->table('payment_intents')
+            ->where('purpose', self::PURPOSE)
+            ->where('source_quote_id', $quoteId)
+            ->where('user_id', $userId)
+            ->where('state', PaymentIntentState::PendingManualReview->value)
+            ->exists();
+        if ($unresolved) {
+            throw new DomainException('Purchase payment is locked by unresolved payment reconciliation.');
         }
     }
 

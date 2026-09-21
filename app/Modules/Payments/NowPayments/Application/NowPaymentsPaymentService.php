@@ -705,6 +705,20 @@ final readonly class NowPaymentsPaymentService
                 throw new RuntimeException('NOWPayments payment intent disappeared before settlement.');
             }
             $this->assertEligibleIntent($intent);
+            if ($state === NowPaymentsAuthorityState::ManualReview
+                && $this->terminalProviderFinishedConflictHasCompetingPurchaseIntent($connection, $current, $intent)) {
+                $this->finding(
+                    $connection,
+                    $current,
+                    'terminal_provider_finished_conflict_has_competing_purchase_intent',
+                    'critical',
+                    $result->paymentStatus,
+                    $result->responseHash,
+                    $correlationId,
+                );
+
+                return $current;
+            }
             if (is_string($intent->source_quote_public_id) && (int) $intent->user_id > 0) {
                 $purchaseUserId = (int) $intent->user_id;
                 $purchaseQuotePublicId = $intent->source_quote_public_id;
@@ -1069,6 +1083,32 @@ final readonly class NowPaymentsPaymentService
                 $correlationId,
             );
         }
+    }
+
+    /**
+     * Once a previously terminal NOWPayments authority has contradicted itself with
+     * identity-validated provider-finished evidence, any other purchase intent for the
+     * same Quote means automatic materialization is no longer unambiguously safe.
+     */
+    private function terminalProviderFinishedConflictHasCompetingPurchaseIntent(
+        Connection $connection,
+        stdClass $authority,
+        stdClass $intent,
+    ): bool {
+        $isTerminalConflict = $connection->table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
+            ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
+            ->exists();
+        if (! $isTerminalConflict || $intent->source_quote_id === null) {
+            return false;
+        }
+
+        return $connection->table('payment_intents')
+            ->where('purpose', 'purchase')
+            ->where('source_quote_id', $this->positiveInt($intent->source_quote_id, 'NOWPayments source Quote ID'))
+            ->where('user_id', $this->positiveInt($intent->user_id, 'NOWPayments purchase user ID'))
+            ->where('id', '<>', $this->positiveInt($intent->id, 'NOWPayments payment intent ID'))
+            ->exists();
     }
 
     /**
