@@ -47,8 +47,9 @@ final readonly class TelegramCustomerPurchaseNowPaymentsReceipt
             && ($providerPaymentId === null || $providerPayAmount === null || $providerPayAddress === null)) {
             throw new InvalidArgumentException('Telegram NOWPayments payment instructions are incomplete.');
         }
-        if ($state === 'finished' && $settlementPublicId === null) {
-            throw new InvalidArgumentException('Telegram NOWPayments finished state requires settlement authority.');
+        if ($state === 'finished'
+            && ($providerPaymentId === null || $providerStatus !== 'finished')) {
+            throw new InvalidArgumentException('Telegram NOWPayments finished provider authority is incomplete.');
         }
     }
 }

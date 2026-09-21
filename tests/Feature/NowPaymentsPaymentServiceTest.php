@@ -52,6 +52,8 @@ final class FakeNowPaymentsTransport implements NowPaymentsTransport
 
     public bool $createUncertain = false;
 
+    public bool $statusUnavailable = false;
+
     public string $createStatus = 'waiting';
 
     public string $statusValue = 'waiting';
@@ -78,6 +80,9 @@ final class FakeNowPaymentsTransport implements NowPaymentsTransport
         $this->statusCalls++;
         if ($providerPaymentId !== $this->providerPaymentId || $this->lastCreateRequest === null) {
             throw new RuntimeException('unexpected NOWPayments status lookup');
+        }
+        if ($this->statusUnavailable) {
+            throw new RuntimeException('simulated NOWPayments status outage');
         }
 
         return $this->result($this->statusValue, $this->actuallyPaid, 'status-'.$this->statusCalls);
@@ -383,6 +388,29 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame(1, $this->transport->statusCalls);
         self::assertSame(1, $promotionUsage->finalizeCalls);
 
+        $this->transport->statusUnavailable = true;
+        $unresolved = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame('finished', $unresolved->state);
+        self::assertSame($created->authorityPublicId, $unresolved->authorityPublicId);
+        self::assertSame($created->providerPaymentId, $unresolved->providerPaymentId);
+        self::assertSame('finished', $unresolved->providerStatus);
+        self::assertNull($unresolved->settlementPublicId);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(2, $this->transport->statusCalls);
+        self::assertSame(1, $promotionUsage->finalizeCalls);
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+
+        $this->transport->statusUnavailable = false;
         $recovered = $adapter->executeClaimForSelf(
             $userId,
             $userId,
@@ -398,7 +426,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame($created->authorityPublicId, $recovered->authorityPublicId);
         self::assertNotNull($recovered->settlementPublicId);
         self::assertSame(1, $this->transport->createCalls);
-        self::assertSame(2, $this->transport->statusCalls);
+        self::assertSame(3, $this->transport->statusCalls);
         self::assertSame(2, $promotionUsage->finalizeCalls);
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
         self::assertSame('paid', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
@@ -416,7 +444,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         );
         self::assertSame($recovered->settlementPublicId, $replay->settlementPublicId);
         self::assertSame(1, $this->transport->createCalls);
-        self::assertSame(2, $this->transport->statusCalls);
+        self::assertSame(3, $this->transport->statusCalls);
         self::assertSame(2, $promotionUsage->finalizeCalls);
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
         self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
