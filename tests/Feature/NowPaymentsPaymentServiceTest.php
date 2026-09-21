@@ -114,6 +114,54 @@ final class FakeNowPaymentsTransport implements NowPaymentsTransport
     }
 }
 
+final class FailOnceNowPaymentsPromotionUsageAuthority implements PurchasePromotionUsageAuthority
+{
+    public int $finalizeCalls = 0;
+
+    private bool $failNextFinalize = true;
+
+    public function __construct(private readonly PurchasePromotionUsageAuthority $inner) {}
+
+    public function reserveForQuote(
+        string $reservationKey,
+        int $actorUserId,
+        string $quotePublicId,
+    ): ?string {
+        return $this->inner->reserveForQuote($reservationKey, $actorUserId, $quotePublicId);
+    }
+
+    public function requiresFinalizationForQuote(int $actorUserId, string $quotePublicId): bool
+    {
+        return $this->inner->requiresFinalizationForQuote($actorUserId, $quotePublicId);
+    }
+
+    public function isFinalizationAuthorityAvailableForQuote(int $actorUserId, string $quotePublicId): bool
+    {
+        return $this->inner->isFinalizationAuthorityAvailableForQuote($actorUserId, $quotePublicId);
+    }
+
+    public function finalizeForSettlement(
+        string $redemptionKey,
+        int $actorUserId,
+        string $purchaseSettlementPublicId,
+    ): ?string {
+        $this->finalizeCalls++;
+        if ($this->failNextFinalize) {
+            $this->failNextFinalize = false;
+
+            throw new RuntimeException('simulated NOWPayments local materialization failure');
+        }
+
+        return $this->inner->finalizeForSettlement($redemptionKey, $actorUserId, $purchaseSettlementPublicId);
+    }
+
+    public function releaseEligibleExpiredTerminalPurchases(
+        int $limit = 100,
+    ): \App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult {
+        return $this->inner->releaseEligibleExpiredTerminalPurchases($limit);
+    }
+}
+
 final readonly class NowPaymentsRateProvider implements UsdtRateProvider
 {
     public function __construct(private Clock $clock) {}
@@ -260,6 +308,115 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             $this->correlation('purchase-aware-replay'),
         );
         self::assertSame($finished->settlementPublicId, $replay->settlementPublicId);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
+        self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
+    }
+
+    public function test_finished_provider_without_local_settlement_reconciles_same_authority_after_materialization_failure(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext(
+            'finished-local-recovery',
+            10_000_000,
+            true,
+        );
+        $promotionUsage = new FailOnceNowPaymentsPromotionUsageAuthority(
+            $this->app->make(PurchasePromotionUsageAuthority::class),
+        );
+        $service = $this->service($promotionUsage);
+        $adapter = new TelegramCustomerPurchaseNowPaymentsPaymentService(
+            $this->app->make(TelegramCustomerPurchaseOrderService::class),
+            $this->app->make(TelegramCustomerPurchasePaymentMethodsService::class),
+            $service,
+            $this->app['db'],
+        );
+        $operationKey = hash('sha256', 'telegram-nowpayments-finished-local-recovery');
+
+        $paymentIntentPublicId = $adapter->claimForSelf(
+            $userId,
+            $userId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        $created = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame('created', $created->state);
+        self::assertSame(1, $this->transport->createCalls);
+
+        $this->transport->statusValue = 'finished';
+        $this->transport->actuallyPaid = $this->transport->payAmount;
+        try {
+            $adapter->refreshForSelf(
+                $userId,
+                $userId,
+                $paymentIntentPublicId,
+                $operationKey,
+            );
+            self::fail('The injected local materialization failure must escape reconciliation.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('simulated NOWPayments local materialization failure', $exception->getMessage());
+        }
+
+        $authority = DB::table('nowpayments_payment_authorities')
+            ->where('payment_intent_id', DB::table('payment_intents')->where('public_id', $paymentIntentPublicId)->value('id'))
+            ->first(['public_id', 'state', 'provider_status']);
+        self::assertNotNull($authority);
+        self::assertSame($created->authorityPublicId, (string) $authority->public_id);
+        self::assertSame('finished', (string) $authority->state);
+        self::assertSame('finished', (string) $authority->provider_status);
+        self::assertSame(0, DB::table('purchase_settlements')->where('payment_intent_id', DB::table('payment_intents')->where('public_id', $paymentIntentPublicId)->value('id'))->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(1, $this->transport->statusCalls);
+        self::assertSame(1, $promotionUsage->finalizeCalls);
+
+        $recovered = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame('finished', $recovered->state);
+        self::assertSame($created->authorityPublicId, $recovered->authorityPublicId);
+        self::assertNotNull($recovered->settlementPublicId);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(2, $this->transport->statusCalls);
+        self::assertSame(2, $promotionUsage->finalizeCalls);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
+        self::assertSame('paid', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+
+        $replay = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame($recovered->settlementPublicId, $replay->settlementPublicId);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(2, $this->transport->statusCalls);
+        self::assertSame(2, $promotionUsage->finalizeCalls);
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
         self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
     }
@@ -498,14 +655,14 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         self::assertSame(1, DB::table('nowpayments_reconciliation_findings')->where('code', 'finished_amount_not_exact')->count());
     }
 
-    private function service(): NowPaymentsPaymentService
+    private function service(?PurchasePromotionUsageAuthority $promotionUsage = null): NowPaymentsPaymentService
     {
         return new NowPaymentsPaymentService(
             $this->app['db'],
             $this->transport,
             $this->rateResolver(),
             $this->app->make(PurchasePaymentIntentService::class),
-            $this->app->make(PurchasePromotionUsageAuthority::class),
+            $promotionUsage ?? $this->app->make(PurchasePromotionUsageAuthority::class),
             $this->app->make(PurchaseOrderService::class),
             $this->app->make(PurchaseSettlementService::class),
             $this->clock,
