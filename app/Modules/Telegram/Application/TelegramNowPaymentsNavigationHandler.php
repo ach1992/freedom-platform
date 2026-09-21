@@ -123,13 +123,8 @@ final readonly class TelegramNowPaymentsNavigationHandler
     private function resumePreparation(TelegramInteractionAction $action): void
     {
         $state = $this->selectedStateFromPayload($action->sessionPayload);
-        if ($this->isBackAction($action)) {
-            $this->returnPaymentMethods($action, $state);
-
-            return;
-        }
-        if ($this->isEntryCommand($action->messageText)) {
-            $this->returnHome($action);
+        if ($this->isBackAction($action) || $this->isEntryCommand($action->messageText)) {
+            $this->refresh($action, $state);
 
             return;
         }
@@ -249,6 +244,13 @@ final readonly class TelegramNowPaymentsNavigationHandler
             'nowpayments_manual_review' => $receipt->manualReviewRequired,
         ];
 
+        if (in_array($receipt->state, ['initiating', 'created', 'uncertain', 'manual_review'], true)) {
+            $state['cancel_locked'] = true;
+            $state['expiry_locked'] = true;
+        } else {
+            unset($state['cancel_locked'], $state['expiry_locked']);
+        }
+
         if ($receipt->state === 'finished' && $receipt->settlementPublicId !== null) {
             $this->moveToSurface($action, $sessionVersion, self::STATE_FINISHED, $state, 'finished');
 
@@ -284,7 +286,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 $sessionVersion,
                 $targetState,
                 $state,
-                'tg-nowpayments-'.$surface.'-state:'.hash('sha256', $state['order_public_id'].':'.$state['nowpayments_authority_public_id']),
+                'tg-nowpayments-'.$surface.'-state:'.hash('sha256', $state['order_public_id'].':'.$state['nowpayments_authority_public_id'].':'.$action->requestKey),
             );
         } catch (DomainException) {
             return;
@@ -320,6 +322,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
             'nowpayments_rate_source', 'nowpayments_rate_irr', 'nowpayments_price_amount_usd', 'nowpayments_pay_currency',
             'nowpayments_provider_payment_id', 'nowpayments_provider_status', 'nowpayments_pay_amount',
             'nowpayments_pay_address', 'nowpayments_settlement_public_id', 'nowpayments_manual_review',
+            'cancel_locked', 'expiry_locked',
         ] as $key) {
             unset($state[$key]);
         }
@@ -403,7 +406,6 @@ final readonly class TelegramNowPaymentsNavigationHandler
     {
         $locale = $this->locale($action->userId);
         $rows = [[$this->refreshButton($action, $sessionVersion, 'payment')]];
-        $this->appendBack($action, $sessionVersion, $rows, 'payment');
         $this->queueConfidential(
             $action,
             $this->translation('telegram_nowpayments.payment', $locale, [
@@ -423,7 +425,6 @@ final readonly class TelegramNowPaymentsNavigationHandler
     {
         $locale = $this->locale($action->userId);
         $rows = [[$this->refreshButton($action, $sessionVersion, $uncertain ? 'uncertain' : 'pending')]];
-        $this->appendBack($action, $sessionVersion, $rows, $uncertain ? 'uncertain' : 'pending');
         $this->queueConfidential(
             $action,
             $this->translation($uncertain ? 'telegram_nowpayments.uncertain' : 'telegram_nowpayments.pending', $locale),
@@ -609,7 +610,21 @@ final readonly class TelegramNowPaymentsNavigationHandler
             || ! is_bool($payload['nowpayments_manual_review'] ?? null)) {
             throw new RuntimeException('Telegram NOWPayments active state is invalid.');
         }
+        $liveAuthority = in_array(
+            $payload['nowpayments_state'],
+            ['initiating', 'created', 'uncertain', 'manual_review'],
+            true,
+        );
+        if ($liveAuthority) {
+            if (($payload['cancel_locked'] ?? null) !== true
+                || ($payload['expiry_locked'] ?? null) !== true) {
+                throw new RuntimeException('Telegram NOWPayments live authority lock state is invalid.');
+            }
+        } elseif (array_key_exists('cancel_locked', $payload) || array_key_exists('expiry_locked', $payload)) {
+            throw new RuntimeException('Telegram NOWPayments terminal authority lock state is invalid.');
+        }
         $selected = $payload;
+        unset($selected['cancel_locked'], $selected['expiry_locked']);
         foreach ([
             'nowpayments_authority_public_id', 'nowpayments_payment_intent_public_id', 'nowpayments_state',
             'nowpayments_rate_source', 'nowpayments_rate_irr', 'nowpayments_price_amount_usd', 'nowpayments_pay_currency',
