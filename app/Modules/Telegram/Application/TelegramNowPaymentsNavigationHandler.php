@@ -123,12 +123,6 @@ final readonly class TelegramNowPaymentsNavigationHandler
     private function resumePreparation(TelegramInteractionAction $action): void
     {
         $state = $this->selectedStateFromPayload($action->sessionPayload);
-        if ($this->isBackAction($action) || $this->isEntryCommand($action->messageText)) {
-            $this->completePreparation($action, $action->sessionVersion, $state);
-
-            return;
-        }
-
         $this->completePreparation($action, $action->sessionVersion, $state);
     }
 
@@ -198,11 +192,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 $state['nowpayments_payment_intent_public_id'],
                 $this->operationKey($state),
             );
-        } catch (AuthorizationException) {
-            $this->returnHome($action);
-
-            return;
-        } catch (DomainException|InvalidArgumentException) {
+        } catch (AuthorizationException|DomainException|InvalidArgumentException) {
             $this->renderPending($action, $action->sessionVersion, true);
 
             return;
