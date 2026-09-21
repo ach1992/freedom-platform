@@ -64,6 +64,22 @@ final class CustomerWalletTransferRecipientDiscoveryServiceTest extends TestCase
         self::assertFalse($ambiguous->isMatched());
     }
 
+    public function test_bot_identity_is_not_available_by_username_telegram_id_or_public_id(): void
+    {
+        [$senderId] = $this->user('active', 'fa');
+        [$botUserId, $botPublicId] = $this->user('active', 'fa');
+        $this->telegramAccount($senderId, 820001, 'sender_user');
+        $this->telegramAccount($botUserId, 820002, 'recipient_bot', true);
+
+        $service = $this->app->make(CustomerWalletTransferRecipientDiscoveryService::class);
+
+        foreach (['@recipient_bot', '820002', $botPublicId] as $query) {
+            $result = $service->searchForSelf($senderId, $senderId, '123456', $query);
+            self::assertFalse($result->isMatched());
+            self::assertFalse($result->isAmbiguous());
+        }
+    }
+
     /** @return array{0:int,1:string} */
     private function user(string $status, string $locale): array
     {
@@ -83,7 +99,7 @@ final class CustomerWalletTransferRecipientDiscoveryServiceTest extends TestCase
         return [$id, $publicId];
     }
 
-    private function telegramAccount(int $userId, int $telegramUserId, string $username): void
+    private function telegramAccount(int $userId, int $telegramUserId, string $username, bool $isBot = false): void
     {
         $now = now('UTC');
         DB::table('telegram_accounts')->insert([
@@ -92,7 +108,7 @@ final class CustomerWalletTransferRecipientDiscoveryServiceTest extends TestCase
             'telegram_user_id' => $telegramUserId,
             'username' => $username,
             'language_code' => 'fa',
-            'is_bot' => false,
+            'is_bot' => $isBot,
             'first_seen_at' => $now,
             'last_seen_at' => $now,
             'created_at' => $now,
