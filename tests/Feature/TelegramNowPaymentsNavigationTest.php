@@ -24,13 +24,22 @@ use Tests\TestCase;
 
 final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurchaseNowPaymentsPayment
 {
+    public int $claimCalls = 0;
+
+    public int $claimEffects = 0;
+
     public int $prepareCalls = 0;
 
     public int $prepareEffects = 0;
 
+    public bool $claimUnavailable = false;
+
     public int $refreshCalls = 0;
 
     public int $refreshEffects = 0;
+
+    /** @var array<string,string> */
+    private array $claims = [];
 
     /** @var array<string,TelegramCustomerPurchaseNowPaymentsReceipt> */
     private array $accepted = [];
@@ -43,9 +52,44 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
         private readonly string $refreshState = 'finished',
     ) {}
 
-    public function prepareForSelf(
+    public function claimForSelf(
         int $actorUserId,
         int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $operationKey,
+    ): string {
+        $this->assertAuthority(
+            $actorUserId,
+            $subjectUserId,
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+            $operationKey,
+        );
+        $this->claimCalls++;
+        if ($this->claimUnavailable) {
+            throw new AuthorizationException('Telegram NOWPayments checkout claim is stale.');
+        }
+        if (isset($this->claims[$operationKey])) {
+            return $this->claims[$operationKey];
+        }
+
+        $this->claimEffects++;
+        $this->claims[$operationKey] = str_pad('01H', 26, '0');
+
+        return $this->claims[$operationKey];
+    }
+
+    public function executeClaimForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $paymentIntentPublicId,
         string $orderPublicId,
         string $quotePublicId,
         string $quoteConfigurationHash,
@@ -63,6 +107,10 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
             $decisionConfigurationHash,
             $operationKey,
         );
+        if ($paymentIntentPublicId !== str_pad('01H', 26, '0')) {
+            throw new AuthorizationException('Unexpected Telegram NOWPayments PaymentIntent claim.');
+        }
+
         $this->prepareCalls++;
         if (isset($this->accepted[$operationKey])) {
             return $this->copy($this->accepted[$operationKey], true);
@@ -72,7 +120,7 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
         $created = $this->initialState === 'created';
         $receipt = new TelegramCustomerPurchaseNowPaymentsReceipt(
             str_pad('01R', 26, '0'),
-            str_pad('01H', 26, '0'),
+            $paymentIntentPublicId,
             $this->initialState,
             'manual',
             '900000.00000000',
@@ -89,6 +137,40 @@ final class TelegramNowPaymentsNavigationPayment implements TelegramCustomerPurc
         $this->accepted[$operationKey] = $receipt;
 
         return $receipt;
+    }
+
+    public function prepareForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseNowPaymentsReceipt {
+        $paymentIntentPublicId = $this->claimForSelf(
+            $actorUserId,
+            $subjectUserId,
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+            $operationKey,
+        );
+
+        return $this->executeClaimForSelf(
+            $actorUserId,
+            $subjectUserId,
+            $paymentIntentPublicId,
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+            $operationKey,
+        );
     }
 
     public function refreshForSelf(
@@ -377,6 +459,97 @@ final class TelegramNowPaymentsNavigationTest extends TestCase
         self::assertSame(1, $payment->refreshEffects);
         self::assertSame(1, $payment->refreshCalls);
         self::assertSame(1, DB::table('processed_telegram_updates')->where('update_id', 9710)->count());
+    }
+
+    public function test_interrupted_preparing_with_persisted_claim_replays_provider_authority_without_fresh_checkout_claim(): void
+    {
+        $payment = new TelegramNowPaymentsNavigationPayment;
+        $this->app->instance(TelegramCustomerPurchaseNowPaymentsPayment::class, $payment);
+        $this->app->instance(TelegramCustomerPurchaseOrder::class, new TelegramNowPaymentsNavigationOrder);
+        $this->app->instance(TelegramCustomerPurchasePaymentMethods::class, new TelegramNowPaymentsNavigationPaymentMethods);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $telegramUserId = 9990;
+        $username = 'nowpayments_interrupted';
+        $this->accept($this->payload(9900, $telegramUserId, $username, 'fa', '/start'));
+        $processor->process('123456789', 9900);
+
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $home = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'public_id', 'version']);
+        self::assertNotNull($home);
+
+        $state = [
+            'page' => 1,
+            'offering_selection' => str_repeat('c', 40),
+            'quote_public_id' => str_pad('01K', 26, '0'),
+            'quote_configuration_hash' => str_repeat('a', 64),
+            'payment_decision_public_id' => str_pad('01P', 26, '0'),
+            'payment_decision_configuration_hash' => str_repeat('b', 64),
+            'order_public_id' => str_pad('01N', 26, '0'),
+            'payment_method_code' => 'nowpayments',
+            'cancel_locked' => true,
+            'expiry_locked' => true,
+        ];
+        $operationKey = hash('sha256', 'telegram-nowpayments-order:'.$state['order_public_id']);
+        $paymentIntentPublicId = $payment->claimForSelf(
+            (int) $account->user_id,
+            (int) $account->user_id,
+            $state['order_public_id'],
+            $state['quote_public_id'],
+            $state['quote_configuration_hash'],
+            $state['payment_decision_public_id'],
+            $state['payment_decision_configuration_hash'],
+            $operationKey,
+        );
+        $accepted = $payment->executeClaimForSelf(
+            (int) $account->user_id,
+            (int) $account->user_id,
+            $paymentIntentPublicId,
+            $state['order_public_id'],
+            $state['quote_public_id'],
+            $state['quote_configuration_hash'],
+            $state['payment_decision_public_id'],
+            $state['payment_decision_configuration_hash'],
+            $operationKey,
+        );
+        self::assertSame('created', $accepted->state);
+        self::assertSame(1, $payment->claimCalls);
+        self::assertSame(1, $payment->claimEffects);
+        self::assertSame(1, $payment->prepareCalls);
+        self::assertSame(1, $payment->prepareEffects);
+
+        $state['nowpayments_payment_intent_public_id'] = $paymentIntentPublicId;
+        $this->app->make(TelegramInteractionSessionService::class)->transition(
+            (string) $home->public_id,
+            (int) $home->version,
+            'purchase_nowpayments_preparing',
+            $state,
+            'telegram-nowpayments-interrupted-preparing',
+        );
+
+        $payment->claimUnavailable = true;
+        $this->accept($this->payload(9910, $telegramUserId, $username, 'fa', '/menu'));
+        $processor->process('123456789', 9910);
+
+        self::assertSame(1, $payment->claimCalls);
+        self::assertSame(1, $payment->claimEffects);
+        self::assertSame(2, $payment->prepareCalls);
+        self::assertSame(1, $payment->prepareEffects);
+        self::assertSame(
+            'purchase_nowpayments_payment',
+            DB::table('telegram_interaction_sessions')->where('id', (int) $home->id)->value('state'),
+        );
+        $payload = json_decode(
+            (string) DB::table('telegram_interaction_sessions')->where('id', (int) $home->id)->value('payload'),
+            true,
+            16,
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertSame($paymentIntentPublicId, $payload['nowpayments_payment_intent_public_id'] ?? null);
+        self::assertSame('900001', $payload['nowpayments_provider_payment_id'] ?? null);
     }
 
     public function test_live_uncertain_authority_cannot_be_abandoned_by_navigation_cancel_or_restart_commands(): void
