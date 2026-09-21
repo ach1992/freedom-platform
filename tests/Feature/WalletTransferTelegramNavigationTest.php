@@ -180,6 +180,55 @@ final class WalletTransferTelegramNavigationTest extends TestCase
         );
     }
 
+    public function test_back_from_interrupted_preparation_reconciles_then_releases_existing_hold(): void
+    {
+        [$processor, $sessionId, $senderUserId, $senderTelegramId, , $senderWalletId] =
+            $this->prepareConfirmation(9995, 10000, 'wallet_sender_interrupted_prepare');
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('id', $sessionId)
+            ->first(['public_id', 'version', 'payload']);
+        self::assertNotNull($session);
+        $state = json_decode((string) $session->payload, true, 16, JSON_THROW_ON_ERROR);
+        self::assertIsArray($state);
+        unset(
+            $state['fee_irr'],
+            $state['total_debit_irr'],
+            $state['confirmation_expires_at'],
+            $state['available_balance_irr'],
+        );
+
+        $preparing = $this->app->make(TelegramInteractionSessionService::class)->transition(
+            (string) $session->public_id,
+            (int) $session->version,
+            'wallet_transfer_preparing',
+            $state,
+            'telegram-wallet-interrupted-prepare',
+        );
+        self::assertSame('wallet_transfer_preparing', $preparing->state);
+        self::assertSame(1, DB::table('wallet_transfers')->where('status', 'pending_confirmation')->count());
+        self::assertSame(1, DB::table('wallet_holds')->where('status', 'active')->count());
+
+        $this->accept($this->payload(10010, $senderTelegramId, 'wallet_sender_interrupted_prepare', 'fa', '/back'));
+        $processor->process('123456789', 10010);
+
+        self::assertSame(
+            'wallet_transfer_amount',
+            DB::table('telegram_interaction_sessions')->where('id', $sessionId)->value('state'),
+        );
+        self::assertSame(1, DB::table('wallet_transfers')->where('status', 'cancelled')->count());
+        self::assertSame(0, DB::table('wallet_holds')->where('status', 'active')->count());
+        self::assertSame(1, DB::table('wallet_holds')->where('status', 'released')->count());
+        self::assertSame(1, DB::table('ledger_transactions')->count());
+        self::assertSame(
+            1_000_000,
+            $this->app->make(WalletHoldService::class)
+                ->balance($senderUserId, $senderWalletId)
+                ->availableBalance
+                ->amount,
+        );
+    }
+
     public function test_interrupted_submission_reconciles_completed_transfer_without_second_ledger_effect(): void
     {
         [$processor, $sessionId, $senderUserId, $senderTelegramId] =
