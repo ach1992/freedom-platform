@@ -166,6 +166,7 @@ return new class extends Migration
                 );
             }
 
+            /** @var object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null $contradictoryObservation */
             $contradictoryObservation = DB::table('nowpayments_payment_observations')
                 ->where('nowpayments_payment_authority_id', $authorityId)
                 ->where('event_type', 'status_lookup')
