@@ -1234,7 +1234,6 @@ final class NowPaymentsPaymentServiceTest extends TestCase
     }
 }
 
-
 /** @requirement IPG-002 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
 final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
 {
