@@ -25,6 +25,18 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::table('nowpayments_reconciliation_findings')
+            ->whereIn('code', [
+                'terminal_local_state_conflicts_with_finished_provider',
+                'terminal_finished_conflict_status_changed',
+                'terminal_provider_finished_conflict_competing_intent',
+            ])
+            ->exists()) {
+            throw new RuntimeException(
+                'Cannot roll back terminal NOWPayments conflict hardening after reconciliation evidence exists.',
+            );
+        }
+
         DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_update_guard');
         $this->createPriorPaymentIntentGuard();
 
