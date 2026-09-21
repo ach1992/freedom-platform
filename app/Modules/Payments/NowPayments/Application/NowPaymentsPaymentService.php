@@ -1561,7 +1561,7 @@ final readonly class NowPaymentsPaymentService
         }
 
         return $query->first([
-            'id', 'public_id', 'purpose', 'user_id', 'source_quote_public_id', 'payment_method_code',
+            'id', 'public_id', 'purpose', 'user_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code',
             'provider_code', 'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }

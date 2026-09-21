@@ -37,6 +37,7 @@ use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -492,7 +493,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
                         'provider_status' => 'finished',
                     ]);
                 self::fail('Terminal NOWPayments authority must not reopen without durable provider-finished evidence.');
-            } catch (\Illuminate\Database\QueryException) {
+            } catch (QueryException) {
                 // The database guard independently rejects an unsupported direct reopen.
             }
             self::assertSame(
