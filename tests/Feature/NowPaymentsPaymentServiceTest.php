@@ -7,17 +7,20 @@ namespace Tests\Feature;
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\TelegramCustomerPurchaseOrderService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsCreateRequest;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsPaymentResult;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransportException;
 use App\Modules\Payments\NowPayments\Application\NowPaymentsAuthorityState;
 use App\Modules\Payments\NowPayments\Application\NowPaymentsPaymentService;
+use App\Modules\Payments\NowPayments\Application\TelegramCustomerPurchaseNowPaymentsPaymentService;
 use App\Modules\Payments\Usdt\Application\UsdtCircuitBreaker;
 use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Domain\UsdtRate;
@@ -30,6 +33,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
 use Illuminate\Cache\ArrayStore;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Cache\Repository;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -256,6 +260,113 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             $this->correlation('purchase-aware-replay'),
         );
         self::assertSame($finished->settlementPublicId, $replay->settlementPublicId);
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
+        self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
+    }
+
+    public function test_telegram_persisted_claim_replays_live_provider_authority_after_quote_expiry(): void
+    {
+        [$userId, $quote, $decision, $opening] = $this->purchaseContext('telegram-preparing-recovery', 10_000_000);
+        $adapter = new TelegramCustomerPurchaseNowPaymentsPaymentService(
+            $this->app->make(TelegramCustomerPurchaseOrderService::class),
+            $this->app->make(TelegramCustomerPurchasePaymentMethodsService::class),
+            $this->service(),
+            $this->app['db'],
+        );
+        $operationKey = hash('sha256', 'telegram-nowpayments-preparing-recovery');
+
+        $paymentIntentPublicId = $adapter->claimForSelf(
+            $userId,
+            $userId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+
+        self::assertSame(0, $this->transport->createCalls);
+        self::assertSame(1, DB::table('payment_intents')->where('public_id', $paymentIntentPublicId)->count());
+        self::assertSame(0, DB::table('nowpayments_payment_authorities')->count());
+
+        $created = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame('created', $created->state);
+        self::assertSame($paymentIntentPublicId, $created->paymentIntentPublicId);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(1, DB::table('nowpayments_payment_authorities')->count());
+
+        $this->clock->value = $this->clock->value->modify('+31 minutes');
+
+        try {
+            $adapter->claimForSelf(
+                $userId,
+                $userId,
+                $opening->orderPublicId,
+                $quote->quotePublicId,
+                $quote->configurationSnapshotHash,
+                $decision->publicId,
+                $decision->configurationSnapshotHash,
+                $operationKey,
+            );
+            self::fail('Fresh Telegram checkout authorization must reject an expired Quote.');
+        } catch (AuthorizationException) {
+            // Expected: only the persisted PaymentIntent claim may recover after expiry.
+        }
+
+        $replayed = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame('created', $replayed->state);
+        self::assertSame($created->authorityPublicId, $replayed->authorityPublicId);
+        self::assertSame(1, $this->transport->createCalls);
+        self::assertSame(1, DB::table('nowpayments_payment_authorities')->count());
+
+        $this->transport->statusValue = 'finished';
+        $this->transport->actuallyPaid = $this->transport->payAmount;
+        $finished = $adapter->refreshForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $operationKey,
+        );
+        self::assertSame('finished', $finished->state);
+        self::assertNotNull($finished->settlementPublicId);
+        self::assertSame('paid', DB::table('orders')->where('public_id', $opening->orderPublicId)->value('state'));
+        self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
+
+        $finishedReplay = $adapter->executeClaimForSelf(
+            $userId,
+            $userId,
+            $paymentIntentPublicId,
+            $opening->orderPublicId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $decision->publicId,
+            $decision->configurationSnapshotHash,
+            $operationKey,
+        );
+        self::assertSame('finished', $finishedReplay->state);
+        self::assertSame($finished->settlementPublicId, $finishedReplay->settlementPublicId);
+        self::assertSame(1, $this->transport->createCalls);
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'nowpayments')->count());
         self::assertSame(1, DB::table('orders')->where('public_id', $opening->orderPublicId)->count());
     }
