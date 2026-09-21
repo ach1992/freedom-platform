@@ -484,6 +484,24 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             );
             self::assertNull($terminal->settlementPublicId);
 
+            try {
+                DB::table('nowpayments_payment_authorities')
+                    ->where('id', $created->authorityId)
+                    ->update([
+                        'state' => NowPaymentsAuthorityState::ManualReview->value,
+                        'provider_status' => 'finished',
+                    ]);
+                self::fail('Terminal NOWPayments authority must not reopen without durable provider-finished evidence.');
+            } catch (\Illuminate\Database\QueryException) {
+                // The database guard independently rejects an unsupported direct reopen.
+            }
+            self::assertSame(
+                $terminalStatus,
+                DB::table('nowpayments_payment_authorities')
+                    ->where('id', $created->authorityId)
+                    ->value('state'),
+            );
+
             $this->transport->statusValue = 'finished';
             $this->transport->actuallyPaid = $this->transport->payAmount;
             $conflict = $service->refresh(
@@ -640,6 +658,23 @@ final class NowPaymentsPaymentServiceTest extends TestCase
                 ->where('public_id', $created->paymentIntentPublicId)
                 ->value('state'),
         );
+
+        try {
+            $purchaseIntents->create(
+                'terminal-conflict-zarinpal-intent',
+                $userId,
+                $quote->quotePublicId,
+                $competingDecision->publicId,
+                'zarinpal',
+                $this->correlation('terminal-conflict-zarinpal-replay-after-conflict'),
+            );
+            self::fail('Existing competing PaymentIntent replay must remain locked by unresolved reconciliation.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Purchase payment is locked by unresolved payment reconciliation.',
+                $exception->getMessage(),
+            );
+        }
 
         try {
             $purchaseIntents->create(

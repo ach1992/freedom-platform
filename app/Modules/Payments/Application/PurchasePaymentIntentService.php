@@ -111,13 +111,27 @@ final readonly class PurchasePaymentIntentService
             ): PurchasePaymentIntentReceipt {
                 $existing = $this->intentByCreationKey($connection, $creationKey, true);
                 if ($existing !== null) {
-                    return $this->replayReceipt($existing, $userId, $sourceQuotePublicId, $eligibilityDecisionPublicId, $methodCode);
+                    $receipt = $this->replayReceipt(
+                        $existing,
+                        $userId,
+                        $sourceQuotePublicId,
+                        $eligibilityDecisionPublicId,
+                        $methodCode,
+                    );
+                    $this->assertNoOtherPendingManualReviewForQuote(
+                        $connection,
+                        $this->positiveDatabaseInt($existing->source_quote_id, 'Source Quote ID'),
+                        $userId,
+                        $this->positiveDatabaseInt($existing->id, 'Payment intent ID'),
+                    );
+
+                    return $receipt;
                 }
 
                 $now = $this->clock->now();
                 $quote = $this->quote($connection, $sourceQuotePublicId);
                 $this->assertCurrentOwnedQuote($quote, $userId, $now);
-                $this->assertNoPendingManualReviewForQuote(
+                $this->assertNoOtherPendingManualReviewForQuote(
                     $connection,
                     $this->positiveDatabaseInt($quote->id, 'Source Quote ID'),
                     $userId,
@@ -133,7 +147,21 @@ final readonly class PurchasePaymentIntentService
 
                 $existing = $this->intentByCreationKey($connection, $creationKey, true);
                 if ($existing !== null) {
-                    return $this->replayReceipt($existing, $userId, $sourceQuotePublicId, $eligibilityDecisionPublicId, $methodCode);
+                    $receipt = $this->replayReceipt(
+                        $existing,
+                        $userId,
+                        $sourceQuotePublicId,
+                        $eligibilityDecisionPublicId,
+                        $methodCode,
+                    );
+                    $this->assertNoOtherPendingManualReviewForQuote(
+                        $connection,
+                        $this->positiveDatabaseInt($existing->source_quote_id, 'Source Quote ID'),
+                        $userId,
+                        $this->positiveDatabaseInt($existing->id, 'Payment intent ID'),
+                    );
+
+                    return $receipt;
                 }
 
                 $payloadHash = $this->creationPayloadHash($userId, $quote, $decision, $method);
@@ -190,9 +218,24 @@ final readonly class PurchasePaymentIntentService
                 );
             });
         } catch (QueryException $exception) {
-            $existing = $this->intentByCreationKey($this->database->connection(), $creationKey);
+            $connection = $this->database->connection();
+            $existing = $this->intentByCreationKey($connection, $creationKey);
             if ($existing !== null) {
-                return $this->replayReceipt($existing, $userId, $sourceQuotePublicId, $eligibilityDecisionPublicId, $methodCode);
+                $receipt = $this->replayReceipt(
+                    $existing,
+                    $userId,
+                    $sourceQuotePublicId,
+                    $eligibilityDecisionPublicId,
+                    $methodCode,
+                );
+                $this->assertNoOtherPendingManualReviewForQuote(
+                    $connection,
+                    $this->positiveDatabaseInt($existing->source_quote_id, 'Source Quote ID'),
+                    $userId,
+                    $this->positiveDatabaseInt($existing->id, 'Payment intent ID'),
+                );
+
+                return $receipt;
             }
 
             throw $exception;
@@ -252,18 +295,22 @@ final readonly class PurchasePaymentIntentService
         }
     }
 
-    private function assertNoPendingManualReviewForQuote(
+    private function assertNoOtherPendingManualReviewForQuote(
         Connection $connection,
         int $quoteId,
         int $userId,
+        ?int $excludeIntentId = null,
     ): void {
-        $unresolved = $connection->table('payment_intents')
+        $query = $connection->table('payment_intents')
             ->where('purpose', self::PURPOSE)
             ->where('source_quote_id', $quoteId)
             ->where('user_id', $userId)
-            ->where('state', PaymentIntentState::PendingManualReview->value)
-            ->exists();
-        if ($unresolved) {
+            ->where('state', PaymentIntentState::PendingManualReview->value);
+        if ($excludeIntentId !== null) {
+            $query->where('id', '<>', $excludeIntentId);
+        }
+
+        if ($query->exists()) {
             throw new DomainException('Purchase payment is locked by unresolved payment reconciliation.');
         }
     }

@@ -581,6 +581,16 @@ final readonly class NowPaymentsPaymentService
             }
             if (in_array($state, [NowPaymentsAuthorityState::Failed, NowPaymentsAuthorityState::Expired], true)
                 && $result->paymentStatus === 'finished') {
+                $this->finding(
+                    $connection,
+                    $current,
+                    'terminal_local_state_conflicts_with_finished_provider',
+                    'critical',
+                    $result->paymentStatus,
+                    $result->responseHash,
+                    $correlationId,
+                );
+
                 $terminalState = $state;
                 $updated = $connection->table('nowpayments_payment_authorities')
                     ->where('id', (int) $current->id)
@@ -600,15 +610,6 @@ final readonly class NowPaymentsPaymentService
                 $this->reopenIntentForTerminalProviderFinishedConflict(
                     $connection,
                     (int) $current->payment_intent_id,
-                    $correlationId,
-                );
-                $this->finding(
-                    $connection,
-                    $current,
-                    'terminal_local_state_conflicts_with_finished_provider',
-                    'critical',
-                    $result->paymentStatus,
-                    $result->responseHash,
                     $correlationId,
                 );
 

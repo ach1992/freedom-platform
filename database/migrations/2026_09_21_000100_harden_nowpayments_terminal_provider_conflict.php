@@ -42,6 +42,9 @@ CREATE TRIGGER nowpayments_authority_update_guard
 BEFORE UPDATE ON nowpayments_payment_authorities
 FOR EACH ROW
 BEGIN
+    DECLARE finished_status_observation_count INT DEFAULT 0;
+    DECLARE terminal_finished_finding_count INT DEFAULT 0;
+
     IF NOT (NEW.public_id <=> OLD.public_id)
        OR NOT (NEW.request_key <=> OLD.request_key)
        OR NOT (NEW.payment_intent_id <=> OLD.payment_intent_id)
@@ -76,13 +79,34 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments provider pay address is immutable once accepted.';
     END IF;
 
+    IF OLD.state IN ('failed','expired') AND NEW.state = 'manual_review' THEN
+        SELECT COUNT(*) INTO finished_status_observation_count
+        FROM nowpayments_payment_observations observation_row
+        WHERE observation_row.nowpayments_payment_authority_id = OLD.id
+          AND observation_row.event_type = 'status_lookup'
+          AND observation_row.provider_payment_id = OLD.provider_payment_id
+          AND observation_row.provider_status = 'finished';
+
+        SELECT COUNT(*) INTO terminal_finished_finding_count
+        FROM nowpayments_reconciliation_findings finding_row
+        WHERE finding_row.nowpayments_payment_authority_id = OLD.id
+          AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
+          AND finding_row.severity = 'critical'
+          AND finding_row.provider_status = 'finished';
+
+        IF finished_status_observation_count < 1 OR terminal_finished_finding_count < 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments provider-finished recovery requires durable finished-status reconciliation evidence.';
+        END IF;
+    END IF;
+
     IF NEW.state <> OLD.state AND NOT (
         (OLD.state = 'initiating' AND NEW.state IN ('created','uncertain','failed')) OR
         (OLD.state = 'uncertain' AND NEW.state = 'manual_review') OR
         (OLD.state = 'created' AND NEW.state IN ('manual_review','finished','failed','expired')) OR
         (OLD.state = 'manual_review' AND NEW.state IN ('finished','failed','expired')) OR
         (OLD.state IN ('failed','expired') AND NEW.state = 'manual_review'
-         AND NEW.provider_payment_id IS NOT NULL AND NEW.provider_status = 'finished')
+         AND NEW.provider_payment_id IS NOT NULL AND NEW.provider_status = 'finished'
+         AND finished_status_observation_count >= 1 AND terminal_finished_finding_count >= 1)
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority state transition is invalid.';
     END IF;
@@ -368,6 +392,14 @@ BEGIN
           AND authority_row.state = 'manual_review'
           AND authority_row.provider_payment_id IS NOT NULL
           AND authority_row.provider_status = 'finished'
+          AND EXISTS (
+              SELECT 1
+              FROM nowpayments_reconciliation_findings finding_row
+              WHERE finding_row.nowpayments_payment_authority_id = authority_row.id
+                AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
+                AND finding_row.severity = 'critical'
+                AND finding_row.provider_status = 'finished'
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM purchase_settlements settlement_row
