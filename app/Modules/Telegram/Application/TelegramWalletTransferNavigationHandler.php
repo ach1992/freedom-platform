@@ -226,7 +226,7 @@ final readonly class TelegramWalletTransferNavigationHandler
             return;
         }
         $this->assertActor($action, $claim->userId);
-        $this->completePreparation($action, $claim->version, $state);
+        $this->completePreparation($action, $claim->version, $state, true);
     }
 
     private function resumePreparation(TelegramInteractionAction $action): void
@@ -268,7 +268,12 @@ final readonly class TelegramWalletTransferNavigationHandler
     }
 
     /** @param array<string,mixed> $state */
-    private function completePreparation(TelegramInteractionAction $action, int $sessionVersion, array $state): void
+    private function completePreparation(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        array $state,
+        bool $initialAttempt = false,
+    ): void
     {
         try {
             $receipt = $this->transfers->prepareForSelf(
@@ -279,20 +284,27 @@ final readonly class TelegramWalletTransferNavigationHandler
                 $state['transfer_key'],
             );
         } catch (AuthorizationException) {
-            $this->returnHomeFromVersion($action, $sessionVersion);
-
-            return;
-        } catch (DomainException) {
-            if (is_string($state['prepare_action'] ?? null)) {
-                $this->finishPreparationExit($action, $sessionVersion, $state);
+            if ($initialAttempt) {
+                $this->returnHomeFromVersion($action, $sessionVersion);
 
                 return;
             }
-            $this->returnAmountFromPreparation($action, $sessionVersion, $state, 'unavailable');
+            $this->finishPreparationExitFromExistingAuthority($action, $sessionVersion, $state);
+
+            return;
+        } catch (DomainException) {
+            if ($initialAttempt) {
+                $this->returnAmountFromPreparation($action, $sessionVersion, $state, 'unavailable');
+
+                return;
+            }
+            $this->finishPreparationExitFromExistingAuthority($action, $sessionVersion, $state);
 
             return;
         } catch (RuntimeException) {
-            // A projection/runtime failure can follow an accepted hold; keep the effect-locked state for replay.
+            // A projection/runtime failure can follow an accepted hold; only a proven domain cancellation may unlock it.
+            $this->finishPreparationExitFromExistingAuthority($action, $sessionVersion, $state);
+
             return;
         }
 
@@ -680,6 +692,30 @@ final readonly class TelegramWalletTransferNavigationHandler
         }
         $this->assertActor($action, $session->userId);
         $this->renderAmountPrompt($action, $session->version, $session->payload, $error);
+    }
+
+    /** @param array<string,mixed> $state */
+    private function finishPreparationExitFromExistingAuthority(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        array $state,
+    ): void {
+        if (! is_string($state['prepare_action'] ?? null)) {
+            return;
+        }
+        try {
+            $cancelled = $this->transfers->cancelForSelf(
+                $action->userId,
+                $action->userId,
+                $state['transfer_key'],
+                'telegram user cancelled transfer',
+            );
+        } catch (DomainException|AuthorizationException|RuntimeException) {
+            return;
+        }
+        if ($cancelled->status === 'cancelled') {
+            $this->finishPreparationExit($action, $sessionVersion, $state);
+        }
     }
 
     /** @param array<string,mixed> $state */
