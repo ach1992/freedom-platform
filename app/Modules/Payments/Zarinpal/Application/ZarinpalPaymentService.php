@@ -13,6 +13,7 @@ use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
 use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -216,7 +217,8 @@ final readonly class ZarinpalPaymentService
     {
         return $this->providerMutations->runForPaymentIntent(
             $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-            function () use ($request, $configuration, $correlationId, $prePaymentOrderAware): ZarinpalPaymentReceipt {
+            'zarinpal:request:'.$this->positiveInt($request->id, 'Zarinpal request ID'),
+            function (PurchaseProviderMutationAttempt $attempt) use ($request, $configuration, $correlationId, $prePaymentOrderAware): ZarinpalPaymentReceipt {
                 $providerRequest = $this->requestById(
                     $this->database->connection(),
                     $this->positiveInt($request->id, 'Zarinpal request ID'),
@@ -248,6 +250,7 @@ final readonly class ZarinpalPaymentService
                     return $this->abortFreshRequestBeforeProvider($providerRequest, $correlationId);
                 }
 
+                $attempt->markExternalEffectStarted();
                 $result = $this->transport->request(
                     $configuration['merchant_id'],
                     $this->positiveInt($providerRequest->amount_irr, 'Zarinpal request amount'),
@@ -479,7 +482,8 @@ final readonly class ZarinpalPaymentService
 
         return $this->providerMutations->runForPaymentIntent(
             $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-            function () use ($requestId, $correlationId, $configuration, $connection, $request): ZarinpalPaymentReceipt {
+            'zarinpal:verify:'.$requestId,
+            function (PurchaseProviderMutationAttempt $attempt) use ($requestId, $correlationId, $configuration, $connection, $request): ZarinpalPaymentReceipt {
                 $prePaymentOrderAware = $this->prePaymentOrderAware($request);
                 $observationWatermark = $this->prepareVerificationAttempt(
                     $requestId,
@@ -490,19 +494,23 @@ final readonly class ZarinpalPaymentService
                 if ($observationWatermark === null) {
                     return $this->receipt($this->requiredRequest($connection, $requestId), true);
                 }
+                $attempt->markExternalEffectStarted();
                 $result = $this->transport->verify(
                     $configuration['merchant_id'],
                     $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
                     $request->authority,
                 );
                 if ($result->uncertain) {
-                    return $this->convergeNonVerifiedResult(
+                    $receipt = $this->convergeNonVerifiedResult(
                         $requestId,
                         'uncertain',
                         null,
                         $prePaymentOrderAware,
                         $correlationId,
                     );
+                    $attempt->requireReconciliation();
+
+                    return $receipt;
                 }
                 if (! $result->verified || $result->refId === null || ! in_array($result->providerCode, [100, 101], true)) {
                     return $this->convergeNonVerifiedResult(

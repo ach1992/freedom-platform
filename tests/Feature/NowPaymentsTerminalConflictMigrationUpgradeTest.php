@@ -17,8 +17,10 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchasePaymentMaintenanceService;
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
 use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
+use App\Modules\Payments\Application\PurchaseWalletPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsCreateRequest;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsPaymentResult;
@@ -32,6 +34,10 @@ use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
 use App\Modules\Payments\Usdt\Domain\UsdtRateProvider;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
 use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
+use App\Modules\Wallet\Application\LedgerEntryDraft;
+use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Domain\IrrMoney;
+use App\Modules\Wallet\Domain\LedgerDirection;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -335,7 +341,8 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         try {
             $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
                 (int) $competingIntentId,
-                function () use (&$providerMutationCalled): void {
+                'test:stale-competing-provider-claim',
+                function (PurchaseProviderMutationAttempt $attempt) use (&$providerMutationCalled): void {
                     $providerMutationCalled = true;
                 },
             );
@@ -558,11 +565,12 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence'),
         );
         self::assertSame(
-            1,
+            0,
             DB::table('nowpayments_terminal_conflict_upgrade_fence')
                 ->where('id', 1)
                 ->where('active', 1)
                 ->count(),
+            'Partial staged-fence composition must not activate the financial cut before every trigger exists.',
         );
         self::assertTrue($this->triggerExists('payment_intents_np_conflict_upgrade_insert_fence'));
         self::assertTrue($this->triggerExists('nowpayments_observation_np_conflict_upgrade_insert_fence'));
@@ -600,9 +608,11 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         $fixture = $this->legacyTerminalConflictFixture('provider-barrier-active-fence', 'failed');
 
         $injected = false;
-        $needle = 'create or replace trigger nowpayments_observation_np_conflict_upgrade_insert_fence';
-        DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
-            if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
+        DB::listen(function (QueryExecuted $query) use (&$injected): void {
+            $sql = strtolower($query->sql);
+            if ($injected
+                || ! str_contains($sql, 'insert into')
+                || ! str_contains($sql, 'nowpayments_terminal_conflict_upgrade_fence')) {
                 return;
             }
 
@@ -632,7 +642,8 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         try {
             $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
                 $fixture['payment_intent_id'],
-                function () use (&$called): void {
+                'test:active-migration-fence',
+                function (PurchaseProviderMutationAttempt $attempt) use (&$called): void {
                     $called = true;
                 },
             );
@@ -644,6 +655,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             );
         }
         self::assertFalse($called);
+        $this->assertFailClosedCutWithSecondConnection($fixture, 'interrupted-provider-drain');
     }
 
     public function test_inflight_provider_mutation_is_drained_before_migration_preflight(): void
@@ -660,10 +672,14 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             $fixture['provider_payment_id'],
             'provider-barrier-inflight',
         );
+        $walletFixture = $this->walletCutFixture('provider-barrier-local-cut');
+        $ledgerCountBefore = DB::table('ledger_transactions')->count();
 
         $ready = sys_get_temp_dir().'/nowpayments-provider-barrier-ready-'.bin2hex(random_bytes(8));
         $fenceActive = $ready.'.fence';
+        $localWriterDone = $ready.'.local-writer';
         $pid = null;
+        $writerPid = null;
 
         try {
             $pid = pcntl_fork();
@@ -679,7 +695,9 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
 
                     $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
                         $fixture['payment_intent_id'],
-                        function () use ($ready, $fenceActive, $fixture): void {
+                        'test:inflight-provider-drain',
+                        function (PurchaseProviderMutationAttempt $attempt) use ($ready, $fenceActive, $localWriterDone, $fixture): void {
+                            $attempt->markExternalEffectStarted();
                             file_put_contents($ready, 'ready');
                             $deadline = microtime(true) + 10.0;
                             while (! file_exists($fenceActive)) {
@@ -690,9 +708,21 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                             }
 
                             // Keep the provider mutation in flight after the migration
-                            // has activated its durable fence. The migration must wait
-                            // for this callback and its local evidence persistence.
-                            usleep(150000);
+                            // has activated its durable fence until an unrelated writer
+                            // proves that fresh local financial effects are rejected in
+                            // this exact provider-drain window.
+                            $deadline = microtime(true) + 10.0;
+                            while (! file_exists($localWriterDone)) {
+                                if (microtime(true) >= $deadline) {
+                                    throw new RuntimeException('Timed out waiting for the local financial cut regression.');
+                                }
+                                usleep(1000);
+                            }
+                            $writerState = trim((string) file_get_contents($localWriterDone));
+                            if ($writerState !== 'blocked:3') {
+                                throw new RuntimeException('Local financial writer escaped the active migration cut: '.$writerState);
+                            }
+
                             $hash = hash('sha256', 'np-provider-barrier-inflight-expired');
                             DB::table('nowpayments_payment_observations')->insert([
                                 'nowpayments_payment_authority_id' => $fixture['authority_id'],
@@ -730,6 +760,66 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                 throw new RuntimeException('In-flight provider mutation failed before migration: '.$state);
             }
 
+            $writerPid = pcntl_fork();
+            self::assertNotSame(-1, $writerPid);
+            if ($writerPid === 0) {
+                try {
+                    $writerConfiguration = config('database.connections.mysql');
+                    if (! is_array($writerConfiguration)) {
+                        throw new RuntimeException('Local financial writer database configuration is unavailable.');
+                    }
+                    config()->set('database.connections.np_local_financial_writer', $writerConfiguration);
+                    DB::setDefaultConnection('np_local_financial_writer');
+
+                    $deadline = microtime(true) + 10.0;
+                    while (! file_exists($fenceActive)) {
+                        if (microtime(true) >= $deadline) {
+                            throw new RuntimeException('Timed out waiting for the local financial migration cut.');
+                        }
+                        usleep(1000);
+                    }
+
+                    $blocked = 0;
+                    $pdo = $this->independentPdo();
+                    try {
+                        $this->clonePaymentIntentViaPdo($pdo, $fixture['payment_intent_id'], 'provider-drain-local-writer');
+                    } catch (PDOException $exception) {
+                        if (str_contains($exception->getMessage(), 'Purchase payment creation is fenced')) {
+                            $blocked++;
+                        }
+                    }
+                    try {
+                        $this->insertNowPaymentsObservationViaPdo(
+                            $pdo,
+                            $fixture['authority_id'],
+                            $fixture['provider_payment_id'],
+                            'expired',
+                            'provider-drain-local-writer',
+                        );
+                    } catch (PDOException $exception) {
+                        if (str_contains($exception->getMessage(), 'NOWPayments status evidence is fenced')) {
+                            $blocked++;
+                        }
+                    }
+                    try {
+                        $this->app->make(PurchaseWalletPaymentService::class)->capture(
+                            $walletFixture['intent_public_id'],
+                            $this->correlation('provider-drain-wallet-capture'),
+                        );
+                    } catch (Throwable) {
+                        $blocked++;
+                    }
+
+                    file_put_contents($localWriterDone, 'blocked:'.$blocked);
+                    pcntl_exec($blocked === 3 ? '/bin/true' : '/bin/false');
+                    exit($blocked === 3 ? 0 : 1);
+                } catch (Throwable $exception) {
+                    file_put_contents($localWriterDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
             $fenceSignaled = false;
             DB::listen(function (QueryExecuted $query) use (&$fenceSignaled, $fenceActive): void {
                 $sql = strtolower($query->sql);
@@ -750,6 +840,28 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             pcntl_waitpid($pid, $status);
             $pid = null;
             self::assertSame(0, pcntl_wexitstatus($status));
+            self::assertIsInt($writerPid);
+            pcntl_waitpid($writerPid, $writerStatus);
+            $writerPid = null;
+            self::assertSame(0, pcntl_wexitstatus($writerStatus));
+            self::assertSame('blocked:3', trim((string) file_get_contents($localWriterDone)));
+            self::assertSame(
+                $ledgerCountBefore,
+                DB::table('ledger_transactions')->count(),
+                'Wallet capture must not post a ledger effect while migration drains an entered provider mutation.',
+            );
+            self::assertSame(
+                'active',
+                DB::table('wallet_holds')->where('source_id', $walletFixture['intent_public_id'])->value('status'),
+            );
+            self::assertSame(
+                0,
+                DB::table('purchase_settlements')->where('payment_intent_id', $walletFixture['intent_id'])->count(),
+            );
+            self::assertNotSame(
+                'paid',
+                DB::table('orders')->where('id', $walletFixture['order_id'])->value('state'),
+            );
 
             $lateHash = hash('sha256', 'np-provider-barrier-inflight-expired');
             self::assertSame(
@@ -774,8 +886,246 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             if (is_int($pid) && $pid > 0) {
                 pcntl_waitpid($pid, $status);
             }
+            if (is_int($writerPid) && $writerPid > 0) {
+                pcntl_waitpid($writerPid, $writerStatus);
+            }
             @unlink($ready);
             @unlink($fenceActive);
+            @unlink($localWriterDone);
+        }
+    }
+
+    public function test_database_session_loss_keeps_external_provider_mutation_as_durable_migration_blocker(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the provider-session-loss migration regression.');
+        }
+
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('provider-session-loss', 'failed');
+        $this->seedLegacyFinishedConflict(
+            $fixture['authority_id'],
+            $fixture['provider_payment_id'],
+            'provider-session-loss',
+        );
+
+        $ready = sys_get_temp_dir().'/np-provider-session-loss-ready-'.bin2hex(random_bytes(8));
+        $release = $ready.'.release';
+        $externalEffect = $ready.'.external-effect';
+        $childState = $ready.'.child-state';
+        $pid = null;
+
+        try {
+            $pid = pcntl_fork();
+            self::assertNotSame(-1, $pid);
+            if ($pid === 0) {
+                try {
+                    $writerConfiguration = config('database.connections.mysql');
+                    if (! is_array($writerConfiguration)) {
+                        throw new RuntimeException('Session-loss provider database configuration is unavailable.');
+                    }
+                    config()->set('database.connections.np_provider_session_loss_writer', $writerConfiguration);
+                    DB::setDefaultConnection('np_provider_session_loss_writer');
+
+                    try {
+                        $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
+                            $fixture['payment_intent_id'],
+                            'test:provider-session-loss',
+                            function (PurchaseProviderMutationAttempt $attempt) use (
+                                $ready,
+                                $release,
+                                $externalEffect,
+                                $fixture,
+                            ): void {
+                                $attempt->markExternalEffectStarted();
+                                $session = DB::selectOne('SELECT CONNECTION_ID() AS connection_id');
+                                $connectionId = (int) ($session->connection_id ?? 0);
+                                if ($connectionId < 1) {
+                                    throw new RuntimeException('Session-loss provider connection ID is unavailable.');
+                                }
+                                file_put_contents($ready, 'ready:'.$connectionId);
+
+                                $deadline = microtime(true) + 10.0;
+                                while (! file_exists($release)) {
+                                    if (microtime(true) >= $deadline) {
+                                        throw new RuntimeException('Timed out waiting to release the simulated provider effect.');
+                                    }
+                                    usleep(1000);
+                                }
+
+                                // Model a provider-side success that returns only after
+                                // MariaDB has already terminated this application's
+                                // named-lock session.
+                                file_put_contents($externalEffect, 'provider-success');
+                                $hash = hash('sha256', 'provider-session-loss-late-success');
+                                DB::table('nowpayments_payment_observations')->insert([
+                                    'nowpayments_payment_authority_id' => $fixture['authority_id'],
+                                    'event_key' => 'nowpayments:'.$fixture['authority_id'].':status_lookup:'.substr($hash, 0, 32),
+                                    'event_type' => 'status_lookup',
+                                    'provider_payment_id' => $fixture['provider_payment_id'],
+                                    'provider_status' => 'finished',
+                                    'response_hash' => $hash,
+                                    'occurred_at' => $this->timestamp(),
+                                    'correlation_id' => $this->correlation('provider-session-loss-late-success'),
+                                    'created_at' => $this->timestamp(),
+                                ]);
+                            },
+                        );
+                        throw new RuntimeException('Killed provider session unexpectedly converged without reconciliation.');
+                    } catch (Throwable) {
+                        $pdo = $this->independentPdo();
+                        $statement = $pdo->prepare(
+                            'SELECT state FROM purchase_provider_mutation_attempts
+                             WHERE payment_intent_id = ? AND payment_intent_public_id = ?
+                             ORDER BY id DESC LIMIT 1',
+                        );
+                        $statement->execute([
+                            $fixture['payment_intent_id'],
+                            $fixture['payment_intent_public_id'],
+                        ]);
+                        $state = $statement->fetchColumn();
+                        file_put_contents($childState, is_string($state) ? $state : 'missing');
+                        pcntl_exec($state === 'reconciliation_required' ? '/bin/true' : '/bin/false');
+                        exit($state === 'reconciliation_required' ? 0 : 1);
+                    }
+                } catch (Throwable $exception) {
+                    file_put_contents($childState, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($ready)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for the provider session-loss seam.');
+                }
+                usleep(1000);
+            }
+            $readyState = trim((string) file_get_contents($ready));
+            self::assertStringStartsWith('ready:', $readyState);
+            $connectionId = (int) substr($readyState, strlen('ready:'));
+            self::assertGreaterThan(0, $connectionId);
+
+            $attempt = DB::table('purchase_provider_mutation_attempts')
+                ->where('payment_intent_id', $fixture['payment_intent_id'])
+                ->where('payment_intent_public_id', $fixture['payment_intent_public_id'])
+                ->where('state', 'external_started')
+                ->first(['provider_session_id', 'slot']);
+            self::assertNotNull($attempt);
+            self::assertSame($connectionId, (int) $attempt->provider_session_id);
+
+            $pdo = $this->independentPdo();
+            $pdo->exec('KILL '.$connectionId);
+            $database = config('database.connections.mysql.database');
+            self::assertIsString($database);
+            $lockName = sprintf(
+                'purchase-provider:%s:%03d',
+                substr(hash('sha256', $database), 0, 16),
+                (int) $attempt->slot,
+            );
+            $lockReleased = false;
+            $deadline = microtime(true) + 5.0;
+            $lockStatement = $pdo->prepare('SELECT IS_USED_LOCK(?)');
+            while (microtime(true) < $deadline) {
+                $lockStatement->execute([$lockName]);
+                if ($lockStatement->fetchColumn() === null) {
+                    $lockReleased = true;
+                    break;
+                }
+                usleep(1000);
+            }
+            self::assertTrue($lockReleased, 'MariaDB must release the named slot after the provider session is killed.');
+
+            $retryCalled = false;
+            try {
+                $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
+                    $fixture['payment_intent_id'],
+                    'test:provider-session-loss-retry',
+                    function (PurchaseProviderMutationAttempt $attempt) use (&$retryCalled): void {
+                        $retryCalled = true;
+                    },
+                );
+                self::fail('A lost-session external mutation must block a fresh provider retry.');
+            } catch (DomainException $exception) {
+                self::assertSame(
+                    'Purchase provider mutation is locked by unresolved provider reconciliation.',
+                    $exception->getMessage(),
+                );
+            }
+            self::assertFalse($retryCalled);
+
+            try {
+                $migration->up();
+                self::fail('Migration must not cross preflight after a provider session releases its named lock mid-effect.');
+            } catch (RuntimeException $exception) {
+                self::assertStringContainsString(
+                    'Financial migration is blocked by unresolved provider mutation attempt',
+                    $exception->getMessage(),
+                );
+            }
+            $this->assertUpgradeFenceActive();
+            self::assertSame(
+                'failed',
+                DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+            );
+            self::assertSame(
+                'failed',
+                DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+            );
+            self::assertSame(
+                0,
+                DB::table('purchase_settlements')->where('payment_intent_id', $fixture['payment_intent_id'])->count(),
+            );
+
+            file_put_contents($release, 'release');
+            self::assertIsInt($pid);
+            pcntl_waitpid($pid, $status);
+            $pid = null;
+            self::assertSame(0, pcntl_wexitstatus($status));
+            self::assertSame('provider-success', trim((string) file_get_contents($externalEffect)));
+            self::assertSame('reconciliation_required', trim((string) file_get_contents($childState)));
+            self::assertSame(
+                'reconciliation_required',
+                DB::table('purchase_provider_mutation_attempts')
+                    ->where('payment_intent_id', $fixture['payment_intent_id'])
+                    ->where('payment_intent_public_id', $fixture['payment_intent_public_id'])
+                    ->value('state'),
+            );
+            self::assertSame(
+                0,
+                DB::table('purchase_settlements')->where('payment_intent_id', $fixture['payment_intent_id'])->count(),
+            );
+
+            // Test-only reconciliation cleanup proves that the cut can converge
+            // after an explicit durable resolution; production must use the
+            // reviewed provider-reconciliation path, never a manual row edit.
+            DB::table('purchase_provider_mutation_attempts')
+                ->where('payment_intent_id', $fixture['payment_intent_id'])
+                ->where('payment_intent_public_id', $fixture['payment_intent_public_id'])
+                ->where('state', 'reconciliation_required')
+                ->update([
+                    'state' => 'completed',
+                    'resolved_at' => $this->timestamp(),
+                    'updated_at' => $this->timestamp(),
+                ]);
+            DB::table('purchase_provider_mutation_attempts')
+                ->where('payment_intent_id', $fixture['payment_intent_id'])
+                ->where('payment_intent_public_id', $fixture['payment_intent_public_id'])
+                ->where('state', 'completed')
+                ->delete();
+            $migration->up();
+            $this->assertUpgradeFencesAbsent();
+        } finally {
+            if (is_int($pid) && $pid > 0) {
+                @file_put_contents($release, 'release');
+                pcntl_waitpid($pid, $status);
+            }
+            @unlink($ready);
+            @unlink($release);
+            @unlink($externalEffect);
+            @unlink($childState);
         }
     }
 
@@ -1684,6 +2034,121 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         return [$userId, $quote, $decision, $opening];
     }
 
+    /** @return array{intent_public_id:string,intent_id:int,quote_public_id:string,order_id:int} */
+    private function walletCutFixture(string $suffix): array
+    {
+        $userId = $this->quoteUser('customer');
+        $administratorId = $this->ownerAdministrator();
+        $offering = $this->quoteOffering(1_000_000);
+        $quote = $this->app->make(QuoteService::class)->create(
+            'np-upgrade-wallet-cut-quote-'.$suffix,
+            $userId,
+            $offering['id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->clock->value->modify('+30 minutes'),
+            ),
+            $this->correlation('wallet-cut-quote-'.$suffix),
+        );
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $eligibility->configureMethod(
+            'np-upgrade-wallet-cut-method-'.$suffix,
+            $administratorId,
+            'wallet',
+            true,
+            false,
+            1,
+            'Wallet cutover regression method.',
+            $this->correlation('wallet-cut-method-'.$suffix),
+        );
+        $eligibility->recordHealth(
+            'np-upgrade-wallet-cut-health-'.$suffix,
+            $administratorId,
+            'wallet',
+            true,
+            $this->clock->value->modify('+10 minutes'),
+            'Healthy Wallet observation for financial cutover regression.',
+            $this->correlation('wallet-cut-health-'.$suffix),
+        );
+        $decision = $eligibility->evaluate(
+            'np-upgrade-wallet-cut-decision-'.$suffix,
+            $userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+        );
+        $opening = $this->app->make(PurchaseOrderService::class)->openFromQuote(
+            $quote->quotePublicId,
+            $userId,
+            $this->correlation('wallet-cut-order-'.$suffix),
+        );
+        $walletId = $this->fundedWalletForCut($userId, 1_500_000, $suffix);
+        $intent = $this->app->make(PurchaseWalletPaymentService::class)->reserve(
+            'np-upgrade-wallet-cut-reserve-'.$suffix,
+            $userId,
+            $walletId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('wallet-cut-reserve-'.$suffix),
+        );
+        $intentId = DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
+        if (! is_int($intentId) && ! ctype_digit((string) $intentId)) {
+            throw new RuntimeException('Wallet cutover fixture payment intent ID is unavailable.');
+        }
+        $orderId = DB::table('orders')->where('public_id', $opening->orderPublicId)->value('id');
+        if (! is_int($orderId) && ! ctype_digit((string) $orderId)) {
+            throw new RuntimeException('Wallet cutover fixture Order ID is unavailable.');
+        }
+
+        return [
+            'intent_public_id' => $intent->intentPublicId,
+            'intent_id' => (int) $intentId,
+            'quote_public_id' => $quote->quotePublicId,
+            'order_id' => (int) $orderId,
+        ];
+    }
+
+    private function fundedWalletForCut(int $userId, int $amountIrr, string $suffix): int
+    {
+        $now = now('UTC');
+        $assetId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'system.np.upgrade.wallet.cut.asset.'.$suffix,
+            'account_class' => 'asset',
+            'owner_user_id' => null,
+            'wallet_bucket' => null,
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $walletId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'wallet.cash.np.upgrade.cut.'.$suffix.'.'.$userId,
+            'account_class' => 'liability',
+            'owner_user_id' => $userId,
+            'wallet_bucket' => 'cash',
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->app->make(LedgerPostingService::class)->post(
+            'ledger.np.upgrade.wallet.cut.'.$suffix,
+            'nowpayments_upgrade_wallet_cut_funding',
+            $this->correlation('wallet-cut-fund-'.$suffix),
+            [
+                new LedgerEntryDraft($assetId, LedgerDirection::Debit, IrrMoney::positive($amountIrr)),
+                new LedgerEntryDraft($walletId, LedgerDirection::Credit, IrrMoney::positive($amountIrr)),
+            ],
+            'test_fixture',
+            'np-upgrade-wallet-cut-'.$suffix,
+        );
+
+        return $walletId;
+    }
+
     private function service(): NowPaymentsPaymentService
     {
         return new NowPaymentsPaymentService(
@@ -1753,6 +2218,8 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
     private function upgradeFenceTriggers(): array
     {
         return [
+            'provider_mutation_attempt_np_upgrade_insert_fence',
+            'provider_mutation_attempt_np_upgrade_start_fence',
             'payment_intents_np_conflict_upgrade_insert_fence',
             'payment_intents_np_conflict_upgrade_update_fence',
             'nowpayments_authority_np_conflict_upgrade_insert_fence',
@@ -1763,9 +2230,13 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             'c2c_reservation_np_conflict_upgrade_insert_fence',
             'gift_card_submission_np_conflict_upgrade_insert_fence',
             'wallet_hold_np_conflict_upgrade_insert_fence',
+            'wallet_hold_np_conflict_upgrade_update_fence',
             'purchase_wallet_np_conflict_upgrade_insert_fence',
             'promotion_reservation_np_conflict_upgrade_insert_fence',
             'promotion_release_np_conflict_upgrade_insert_fence',
+            'promotion_redemption_np_conflict_upgrade_insert_fence',
+            'orders_np_conflict_upgrade_insert_fence',
+            'orders_np_conflict_upgrade_update_fence',
             'purchase_settlement_np_conflict_upgrade_insert_fence',
         ];
     }

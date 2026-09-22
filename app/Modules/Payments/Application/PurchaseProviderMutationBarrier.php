@@ -8,6 +8,7 @@ use Closure;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Support\Str;
 use ReflectionProperty;
 use RuntimeException;
 use Throwable;
@@ -15,11 +16,11 @@ use Throwable;
 /**
  * Excludes purchase-provider mutations from financial migration cutovers.
  *
- * Runtime mutations hold one slot from a bounded shared pool, starting from a
- * deterministic purchase-specific preference and probing other slots when it is
- * occupied. A migration activates its durable database fence first and then
- * acquires the whole pool before trusting financial state. That drains provider
- * effects already in flight while later entrants fail closed on the fence.
+ * Runtime mutations hold one slot from a bounded shared MariaDB named-lock pool.
+ * Each entered mutation also owns a separately committed durable attempt record
+ * before an external value effect can start. The durable record survives loss of
+ * the named-lock session, while the named-lock pool still provides cheap runtime
+ * drain/concurrency semantics for a migration.
  */
 final readonly class PurchaseProviderMutationBarrier
 {
@@ -29,54 +30,79 @@ final readonly class PurchaseProviderMutationBarrier
 
     private const RUNTIME_LOCK_RETRY_MICROSECONDS = 10_000;
 
+    private const CONTROL_CONNECTION = 'purchase_provider_mutation_control';
+
     public function __construct(private DatabaseManager $database) {}
 
     /**
      * @template T
      *
-     * @param  Closure():T  $operation
+     * @param  Closure(PurchaseProviderMutationAttempt):T  $operation
      * @return T
      */
-    public function runForPaymentIntent(int $paymentIntentId, Closure $operation): mixed
+    public function runForPaymentIntent(int $paymentIntentId, string $mutationKey, Closure $operation): mixed
     {
         if ($paymentIntentId < 1) {
             throw new RuntimeException('Purchase provider mutation payment intent ID must be positive.');
         }
+        $this->assertMutationKey($mutationKey);
 
         $connection = $this->database->connection();
         if ($connection->getDriverName() !== 'mysql') {
-            return $operation();
+            return $operation(PurchaseProviderMutationAttempt::noOp());
+        }
+
+        if (! $connection->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts')) {
+            throw new RuntimeException('Purchase provider mutation attempt authority is not installed.');
         }
 
         $intent = $connection->table('payment_intents')
             ->where('id', $paymentIntentId)
-            ->first(['purpose', 'user_id', 'source_quote_id', 'source_quote_public_id']);
+            ->first([
+                'public_id',
+                'purpose',
+                'user_id',
+                'source_quote_id',
+                'source_quote_public_id',
+                'provider_code',
+            ]);
         if ($intent === null) {
             throw new RuntimeException('Purchase provider mutation payment intent is unavailable.');
         }
         if ($intent->purpose !== 'purchase') {
-            return $operation();
+            return $operation(PurchaseProviderMutationAttempt::noOp());
         }
 
         $userId = filter_var($intent->user_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         $sourceQuoteId = filter_var($intent->source_quote_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         if ($userId === false
             || $sourceQuoteId === false
+            || ! is_string($intent->public_id)
+            || $intent->public_id === ''
             || ! is_string($intent->source_quote_public_id)
-            || $intent->source_quote_public_id === '') {
+            || $intent->source_quote_public_id === ''
+            || ! is_string($intent->provider_code)
+            || $intent->provider_code === '') {
             throw new RuntimeException('Purchase provider mutation identity is incomplete.');
         }
 
         $this->assertUpgradeFenceInactive($connection);
-        $slot = $this->slotFor((int) $userId, $intent->source_quote_public_id);
+        $preferredSlot = $this->slotFor((int) $userId, $intent->source_quote_public_id);
 
         return $this->withRuntimeSlot(
             $connection,
-            $slot,
-            function () use ($connection, $paymentIntentId, $sourceQuoteId, $userId, $operation): mixed {
-                // The fence is re-read after slot acquisition to close the race where
-                // migration activates it between the optimistic fast-path read above
-                // and this runtime invocation entering the shared-capacity barrier.
+            $preferredSlot,
+            function (string $lockName, int $acquiredSlot) use (
+                $connection,
+                $paymentIntentId,
+                $mutationKey,
+                $intent,
+                $sourceQuoteId,
+                $userId,
+                $operation,
+            ): mixed {
+                // Re-read after slot acquisition to close the race where migration
+                // activates the persistent cut after the optimistic fast-path read.
                 $this->assertUpgradeFenceInactive($connection);
                 $this->assertNoOtherPendingManualReview(
                     $connection,
@@ -85,7 +111,79 @@ final readonly class PurchaseProviderMutationBarrier
                     (int) $userId,
                 );
 
-                return $operation();
+                [$control, $controlName] = $this->controlConnection($connection);
+                $attempt = null;
+
+                try {
+                    $this->assertNoAbandonedAttempt(
+                        $control,
+                        $connection,
+                        $paymentIntentId,
+                        $intent->public_id,
+                    );
+
+                    $session = $connection->selectOne('SELECT CONNECTION_ID() AS connection_id', [], false);
+                    $providerSessionId = (int) ($session->connection_id ?? 0);
+                    if ($providerSessionId < 1) {
+                        throw new RuntimeException('Purchase provider mutation database session identity is unavailable.');
+                    }
+
+                    $attemptId = (int) $control->table('purchase_provider_mutation_attempts')->insertGetId([
+                        'public_id' => (string) Str::ulid(),
+                        'payment_intent_id' => $paymentIntentId,
+                        'payment_intent_public_id' => $intent->public_id,
+                        'provider_code' => $intent->provider_code,
+                        'mutation_key' => $mutationKey,
+                        'provider_session_id' => $providerSessionId,
+                        'slot' => $acquiredSlot,
+                        'state' => 'prepared',
+                        'prepared_at' => $control->raw('UTC_TIMESTAMP(6)'),
+                        'external_started_at' => null,
+                        'resolved_at' => null,
+                        'updated_at' => $control->raw('UTC_TIMESTAMP(6)'),
+                    ]);
+                    if ($attemptId < 1) {
+                        throw new RuntimeException('Purchase provider mutation attempt persistence failed.');
+                    }
+
+                    $attempt = new PurchaseProviderMutationAttempt(
+                        $control,
+                        $attemptId,
+                        $providerSessionId,
+                        $lockName,
+                    );
+                    $connection->statement(
+                        'SET @purchase_provider_mutation_attempt_id := ?',
+                        [$attemptId],
+                    );
+
+                    try {
+                        $result = $operation($attempt);
+                        $attempt->complete();
+
+                        return $result;
+                    } catch (Throwable $exception) {
+                        try {
+                            $attempt->fail();
+                        } catch (Throwable $stateFailure) {
+                            throw new RuntimeException(
+                                'Provider mutation failed and its durable reconciliation state could not be advanced.',
+                                0,
+                                $exception,
+                            );
+                        }
+
+                        throw $exception;
+                    }
+                } finally {
+                    try {
+                        $connection->unprepared('SET @purchase_provider_mutation_attempt_id := NULL');
+                    } catch (Throwable) {
+                        // Never return a pooled/reused session with a stale capability.
+                        $connection->disconnect();
+                    }
+                    $this->database->purge($controlName);
+                }
             },
         );
     }
@@ -109,6 +207,15 @@ final readonly class PurchaseProviderMutationBarrier
         }
 
         return $this->withLocks($connection, $locks, $operation);
+    }
+
+    private function assertMutationKey(string $mutationKey): void
+    {
+        if ($mutationKey === ''
+            || strlen($mutationKey) > 191
+            || preg_match('/[\x00-\x1F\x7F]/', $mutationKey) === 1) {
+            throw new RuntimeException('Purchase provider mutation key is invalid.');
+        }
     }
 
     private function slotFor(int $userId, string $sourceQuotePublicId): int
@@ -146,6 +253,40 @@ final readonly class PurchaseProviderMutationBarrier
         }
     }
 
+    private function assertNoAbandonedAttempt(
+        Connection $authorityConnection,
+        Connection $providerConnection,
+        int $paymentIntentId,
+        string $paymentIntentPublicId,
+    ): void {
+        $attempts = $authorityConnection->table('purchase_provider_mutation_attempts')
+            ->where('payment_intent_id', $paymentIntentId)
+            ->where('payment_intent_public_id', $paymentIntentPublicId)
+            ->whereIn('state', ['prepared', 'external_started', 'reconciliation_required'])
+            ->get(['provider_session_id', 'slot', 'state']);
+
+        foreach ($attempts as $attempt) {
+            if ($attempt->state === 'reconciliation_required') {
+                throw new DomainException('Purchase provider mutation is locked by unresolved provider reconciliation.');
+            }
+
+            $slot = filter_var($attempt->slot, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => self::SLOT_COUNT - 1]]);
+            $session = filter_var($attempt->provider_session_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($slot === false || $session === false) {
+                throw new RuntimeException('Purchase provider mutation attempt authority is malformed.');
+            }
+
+            $owner = $authorityConnection->selectOne(
+                'SELECT IS_USED_LOCK(?) AS owner_connection_id',
+                [$this->lockName($providerConnection, (int) $slot)],
+                false,
+            );
+            if ($owner === null || (int) ($owner->owner_connection_id ?? 0) !== (int) $session) {
+                throw new DomainException('Purchase provider mutation is locked by unresolved provider reconciliation.');
+            }
+        }
+    }
+
     private function assertNoOtherPendingManualReview(
         Connection $connection,
         int $paymentIntentId,
@@ -163,10 +304,25 @@ final readonly class PurchaseProviderMutationBarrier
         }
     }
 
+    /** @return array{0:Connection,1:string} */
+    private function controlConnection(Connection $providerConnection): array
+    {
+        $configuration = $providerConnection->getConfig();
+        $configuration['name'] = self::CONTROL_CONNECTION;
+
+        $control = $this->database->build($configuration);
+        if (! $control instanceof Connection) {
+            $this->database->purge(self::CONTROL_CONNECTION);
+            throw new RuntimeException('Purchase provider mutation control connection is unavailable.');
+        }
+
+        return [$control, self::CONTROL_CONNECTION];
+    }
+
     /**
      * @template T
      *
-     * @param  Closure():T  $operation
+     * @param  Closure(string,int):T  $operation
      * @return T
      */
     private function withRuntimeSlot(Connection $connection, int $preferredSlot, Closure $operation): mixed
@@ -174,6 +330,7 @@ final readonly class PurchaseProviderMutationBarrier
         $reconnector = $this->currentReconnector($connection);
         $this->disableReconnectWhileLocksHeld($connection);
         $lockName = null;
+        $acquiredSlot = null;
 
         try {
             $deadline = microtime(true) + self::LOCK_TIMEOUT_SECONDS;
@@ -184,11 +341,12 @@ final readonly class PurchaseProviderMutationBarrier
                     $row = $connection->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$candidate], false);
                     if ($row !== null && (int) ($row->acquired ?? 0) === 1) {
                         $lockName = $candidate;
+                        $acquiredSlot = $slot;
                         break;
                     }
                 }
 
-                if ($lockName !== null) {
+                if ($lockName !== null && $acquiredSlot !== null) {
                     break;
                 }
                 if (microtime(true) >= $deadline) {
@@ -198,7 +356,7 @@ final readonly class PurchaseProviderMutationBarrier
                 usleep(self::RUNTIME_LOCK_RETRY_MICROSECONDS);
             }
 
-            return $operation();
+            return $operation($lockName, $acquiredSlot);
         } finally {
             $cleanupFailure = $this->releaseLocks($connection, $lockName === null ? [] : [$lockName]);
             $connection->setReconnector($reconnector);

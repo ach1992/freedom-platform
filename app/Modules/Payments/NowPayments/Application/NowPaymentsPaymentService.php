@@ -14,6 +14,7 @@ use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentReceipt;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
 use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
@@ -330,7 +331,8 @@ final readonly class NowPaymentsPaymentService
 
         return $this->providerMutations->runForPaymentIntent(
             $this->positiveInt($authority->payment_intent_id, 'NOWPayments payment intent ID'),
-            function () use (
+            'nowpayments:create:'.$this->positiveInt($authority->id, 'NOWPayments authority ID'),
+            function (PurchaseProviderMutationAttempt $attempt) use (
                 $authority,
                 $intentPublicId,
                 $correlationId,
@@ -357,6 +359,7 @@ final readonly class NowPaymentsPaymentService
                 }
 
                 try {
+                    $attempt->markExternalEffectStarted();
                     $result = $this->transport->create(new NowPaymentsCreateRequest(
                         (string) $current->price_amount_usd,
                         (string) $current->pay_currency,
@@ -365,9 +368,17 @@ final readonly class NowPaymentsPaymentService
                         (string) $current->callback_url,
                     ));
                 } catch (NowPaymentsTransportException $exception) {
-                    return $this->recordCreateFailure($current, $exception->uncertain, $correlationId);
+                    $receipt = $this->recordCreateFailure($current, $exception->uncertain, $correlationId);
+                    if ($exception->uncertain) {
+                        $attempt->requireReconciliation();
+                    }
+
+                    return $receipt;
                 } catch (Throwable) {
-                    return $this->recordCreateFailure($current, true, $correlationId);
+                    $receipt = $this->recordCreateFailure($current, true, $correlationId);
+                    $attempt->requireReconciliation();
+
+                    return $receipt;
                 }
 
                 return $this->acceptCreateResult($current, $result, $correlationId);

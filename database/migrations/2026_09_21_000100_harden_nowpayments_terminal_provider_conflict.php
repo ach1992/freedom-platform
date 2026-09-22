@@ -14,13 +14,18 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // MariaDB commits DDL per statement. Persist a migration-owned financial
-        // write fence before the first decision-relevant read, then keep it active
-        // through canonical guard composition, final evidence revalidation and
-        // normalization. Any interrupted run therefore fails closed and can re-enter.
+        // Compose every staged local financial fence while the marker is inactive.
+        // Activating the durable marker is then a single DML cut: from that instant,
+        // fresh local financial effects are blocked even while provider slots drain.
+        $this->prepareUpgradeFence();
+        $this->installUpgradeFences();
         $this->activateUpgradeFence();
         app(PurchaseProviderMutationBarrier::class)->blockAll(function (): void {
-            $this->installUpgradeFences();
+            // With every provider slot owned by this migration, a prepared attempt
+            // can no longer begin an external effect. Retire those safe orphans,
+            // then refuse preflight if any external effect remains unresolved.
+            $this->retirePreparedProviderMutationAttempts();
+            $this->assertNoUnresolvedProviderMutationAttempts();
 
             $this->preflightLegacyTerminalProviderFinishedConflicts();
 
@@ -43,9 +48,12 @@ return new class extends Migration
 
     public function down(): void
     {
+        $this->prepareUpgradeFence();
+        $this->installUpgradeFences();
         $this->activateUpgradeFence();
         app(PurchaseProviderMutationBarrier::class)->blockAll(function (): void {
-            $this->installUpgradeFences();
+            $this->retirePreparedProviderMutationAttempts();
+            $this->assertNoUnresolvedProviderMutationAttempts();
 
             if (DB::table('nowpayments_reconciliation_findings')
                 ->whereIn('code', [
@@ -369,11 +377,11 @@ return new class extends Migration
     }
 
     /**
-     * Activate a persistent migration-local cut before any legacy evidence is read.
-     * The marker is DML while all fence triggers use CREATE OR REPLACE. A crash
-     * therefore leaves a fail-closed cut or occurs before decision-relevant reads.
+     * Compose the persistent marker table before staged triggers are installed.
+     * The row itself remains absent until every trigger is ready, so an interrupted
+     * initial composition changes no runtime behavior and performs no legacy read.
      */
-    private function activateUpgradeFence(): void
+    private function prepareUpgradeFence(): void
     {
         DB::statement(<<<'SQL'
 CREATE TABLE IF NOT EXISTS nowpayments_terminal_conflict_upgrade_fence (
@@ -396,6 +404,16 @@ SQL);
             throw new RuntimeException('NOWPayments terminal-conflict upgrade fence table is partially applied.');
         }
 
+        if (! DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts')) {
+            throw new RuntimeException('Purchase provider mutation attempt authority is required before conflict migration.');
+        }
+    }
+
+    /**
+     * Single-DML financial cut after every staged trigger is composed.
+     */
+    private function activateUpgradeFence(): void
+    {
         DB::statement(<<<'SQL'
 INSERT INTO nowpayments_terminal_conflict_upgrade_fence (id, active, activated_at)
 VALUES (1, 1, UTC_TIMESTAMP(6))
@@ -403,8 +421,88 @@ ON DUPLICATE KEY UPDATE active = 1, activated_at = VALUES(activated_at)
 SQL);
     }
 
+    private function retirePreparedProviderMutationAttempts(): void
+    {
+        DB::statement(<<<'SQL'
+UPDATE purchase_provider_mutation_attempts attempt_row
+SET attempt_row.state = 'aborted',
+    attempt_row.resolved_at = UTC_TIMESTAMP(6),
+    attempt_row.updated_at = UTC_TIMESTAMP(6)
+WHERE attempt_row.state = 'prepared'
+SQL);
+        DB::statement(<<<'SQL'
+DELETE attempt_row
+FROM purchase_provider_mutation_attempts attempt_row
+LEFT JOIN payment_intents intent_row
+    ON intent_row.id = attempt_row.payment_intent_id
+   AND intent_row.public_id = attempt_row.payment_intent_public_id
+WHERE attempt_row.state IN ('completed','aborted')
+SQL);
+    }
+
+    private function assertNoUnresolvedProviderMutationAttempts(): void
+    {
+        $attempt = DB::table('purchase_provider_mutation_attempts as attempt_row')
+            ->whereIn('attempt_row.state', ['external_started', 'reconciliation_required'])
+            ->orderBy('attempt_row.id')
+            ->first([
+                'attempt_row.id',
+                'attempt_row.public_id',
+                'attempt_row.provider_code',
+                'attempt_row.mutation_key',
+                'attempt_row.state',
+            ]);
+        if ($attempt !== null) {
+            throw new RuntimeException(
+                'Financial migration is blocked by unresolved provider mutation attempt '
+                .(string) $attempt->public_id.' ('.(string) $attempt->provider_code.':'
+                .(string) $attempt->mutation_key.', '.(string) $attempt->state.').',
+            );
+        }
+    }
+
     private function installUpgradeFences(): void
     {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER provider_mutation_attempt_np_upgrade_insert_fence
+BEFORE INSERT ON purchase_provider_mutation_attempts
+FOR EACH ROW
+BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'New provider mutation attempts are fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER provider_mutation_attempt_np_upgrade_start_fence
+BEFORE UPDATE ON purchase_provider_mutation_attempts
+FOR EACH ROW
+BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    IF OLD.state = 'prepared' AND NEW.state = 'external_started' THEN
+        SELECT active INTO upgrade_fence_active
+        FROM nowpayments_terminal_conflict_upgrade_fence
+        WHERE id = 1
+        LIMIT 1
+        FOR UPDATE;
+
+        IF upgrade_fence_active = 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Prepared provider mutation cannot cross the external-effect boundary after migration cutover.';
+        END IF;
+    END IF;
+END
+SQL);
+
         DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER payment_intents_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON payment_intents
@@ -426,11 +524,20 @@ BEFORE UPDATE ON payment_intents
 FOR EACH ROW
 BEGIN
     DECLARE exact_reopen_count INT DEFAULT 0;
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
     IF EXISTS (
         SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
         WHERE fence_row.id = 1 AND fence_row.active = 1
     ) AND OLD.purpose = 'purchase' THEN
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = OLD.id
+          AND attempt_row.payment_intent_public_id = OLD.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started');
+
         IF OLD.provider_code = 'nowpayments'
            AND OLD.payment_method_code = 'nowpayments'
            AND OLD.state IN ('failed','expired')
@@ -457,7 +564,7 @@ BEGIN
               );
         END IF;
 
-        IF exact_reopen_count <> 1 THEN
+        IF exact_reopen_count <> 1 AND provider_mutation_capability_count <> 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase payment updates are fenced while NOWPayments conflict authority migration converges.';
         END IF;
     END IF;
@@ -484,11 +591,21 @@ BEFORE UPDATE ON nowpayments_payment_authorities
 FOR EACH ROW
 BEGIN
     DECLARE exact_reopen_count INT DEFAULT 0;
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
     IF EXISTS (
         SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
         WHERE fence_row.id = 1 AND fence_row.active = 1
     ) THEN
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = OLD.payment_intent_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = OLD.payment_intent_id
+          AND attempt_row.payment_intent_public_id = intent_row.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started');
+
         IF OLD.state IN ('failed','expired')
            AND NEW.state = 'manual_review'
            AND NEW.provider_status = 'finished'
@@ -511,7 +628,7 @@ BEGIN
               );
         END IF;
 
-        IF exact_reopen_count < 1 THEN
+        IF exact_reopen_count < 1 AND provider_mutation_capability_count <> 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority updates are fenced while conflict authority migration converges.';
         END IF;
     END IF;
@@ -523,11 +640,27 @@ CREATE OR REPLACE TRIGGER nowpayments_observation_np_conflict_upgrade_insert_fen
 BEFORE INSERT ON nowpayments_payment_observations
 FOR EACH ROW
 BEGIN
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
     IF EXISTS (
         SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
         WHERE fence_row.id = 1 AND fence_row.active = 1
     ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments status evidence is fenced while conflict authority migration converges.';
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN nowpayments_payment_authorities authority_row
+            ON authority_row.id = NEW.nowpayments_payment_authority_id
+        INNER JOIN payment_intents intent_row
+            ON intent_row.id = authority_row.payment_intent_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = authority_row.payment_intent_id
+          AND attempt_row.payment_intent_public_id = intent_row.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started');
+
+        IF provider_mutation_capability_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments status evidence is fenced while conflict authority migration converges.';
+        END IF;
     END IF;
 END
 SQL);
@@ -654,6 +787,8 @@ CREATE OR REPLACE TRIGGER promotion_release_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON promotion_usage_releases
 FOR EACH ROW
 BEGIN
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
     IF EXISTS (
         SELECT 1
         FROM nowpayments_terminal_conflict_upgrade_fence fence_row
@@ -663,7 +798,129 @@ BEGIN
         WHERE fence_row.id = 1 AND fence_row.active = 1
           AND quote_row.action_snapshot = 'purchase'
     ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase promotion release is fenced during NOWPayments conflict migration.';
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN payment_intents intent_row
+            ON intent_row.id = attempt_row.payment_intent_id
+           AND intent_row.public_id = attempt_row.payment_intent_public_id
+        INNER JOIN promotion_usage_reservations reservation_row
+            ON reservation_row.id = NEW.promotion_usage_reservation_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started')
+          AND intent_row.purpose = 'purchase'
+          AND intent_row.source_quote_id = reservation_row.quote_id;
+
+        IF provider_mutation_capability_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase promotion release is fenced during NOWPayments conflict migration.';
+        END IF;
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER wallet_hold_np_conflict_upgrade_update_fence
+BEFORE UPDATE ON wallet_holds
+FOR EACH ROW
+BEGIN
+    IF OLD.source_type = 'payment_intent'
+       AND EXISTS (
+           SELECT 1
+           FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+           INNER JOIN payment_intents intent_row ON intent_row.public_id = OLD.source_id
+           WHERE fence_row.id = 1 AND fence_row.active = 1
+             AND intent_row.purpose = 'purchase'
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet purchase hold mutation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER promotion_redemption_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON promotion_usage_redemptions
+FOR EACH ROW
+BEGIN
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
+    IF EXISTS (
+        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+    ) THEN
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN purchase_settlements settlement_row
+            ON settlement_row.id = NEW.purchase_settlement_id
+        INNER JOIN payment_intents intent_row
+            ON intent_row.id = settlement_row.payment_intent_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = intent_row.id
+          AND attempt_row.payment_intent_public_id = intent_row.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started')
+          AND intent_row.purpose = 'purchase';
+
+        IF provider_mutation_capability_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase promotion redemption is fenced during NOWPayments conflict migration.';
+        END IF;
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER orders_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON orders
+FOR EACH ROW
+BEGIN
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
+    IF NEW.source_type = 'purchase'
+       AND (NEW.state = 'paid' OR NEW.purchase_settlement_id IS NOT NULL OR NEW.payment_intent_id IS NOT NULL)
+       AND EXISTS (
+           SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+           WHERE fence_row.id = 1 AND fence_row.active = 1
+       ) THEN
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = NEW.payment_intent_id
+          AND attempt_row.payment_intent_public_id = intent_row.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started');
+
+        IF provider_mutation_capability_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Paid purchase Order creation is fenced during NOWPayments conflict migration.';
+        END IF;
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER orders_np_conflict_upgrade_update_fence
+BEFORE UPDATE ON orders
+FOR EACH ROW
+BEGIN
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
+    IF OLD.source_type = 'purchase'
+       AND (NEW.state = 'paid' OR NEW.purchase_settlement_id IS NOT NULL OR NEW.payment_intent_id IS NOT NULL)
+       AND EXISTS (
+           SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+           WHERE fence_row.id = 1 AND fence_row.active = 1
+       ) THEN
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = NEW.payment_intent_id
+          AND attempt_row.payment_intent_public_id = intent_row.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started');
+
+        IF provider_mutation_capability_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Paid purchase Order transition is fenced during NOWPayments conflict migration.';
+        END IF;
     END IF;
 END
 SQL);
@@ -673,6 +930,8 @@ CREATE OR REPLACE TRIGGER purchase_settlement_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON purchase_settlements
 FOR EACH ROW
 BEGIN
+    DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
     IF EXISTS (
         SELECT 1
         FROM nowpayments_terminal_conflict_upgrade_fence fence_row
@@ -680,7 +939,19 @@ BEGIN
         WHERE fence_row.id = 1 AND fence_row.active = 1
           AND intent_row.purpose = 'purchase'
     ) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase settlement creation is fenced during NOWPayments conflict migration.';
+        SELECT COUNT(*) INTO provider_mutation_capability_count
+        FROM purchase_provider_mutation_attempts attempt_row
+        INNER JOIN payment_intents intent_row
+            ON intent_row.id = NEW.payment_intent_id
+        WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
+          AND attempt_row.payment_intent_id = NEW.payment_intent_id
+          AND attempt_row.payment_intent_public_id = intent_row.public_id
+          AND attempt_row.provider_session_id = CONNECTION_ID()
+          AND attempt_row.state IN ('prepared','external_started');
+
+        IF provider_mutation_capability_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase settlement creation is fenced during NOWPayments conflict migration.';
+        END IF;
     END IF;
 END
 SQL);
@@ -694,6 +965,10 @@ SQL);
 
         foreach ([
             'DROP TRIGGER IF EXISTS purchase_settlement_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS orders_np_conflict_upgrade_update_fence',
+            'DROP TRIGGER IF EXISTS orders_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS promotion_redemption_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS wallet_hold_np_conflict_upgrade_update_fence',
             'DROP TRIGGER IF EXISTS promotion_release_np_conflict_upgrade_insert_fence',
             'DROP TRIGGER IF EXISTS promotion_reservation_np_conflict_upgrade_insert_fence',
             'DROP TRIGGER IF EXISTS purchase_wallet_np_conflict_upgrade_insert_fence',
@@ -707,6 +982,8 @@ SQL);
             'DROP TRIGGER IF EXISTS nowpayments_authority_np_conflict_upgrade_insert_fence',
             'DROP TRIGGER IF EXISTS payment_intents_np_conflict_upgrade_update_fence',
             'DROP TRIGGER IF EXISTS payment_intents_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS provider_mutation_attempt_np_upgrade_start_fence',
+            'DROP TRIGGER IF EXISTS provider_mutation_attempt_np_upgrade_insert_fence',
         ] as $statement) {
             DB::unprepared($statement);
         }

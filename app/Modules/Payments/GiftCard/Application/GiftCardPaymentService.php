@@ -6,6 +6,7 @@ namespace App\Modules\Payments\GiftCard\Application;
 
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
 use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
@@ -136,15 +137,25 @@ final readonly class GiftCardPaymentService
             }
             $reserveResult = $this->providerMutations->runForPaymentIntent(
                 $paymentIntentId,
-                function () use ($submissionPublicId, $provider, $correlationId): string|GiftCardProcessingReceipt {
+                'gift-card:reserve:'.$submissionPublicId,
+                function (PurchaseProviderMutationAttempt $attempt) use ($submissionPublicId, $provider, $correlationId): string|GiftCardProcessingReceipt {
                     $reserveRequest = $this->beginProviderMutation($submissionPublicId, 'reserve', ['valid_unreserved'], 'reserving');
                     try {
+                        $attempt->markExternalEffectStarted();
                         $reserve = $provider->reserve($reserveRequest);
                     } catch (Throwable $exception) {
-                        return $this->handleProviderFailure($submissionPublicId, 'reserve_call_uncertain', $provider->code(), $correlationId, true, $exception);
+                        $receipt = $this->handleProviderFailure($submissionPublicId, 'reserve_call_uncertain', $provider->code(), $correlationId, true, $exception);
+                        $attempt->requireReconciliation();
+
+                        return $receipt;
                     }
 
-                    return $this->recordReserve($submissionPublicId, $provider->code(), $reserve, $correlationId);
+                    $receipt = $this->recordReserve($submissionPublicId, $provider->code(), $reserve, $correlationId);
+                    if (in_array($reserve->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
+                        $attempt->requireReconciliation();
+                    }
+
+                    return $receipt;
                 },
             );
             if ($reserveResult instanceof GiftCardProcessingReceipt) {
@@ -163,9 +174,11 @@ final readonly class GiftCardPaymentService
 
         return $this->providerMutations->runForPaymentIntent(
             $paymentIntentId,
-            function () use ($submissionPublicId, $provider, $correlationId): GiftCardProcessingReceipt {
+            'gift-card:redeem:'.$submissionPublicId,
+            function (PurchaseProviderMutationAttempt $attempt) use ($submissionPublicId, $provider, $correlationId): GiftCardProcessingReceipt {
                 $redeemRequest = $this->beginProviderMutation($submissionPublicId, 'redeem', ['valid_unreserved', 'reserved'], 'redeeming');
                 try {
+                    $attempt->markExternalEffectStarted();
                     $redeem = $provider->redeem($redeemRequest);
                 } catch (Throwable $exception) {
                     $this->recordFinding($submissionPublicId, 'redeem_call_uncertain', 'critical', $provider->code(), null, null, null, $correlationId);
@@ -176,7 +189,12 @@ final readonly class GiftCardPaymentService
                     throw new RuntimeException('Gift-card provider returned evidence for the wrong operation.');
                 }
                 if ($redeem->outcome !== 'success' || $redeem->status !== 'redeemed') {
-                    return $this->recordNonSuccessfulRedeem($submissionPublicId, $provider->code(), $redeem, $correlationId);
+                    $receipt = $this->recordNonSuccessfulRedeem($submissionPublicId, $provider->code(), $redeem, $correlationId);
+                    if (in_array($redeem->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
+                        $attempt->requireReconciliation();
+                    }
+
+                    return $receipt;
                 }
 
                 return $this->redemptions->recordAndSettle($submissionPublicId, $provider->code(), $redeem, $correlationId);

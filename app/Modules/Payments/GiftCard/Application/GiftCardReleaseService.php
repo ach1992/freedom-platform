@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\GiftCard\Application;
 
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
 use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
@@ -58,13 +59,15 @@ final readonly class GiftCardReleaseService
 
         return $this->providerMutations->runForPaymentIntent(
             (int) $paymentIntentId,
-            function () use ($submissionPublicId, $provider, $correlationId): GiftCardProcessingReceipt {
+            'gift-card:release:'.$submissionPublicId,
+            function (PurchaseProviderMutationAttempt $attempt) use ($submissionPublicId, $provider, $correlationId): GiftCardProcessingReceipt {
                 $prepared = $this->prepare($submissionPublicId, $provider->code());
                 if ($prepared instanceof GiftCardProcessingReceipt) {
                     return $prepared;
                 }
 
                 try {
+                    $attempt->markExternalEffectStarted();
                     $evidence = $provider->release($prepared);
                 } catch (Throwable $exception) {
                     $this->recordFinding(
@@ -75,6 +78,7 @@ final readonly class GiftCardReleaseService
                         null,
                         $correlationId,
                     );
+                    $attempt->requireReconciliation();
                     throw new RuntimeException('Gift-card reservation release outcome is uncertain; reconcile before retry.', 0, $exception);
                 }
 
@@ -99,6 +103,10 @@ final readonly class GiftCardReleaseService
                     throw $exception;
                 }
                 if ($notConfirmed !== null) {
+                    if (in_array($evidence->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
+                        $attempt->requireReconciliation();
+                    }
+
                     return $notConfirmed;
                 }
 
