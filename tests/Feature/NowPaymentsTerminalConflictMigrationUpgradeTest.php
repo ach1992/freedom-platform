@@ -42,6 +42,7 @@ use PDOException;
 use RuntimeException;
 use Tests\Support\RestoresDatabaseTrigger;
 use Tests\TestCase;
+use Throwable;
 
 final class LegacyUpgradeNowPaymentsTransport implements NowPaymentsTransport
 {
@@ -486,6 +487,186 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         self::assertSame('failed', DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'));
         self::assertSame('failed', DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'));
         $this->assertUpgradeFenceActive();
+    }
+
+    public function test_interrupted_upgrade_fence_installation_never_crosses_legacy_preflight_and_reenters(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('partial-fence-install', 'failed');
+        $this->seedLegacyFinishedConflict(
+            $fixture['authority_id'],
+            $fixture['provider_payment_id'],
+            'partial-fence-install',
+        );
+
+        $injected = false;
+        $needle = 'create or replace trigger nowpayments_observation_np_conflict_upgrade_insert_fence';
+        DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
+            if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected partial NOWPayments upgrade-fence installation.');
+        });
+
+        try {
+            $migration->up();
+            self::fail('Fence-installation failure injection must interrupt migration before preflight.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame('Injected partial NOWPayments upgrade-fence installation.', $exception->getMessage());
+        }
+
+        self::assertTrue(
+            DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence'),
+        );
+        self::assertSame(
+            1,
+            DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                ->where('id', 1)
+                ->where('active', 1)
+                ->count(),
+        );
+        self::assertTrue($this->triggerExists('payment_intents_np_conflict_upgrade_insert_fence'));
+        self::assertTrue($this->triggerExists('nowpayments_observation_np_conflict_upgrade_insert_fence'));
+        self::assertFalse($this->triggerExists('zarinpal_request_np_conflict_upgrade_insert_fence'));
+        self::assertStringNotContainsString(
+            'finished_status_observation_count',
+            $this->triggerAction('nowpayments_authority_update_guard'),
+        );
+        self::assertSame(
+            'failed',
+            DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+        );
+        self::assertSame(
+            'failed',
+            DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+        );
+
+        $migration->up();
+
+        $this->assertUpgradeFencesAbsent();
+        self::assertSame(
+            'manual_review',
+            DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+        );
+        self::assertSame(
+            'pending_manual_review',
+            DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+        );
+    }
+
+    public function test_inflight_legacy_status_transaction_is_drained_before_preflight_and_becomes_sticky(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the NOWPayments migration in-flight writer regression.');
+        }
+
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('inflight-status', 'failed');
+        $this->seedLegacyFinishedConflict(
+            $fixture['authority_id'],
+            $fixture['provider_payment_id'],
+            'inflight-status',
+        );
+
+        $barrier = sys_get_temp_dir().'/nowpayments-upgrade-inflight-'.bin2hex(random_bytes(8));
+        $pid = null;
+
+        try {
+            $pid = pcntl_fork();
+            self::assertNotSame(-1, $pid);
+            if ($pid === 0) {
+                try {
+                    $pdo = $this->independentPdo();
+                    $pdo->beginTransaction();
+                    $this->insertNowPaymentsObservationViaPdo(
+                        $pdo,
+                        $fixture['authority_id'],
+                        $fixture['provider_payment_id'],
+                        'expired',
+                        'inflight-contradictory',
+                    );
+                    file_put_contents($barrier, 'ready');
+                    usleep(250000);
+                    $pdo->commit();
+
+                    // Replace the forked process so inherited Laravel/PDO resources
+                    // cannot emit COM_QUIT against the parent's database sessions.
+                    pcntl_exec('/bin/true');
+                    file_put_contents($barrier, 'error|pcntl_exec');
+                    exit(1);
+                } catch (Throwable $exception) {
+                    file_put_contents($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($barrier)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for the in-flight NOWPayments status transaction.');
+                }
+                usleep(1000);
+            }
+            $state = trim((string) file_get_contents($barrier));
+            if ($state !== 'ready') {
+                throw new RuntimeException('In-flight NOWPayments status writer failed before migration: '.$state);
+            }
+
+            // CREATE OR REPLACE TRIGGER on the observation table must wait for
+            // this already-entered transaction to commit before preflight can run.
+            $migration->up();
+
+            self::assertIsInt($pid);
+            pcntl_waitpid($pid, $status);
+            $pid = null;
+            self::assertSame(0, pcntl_wexitstatus($status));
+
+            $lateHash = hash('sha256', 'np-upgrade-fence-observation-inflight-contradictory');
+            self::assertSame(
+                1,
+                DB::table('nowpayments_reconciliation_findings')
+                    ->where('nowpayments_payment_authority_id', $fixture['authority_id'])
+                    ->where('code', 'terminal_finished_conflict_status_changed')
+                    ->where('severity', 'critical')
+                    ->where('provider_status', 'expired')
+                    ->where('evidence_hash', $lateHash)
+                    ->count(),
+            );
+            self::assertSame(
+                'manual_review',
+                DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+            );
+            self::assertSame(
+                'pending_manual_review',
+                DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+            );
+
+            $this->transport->statusValue = 'finished';
+            $this->transport->actuallyPaid = $this->transport->payAmount;
+            $stillManual = $this->service()->refresh(
+                $fixture['payment_intent_public_id'],
+                $this->correlation('inflight-status-finished-again'),
+            );
+            self::assertSame(NowPaymentsAuthorityState::ManualReview, $stillManual->state);
+            self::assertNull($stillManual->settlementPublicId);
+            self::assertSame(
+                0,
+                DB::table('purchase_settlements')
+                    ->where('payment_intent_id', $fixture['payment_intent_id'])
+                    ->count(),
+            );
+        } finally {
+            if (is_int($pid) && $pid > 0) {
+                pcntl_waitpid($pid, $status);
+            }
+            @unlink($barrier);
+        }
     }
 
     public function test_upgrade_fence_precedes_preflight_and_blocks_second_connection_payment_writers(): void
