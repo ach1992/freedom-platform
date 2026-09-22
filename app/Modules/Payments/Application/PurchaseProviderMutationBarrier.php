@@ -13,17 +13,21 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Serializes irreversible purchase-provider mutations against financial migrations.
+ * Excludes purchase-provider mutations from financial migration cutovers.
  *
- * Runtime mutations take one deterministic purchase shard. A migration activates its
- * durable database fence first, then takes every shard before trusting financial
- * state. This drains provider effects already in flight while rejecting new ones.
+ * Runtime mutations hold one slot from a bounded shared pool, starting from a
+ * deterministic purchase-specific preference and probing other slots when it is
+ * occupied. A migration activates its durable database fence first and then
+ * acquires the whole pool before trusting financial state. That drains provider
+ * effects already in flight while later entrants fail closed on the fence.
  */
 final readonly class PurchaseProviderMutationBarrier
 {
     private const SLOT_COUNT = 128;
 
     private const LOCK_TIMEOUT_SECONDS = 15;
+
+    private const RUNTIME_LOCK_RETRY_MICROSECONDS = 10_000;
 
     public function __construct(private DatabaseManager $database) {}
 
@@ -63,12 +67,16 @@ final readonly class PurchaseProviderMutationBarrier
             throw new RuntimeException('Purchase provider mutation identity is incomplete.');
         }
 
+        $this->assertUpgradeFenceInactive($connection);
         $slot = $this->slotFor((int) $userId, $intent->source_quote_public_id);
 
-        return $this->withLocks(
+        return $this->withRuntimeSlot(
             $connection,
-            [$this->lockName($connection, $slot)],
+            $slot,
             function () use ($connection, $paymentIntentId, $sourceQuoteId, $userId, $operation): mixed {
+                // The fence is re-read after slot acquisition to close the race where
+                // migration activates it between the optimistic fast-path read above
+                // and this runtime invocation entering the shared-capacity barrier.
                 $this->assertUpgradeFenceInactive($connection);
                 $this->assertNoOtherPendingManualReview(
                     $connection,
@@ -158,6 +166,52 @@ final readonly class PurchaseProviderMutationBarrier
     /**
      * @template T
      *
+     * @param  Closure():T  $operation
+     * @return T
+     */
+    private function withRuntimeSlot(Connection $connection, int $preferredSlot, Closure $operation): mixed
+    {
+        $reconnector = $this->currentReconnector($connection);
+        $this->disableReconnectWhileLocksHeld($connection);
+        $lockName = null;
+
+        try {
+            $deadline = microtime(true) + self::LOCK_TIMEOUT_SECONDS;
+            while (true) {
+                for ($offset = 0; $offset < self::SLOT_COUNT; $offset++) {
+                    $slot = ($preferredSlot + $offset) % self::SLOT_COUNT;
+                    $candidate = $this->lockName($connection, $slot);
+                    $row = $connection->selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$candidate], false);
+                    if ($row !== null && (int) ($row->acquired ?? 0) === 1) {
+                        $lockName = $candidate;
+                        break;
+                    }
+                }
+
+                if ($lockName !== null) {
+                    break;
+                }
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Purchase provider mutation barrier slot could not be acquired.');
+                }
+
+                usleep(self::RUNTIME_LOCK_RETRY_MICROSECONDS);
+            }
+
+            return $operation();
+        } finally {
+            $cleanupFailure = $this->releaseLocks($connection, $lockName === null ? [] : [$lockName]);
+            $connection->setReconnector($reconnector);
+
+            if ($cleanupFailure !== null) {
+                throw $cleanupFailure;
+            }
+        }
+    }
+
+    /**
+     * @template T
+     *
      * @param  list<string>  $lockNames
      * @param  Closure():T  $operation
      * @return T
@@ -183,29 +237,36 @@ final readonly class PurchaseProviderMutationBarrier
 
             return $operation();
         } finally {
-            $cleanupFailure = null;
-            foreach (array_reverse($acquired) as $lockName) {
-                try {
-                    $released = $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
-                    if ($released === null || (int) ($released->released ?? 0) !== 1) {
-                        throw new RuntimeException('Purchase provider mutation barrier lock release was not exact.');
-                    }
-                } catch (Throwable $exception) {
-                    $connection->disconnect();
-                    $cleanupFailure ??= new RuntimeException(
-                        'Purchase provider mutation barrier lock cleanup failed.',
-                        0,
-                        $exception,
-                    );
-                }
-            }
-
+            $cleanupFailure = $this->releaseLocks($connection, array_reverse($acquired));
             $connection->setReconnector($reconnector);
 
             if ($cleanupFailure !== null) {
                 throw $cleanupFailure;
             }
         }
+    }
+
+    /** @param list<string> $lockNames */
+    private function releaseLocks(Connection $connection, array $lockNames): ?RuntimeException
+    {
+        $cleanupFailure = null;
+        foreach ($lockNames as $lockName) {
+            try {
+                $released = $connection->selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName], false);
+                if ($released === null || (int) ($released->released ?? 0) !== 1) {
+                    throw new RuntimeException('Purchase provider mutation barrier lock release was not exact.');
+                }
+            } catch (Throwable $exception) {
+                $connection->disconnect();
+                $cleanupFailure ??= new RuntimeException(
+                    'Purchase provider mutation barrier lock cleanup failed.',
+                    0,
+                    $exception,
+                );
+            }
+        }
+
+        return $cleanupFailure;
     }
 
     private function disableReconnectWhileLocksHeld(Connection $connection): void
