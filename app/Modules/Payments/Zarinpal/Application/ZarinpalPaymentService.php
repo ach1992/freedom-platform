@@ -264,6 +264,7 @@ final readonly class ZarinpalPaymentService
                     $result,
                     $correlationId,
                     $prePaymentOrderAware,
+                    $attempt,
                 ): ZarinpalPaymentReceipt {
                     $current = $this->requestById($connection, $this->positiveInt($providerRequest->id, 'Zarinpal request ID'), true);
                     if ($current === null) {
@@ -277,6 +278,7 @@ final readonly class ZarinpalPaymentService
                         $this->updateRequestState($connection, $current, ZarinpalRequestState::Uncertain);
                         $fresh = $this->requiredRequest($connection, (int) $current->id);
                         $this->observe($connection, $fresh, 'request_uncertain', null, null, null, $correlationId);
+                        $attempt->requireReconciliation();
 
                         return $this->receipt($fresh, false);
                     }

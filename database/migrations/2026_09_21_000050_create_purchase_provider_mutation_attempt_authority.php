@@ -35,19 +35,29 @@ return new class extends Migration
             });
         }
 
-        $shape = DB::selectOne(<<<'SQL'
-SELECT COUNT(*) AS aggregate
-FROM information_schema.COLUMNS
-WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME = 'purchase_provider_mutation_attempts'
-  AND COLUMN_NAME IN (
-      'id','public_id','payment_intent_id','payment_intent_public_id','provider_code',
-      'mutation_key','provider_session_id','slot','state','prepared_at',
-      'external_started_at','resolved_at','updated_at'
-  )
-SQL);
-        if ($shape === null || (int) $shape->aggregate !== 13) {
-            throw new RuntimeException('Provider mutation attempt authority table is partially applied.');
+        $columns = DB::table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('TABLE_NAME', 'purchase_provider_mutation_attempts')
+            ->orderBy('ORDINAL_POSITION')
+            ->pluck('COLUMN_NAME')
+            ->map(static fn (mixed $column): string => (string) $column)
+            ->all();
+        if ($columns !== [
+            'id',
+            'public_id',
+            'payment_intent_id',
+            'payment_intent_public_id',
+            'provider_code',
+            'mutation_key',
+            'provider_session_id',
+            'slot',
+            'state',
+            'prepared_at',
+            'external_started_at',
+            'resolved_at',
+            'updated_at',
+        ]) {
+            throw new RuntimeException('Provider mutation attempt authority table is partially applied or has an unexpected shape.');
         }
 
         $this->ensureCheckConstraint(

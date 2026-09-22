@@ -531,6 +531,76 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         $this->assertUpgradeFenceActive();
     }
 
+    public function test_provider_mutation_attempt_authority_reenters_after_partial_ddl(): void
+    {
+        $conflictMigration = $this->migration();
+        $conflictMigration->down();
+        $attemptMigration = $this->providerAttemptMigration();
+        $attemptMigration->down();
+
+        $injected = false;
+        DB::listen(function (QueryExecuted $query) use (&$injected): void {
+            $sql = strtolower(preg_replace('/\\s+/', ' ', $query->sql) ?? $query->sql);
+            if ($injected
+                || ! str_contains(
+                    $sql,
+                    'alter table purchase_provider_mutation_attempts add constraint purchase_provider_mutation_slot_chk',
+                )) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected after first provider-mutation attempt constraint.');
+        });
+
+        try {
+            $attemptMigration->up();
+            self::fail('Partial provider-mutation attempt DDL must interrupt the first apply.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame(
+                'Injected after first provider-mutation attempt constraint.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertTrue(DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts'));
+        self::assertSame(
+            1,
+            DB::table('information_schema.TABLE_CONSTRAINTS')
+                ->where('CONSTRAINT_SCHEMA', DB::connection()->getDatabaseName())
+                ->where('TABLE_NAME', 'purchase_provider_mutation_attempts')
+                ->where('CONSTRAINT_NAME', 'purchase_provider_mutation_slot_chk')
+                ->count(),
+        );
+        self::assertFalse($this->triggerExists('purchase_provider_mutation_attempts_update_guard'));
+
+        // Re-enter the same migration after MariaDB committed the first DDL.
+        // Existing constraints are reused and triggers are composed idempotently.
+        $attemptMigration->up();
+
+        foreach ([
+            'purchase_provider_mutation_slot_chk',
+            'purchase_provider_mutation_state_chk',
+            'purchase_provider_mutation_timestamps_chk',
+        ] as $constraint) {
+            self::assertSame(
+                1,
+                DB::table('information_schema.TABLE_CONSTRAINTS')
+                    ->where('CONSTRAINT_SCHEMA', DB::connection()->getDatabaseName())
+                    ->where('TABLE_NAME', 'purchase_provider_mutation_attempts')
+                    ->where('CONSTRAINT_NAME', $constraint)
+                    ->count(),
+                'Provider mutation attempt constraint did not converge exactly once: '.$constraint,
+            );
+        }
+        self::assertTrue($this->triggerExists('purchase_provider_mutation_attempts_update_guard'));
+        self::assertTrue($this->triggerExists('purchase_provider_mutation_attempts_delete_guard'));
+
+        $conflictMigration->up();
+        $this->assertUpgradeFencesAbsent();
+    }
+
     public function test_interrupted_upgrade_fence_installation_never_crosses_legacy_preflight_and_reenters(): void
     {
         $migration = $this->migration();
@@ -658,6 +728,143 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         $this->assertFailClosedCutWithSecondConnection($fixture, 'interrupted-provider-drain');
     }
 
+    public function test_active_cut_rejects_post_cut_provider_attempt_entry_and_start_at_database_boundary(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('provider-attempt-cut-race', 'failed');
+
+        $pdo = $this->independentPdo();
+        $database = config('database.connections.mysql.database');
+        self::assertIsString($database);
+        $slot = 17;
+        $lockName = sprintf(
+            'purchase-provider:%s:%03d',
+            substr(hash('sha256', $database), 0, 16),
+            $slot,
+        );
+        $lockStatement = $pdo->prepare('SELECT GET_LOCK(?, 0)');
+        $lockStatement->execute([$lockName]);
+        self::assertSame(1, (int) $lockStatement->fetchColumn());
+        $providerSessionId = (int) $pdo->query('SELECT CONNECTION_ID()')->fetchColumn();
+        self::assertGreaterThan(0, $providerSessionId);
+
+        $insert = $pdo->prepare(<<<'SQL'
+INSERT INTO purchase_provider_mutation_attempts (
+    public_id,
+    payment_intent_id,
+    payment_intent_public_id,
+    provider_code,
+    mutation_key,
+    provider_session_id,
+    slot,
+    state,
+    prepared_at,
+    external_started_at,
+    resolved_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', UTC_TIMESTAMP(6), NULL, NULL, UTC_TIMESTAMP(6))
+SQL);
+        $insert->execute([
+            (string) Str::ulid(),
+            $fixture['payment_intent_id'],
+            $fixture['payment_intent_public_id'],
+            'nowpayments',
+            'test:prepared-before-financial-cut',
+            $providerSessionId,
+            $slot,
+        ]);
+        $preparedAttemptId = (int) $pdo->lastInsertId();
+        self::assertGreaterThan(0, $preparedAttemptId);
+
+        $injected = false;
+        DB::listen(function (QueryExecuted $query) use (&$injected): void {
+            $sql = strtolower($query->sql);
+            if ($injected
+                || ! str_contains($sql, 'insert into')
+                || ! str_contains($sql, 'nowpayments_terminal_conflict_upgrade_fence')) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected active provider-attempt cut.');
+        });
+
+        try {
+            $migration->up();
+            self::fail('Provider-attempt cut injection must interrupt after marker activation.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame('Injected active provider-attempt cut.', $exception->getMessage());
+        }
+        $this->assertUpgradeFenceActive();
+
+        try {
+            $pdo->exec(sprintf(
+                "UPDATE purchase_provider_mutation_attempts
+                 SET state = 'external_started',
+                     external_started_at = UTC_TIMESTAMP(6),
+                     updated_at = UTC_TIMESTAMP(6)
+                 WHERE id = %d",
+                $preparedAttemptId,
+            ));
+            self::fail('A prepared pre-cut attempt must not cross the external-effect boundary after marker activation.');
+        } catch (PDOException $exception) {
+            self::assertStringContainsString(
+                'Prepared provider mutation cannot cross the external-effect boundary after migration cutover.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame(
+            'prepared',
+            DB::table('purchase_provider_mutation_attempts')->where('id', $preparedAttemptId)->value('state'),
+        );
+
+        try {
+            $insert->execute([
+                (string) Str::ulid(),
+                $fixture['payment_intent_id'],
+                $fixture['payment_intent_public_id'],
+                'nowpayments',
+                'test:new-after-financial-cut',
+                $providerSessionId,
+                $slot,
+            ]);
+            self::fail('A fresh provider mutation attempt must not be admitted after marker activation.');
+        } catch (PDOException $exception) {
+            self::assertStringContainsString(
+                'New provider mutation attempts are fenced during NOWPayments conflict migration.',
+                $exception->getMessage(),
+            );
+        }
+
+        // A prepared attempt never crossed the provider-effect boundary, so aborting
+        // it remains safe and lets the interrupted migration re-enter normally.
+        $aborted = $pdo->exec(sprintf(
+            "UPDATE purchase_provider_mutation_attempts
+             SET state = 'aborted',
+                 resolved_at = UTC_TIMESTAMP(6),
+                 updated_at = UTC_TIMESTAMP(6)
+             WHERE id = %d AND state = 'prepared'",
+            $preparedAttemptId,
+        ));
+        self::assertSame(1, $aborted);
+        self::assertSame(
+            1,
+            $pdo->exec(sprintf(
+                "DELETE FROM purchase_provider_mutation_attempts WHERE id = %d AND state = 'aborted'",
+                $preparedAttemptId,
+            )),
+        );
+
+        $releaseStatement = $pdo->prepare('SELECT RELEASE_LOCK(?)');
+        $releaseStatement->execute([$lockName]);
+        self::assertSame(1, (int) $releaseStatement->fetchColumn());
+
+        $migration->up();
+        $this->assertUpgradeFencesAbsent();
+    }
+
     public function test_inflight_provider_mutation_is_drained_before_migration_preflight(): void
     {
         if (! function_exists('pcntl_fork')) {
@@ -677,6 +884,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
 
         $ready = sys_get_temp_dir().'/nowpayments-provider-barrier-ready-'.bin2hex(random_bytes(8));
         $fenceActive = $ready.'.fence';
+        $localWriterReady = $ready.'.local-writer-ready';
         $localWriterDone = $ready.'.local-writer';
         $pid = null;
         $writerPid = null;
@@ -771,6 +979,15 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                     config()->set('database.connections.np_local_financial_writer', $writerConfiguration);
                     DB::setDefaultConnection('np_local_financial_writer');
 
+                    $blocked = 0;
+                    $pdo = $this->independentPdo();
+                    $pdo->beginTransaction();
+                    // Establish a REPEATABLE READ snapshot before marker activation.
+                    // The staged trigger must still observe the later cut as a current
+                    // read rather than trusting this transaction's older snapshot.
+                    $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+                    file_put_contents($localWriterReady, 'ready');
+
                     $deadline = microtime(true) + 10.0;
                     while (! file_exists($fenceActive)) {
                         if (microtime(true) >= $deadline) {
@@ -779,8 +996,6 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                         usleep(1000);
                     }
 
-                    $blocked = 0;
-                    $pdo = $this->independentPdo();
                     try {
                         $this->clonePaymentIntentViaPdo($pdo, $fixture['payment_intent_id'], 'provider-drain-local-writer');
                     } catch (PDOException $exception) {
@@ -810,6 +1025,9 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                         $blocked++;
                     }
 
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
                     file_put_contents($localWriterDone, 'blocked:'.$blocked);
                     pcntl_exec($blocked === 3 ? '/bin/true' : '/bin/false');
                     exit($blocked === 3 ? 0 : 1);
@@ -819,6 +1037,15 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                     exit(1);
                 }
             }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($localWriterReady)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for the pre-cut local-writer snapshot.');
+                }
+                usleep(1000);
+            }
+            self::assertSame('ready', trim((string) file_get_contents($localWriterReady)));
 
             $fenceSignaled = false;
             DB::listen(function (QueryExecuted $query) use (&$fenceSignaled, $fenceActive): void {
@@ -891,6 +1118,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             }
             @unlink($ready);
             @unlink($fenceActive);
+            @unlink($localWriterReady);
             @unlink($localWriterDone);
         }
     }
@@ -1098,25 +1326,10 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
                 DB::table('purchase_settlements')->where('payment_intent_id', $fixture['payment_intent_id'])->count(),
             );
 
-            // Test-only reconciliation cleanup proves that the cut can converge
-            // after an explicit durable resolution; production must use the
-            // reviewed provider-reconciliation path, never a manual row edit.
-            DB::table('purchase_provider_mutation_attempts')
-                ->where('payment_intent_id', $fixture['payment_intent_id'])
-                ->where('payment_intent_public_id', $fixture['payment_intent_public_id'])
-                ->where('state', 'reconciliation_required')
-                ->update([
-                    'state' => 'completed',
-                    'resolved_at' => $this->timestamp(),
-                    'updated_at' => $this->timestamp(),
-                ]);
-            DB::table('purchase_provider_mutation_attempts')
-                ->where('payment_intent_id', $fixture['payment_intent_id'])
-                ->where('payment_intent_public_id', $fixture['payment_intent_public_id'])
-                ->where('state', 'completed')
-                ->delete();
-            $migration->up();
-            $this->assertUpgradeFencesAbsent();
+            // No synthetic cleanup is performed here. A session-loss mutation must
+            // remain a durable reconciliation blocker until a real provider-specific
+            // recovery path has established authoritative outcome/local convergence.
+            // Test teardown resets the isolated disposable database only.
         } finally {
             if (is_int($pid) && $pid > 0) {
                 @file_put_contents($release, 'release');
@@ -2458,6 +2671,16 @@ SQL);
             ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
             ->where('TRIGGER_NAME', $trigger)
             ->exists();
+    }
+
+    private function providerAttemptMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path(
+            'migrations/2026_09_21_000050_create_purchase_provider_mutation_attempt_authority.php',
+        );
+
+        return $migration;
     }
 
     private function migration(): Migration
