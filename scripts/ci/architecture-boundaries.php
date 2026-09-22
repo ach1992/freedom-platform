@@ -541,6 +541,7 @@ return [
         'nowpayments_payment_authorities' => 'Payments',
         'nowpayments_payment_observations' => 'Payments',
         'nowpayments_reconciliation_findings' => 'Payments',
+        'nowpayments_terminal_conflict_upgrade_fence' => 'Payments',
         'order_items' => 'Orders',
         'order_source_authorizations' => 'Orders',
         'order_state_histories' => 'Orders',
