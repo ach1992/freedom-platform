@@ -542,10 +542,9 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         DB::listen(function (QueryExecuted $query) use (&$injected): void {
             $sql = strtolower(preg_replace('/\\s+/', ' ', $query->sql) ?? $query->sql);
             if ($injected
-                || ! str_contains(
-                    $sql,
-                    'alter table purchase_provider_mutation_attempts add constraint purchase_provider_mutation_slot_chk',
-                )) {
+                || ! str_contains($sql, 'alter table purchase_provider_mutation_attempts')
+                || ! str_contains($sql, 'add constraint')
+                || ! str_contains($sql, 'purchase_provider_mutation_slot_chk')) {
                 return;
             }
 
