@@ -597,7 +597,9 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
 
                     $paused = false;
                     DB::listen(function (QueryExecuted $query) use (&$paused, $barrier): void {
-                        if ($paused || ! str_contains(strtolower($query->sql), 'insert into \`payment_intents\`')) {
+                        if ($paused
+                            || ! str_contains(strtolower($query->sql), 'insert into')
+                            || ! str_contains(strtolower($query->sql), 'payment_intents')) {
                             return;
                         }
 
