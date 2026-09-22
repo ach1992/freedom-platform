@@ -30,6 +30,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\AssertsPurchaseProviderMutationAttempt;
 use Tests\TestCase;
 
 final class GiftCardRaceVerificationProvider implements GiftCardVerificationProvider
@@ -195,6 +196,7 @@ final class GiftCardFlowClock implements Clock
 final class GiftCardPaymentFlowTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
+    use AssertsPurchaseProviderMutationAttempt;
     use RefreshDatabase;
 
     private GiftCardFlowClock $clock;
@@ -401,7 +403,11 @@ final class GiftCardPaymentFlowTest extends TestCase
             $this->evidence('validate', 'valid', 'order-reserve-race-first-validate', null, $purchase['amount']),
             $this->evidence('reserve', 'reserved', 'order-reserve-race-first-reserve', 'order-reserve-race-hold', $purchase['amount']),
             $this->evidence('release', 'released', 'order-reserve-race-first-release', 'order-reserve-race-release', $purchase['amount']),
-            function () use ($service, $winner, $winnerProvider): void {
+            function () use ($service, $racing, $winner, $winnerProvider): void {
+                $this->assertExternalProviderMutationAttempt(
+                    'gift_card',
+                    'gift-card:redeem:'.$racing->publicId,
+                );
                 $captured = $service->process(
                     $winner->publicId,
                     $winnerProvider,

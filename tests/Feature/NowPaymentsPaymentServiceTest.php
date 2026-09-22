@@ -43,6 +43,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\AssertsPurchaseProviderMutationAttempt;
 use Tests\TestCase;
 
 final class FakeNowPaymentsTransport implements NowPaymentsTransport
@@ -67,10 +68,15 @@ final class FakeNowPaymentsTransport implements NowPaymentsTransport
 
     public string $providerPaymentId = '900001';
 
+    public ?\Closure $beforeCreateResponse = null;
+
     public function create(NowPaymentsCreateRequest $request): NowPaymentsPaymentResult
     {
         $this->createCalls++;
         $this->lastCreateRequest = $request;
+        if ($this->beforeCreateResponse !== null) {
+            ($this->beforeCreateResponse)();
+        }
         if ($this->createUncertain) {
             throw new NowPaymentsTransportException('simulated uncertain create', true);
         }
@@ -205,6 +211,7 @@ final class NowPaymentsTestClock implements Clock
 final class NowPaymentsPaymentServiceTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
+    use AssertsPurchaseProviderMutationAttempt;
     use RefreshDatabase;
 
     private FakeNowPaymentsTransport $transport;
@@ -242,6 +249,9 @@ final class NowPaymentsPaymentServiceTest extends TestCase
         $intentPublicId = $this->purchaseIntent('snapshot', 10_000_000);
         $service = $this->service();
         $requestKey = 'nowpayments.create.snapshot.000001';
+        $this->transport->beforeCreateResponse = function (): void {
+            $this->assertExternalProviderMutationAttempt('nowpayments', 'nowpayments:create:');
+        };
 
         $created = $service->create($intentPublicId, $requestKey, $this->correlation('create-snapshot'));
         self::assertSame(NowPaymentsAuthorityState::Created, $created->state);

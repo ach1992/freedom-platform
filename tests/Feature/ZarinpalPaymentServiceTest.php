@@ -25,6 +25,7 @@ use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Tests\Support\AssertsPurchaseProviderMutationAttempt;
 use Tests\TestCase;
 
 final class FakeZarinpalTransport implements ZarinpalTransport
@@ -46,6 +47,10 @@ final class FakeZarinpalTransport implements ZarinpalTransport
     /** @var list<ZarinpalUnverifiedCandidate> */
     public array $unverifiedCandidates = [];
 
+    public ?\Closure $beforeRequestResponse = null;
+
+    public ?\Closure $beforeVerifyResponse = null;
+
     public function __construct()
     {
         $this->requestResult = ZarinpalRequestResult::accepted('A'.str_repeat('1', 35));
@@ -56,6 +61,9 @@ final class FakeZarinpalTransport implements ZarinpalTransport
     public function request(string $merchantId, int $amountIrr, string $callbackUrl, string $description, string $orderId): ZarinpalRequestResult
     {
         $this->requestCalls++;
+        if ($this->beforeRequestResponse !== null) {
+            ($this->beforeRequestResponse)();
+        }
 
         return $this->requestResult;
     }
@@ -63,6 +71,9 @@ final class FakeZarinpalTransport implements ZarinpalTransport
     public function verify(string $merchantId, int $amountIrr, string $authority): ZarinpalVerifyResult
     {
         $this->verifyCalls++;
+        if ($this->beforeVerifyResponse !== null) {
+            ($this->beforeVerifyResponse)();
+        }
 
         return $this->verifyResult;
     }
@@ -96,6 +107,7 @@ final class ZarinpalPaymentTestClock implements Clock
 final class ZarinpalPaymentServiceTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
+    use AssertsPurchaseProviderMutationAttempt;
     use RefreshDatabase;
 
     private FakeZarinpalTransport $transport;
@@ -123,6 +135,12 @@ final class ZarinpalPaymentServiceTest extends TestCase
         $intentPublicId = $this->purchaseIntent('happy');
         $service = $this->app->make(ZarinpalPaymentService::class);
         $requestKey = 'zarinpal.request.happy.000001';
+        $this->transport->beforeRequestResponse = function (): void {
+            $this->assertExternalProviderMutationAttempt('zarinpal', 'zarinpal:request:');
+        };
+        $this->transport->beforeVerifyResponse = function (): void {
+            $this->assertExternalProviderMutationAttempt('zarinpal', 'zarinpal:verify:');
+        };
 
         $created = $service->initiate($requestKey, $intentPublicId, $this->correlation('initiate-happy'));
         self::assertSame(ZarinpalRequestState::Redirectable, $created->state);
