@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\GiftCard\Application;
 
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderRequest;
@@ -23,6 +24,7 @@ final readonly class GiftCardReleaseService
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
+        private PurchaseProviderMutationBarrier $providerMutations,
         private Clock $clock,
     ) {}
 
@@ -46,72 +48,85 @@ final readonly class GiftCardReleaseService
             throw new DomainException('Gift-card provider does not support reservation release.');
         }
 
-        $prepared = $this->prepare($submissionPublicId, $provider->code());
-        if ($prepared instanceof GiftCardProcessingReceipt) {
-            return $prepared;
+        $authority = $this->authority($this->database->connection(), $submissionPublicId);
+        $paymentIntentId = $authority === null
+            ? false
+            : filter_var($authority->payment_intent_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($paymentIntentId === false) {
+            throw new RuntimeException('Gift-card release payment intent authority is unavailable.');
         }
 
-        try {
-            $evidence = $provider->release($prepared);
-        } catch (Throwable $exception) {
-            $this->recordFinding(
-                $submissionPublicId,
-                'release_call_uncertain',
-                'critical',
-                $provider->code(),
-                null,
-                $correlationId,
-            );
-            throw new RuntimeException('Gift-card reservation release outcome is uncertain; reconcile before retry.', 0, $exception);
-        }
+        return $this->providerMutations->runForPaymentIntent(
+            (int) $paymentIntentId,
+            function () use ($submissionPublicId, $provider, $correlationId): GiftCardProcessingReceipt {
+                $prepared = $this->prepare($submissionPublicId, $provider->code());
+                if ($prepared instanceof GiftCardProcessingReceipt) {
+                    return $prepared;
+                }
 
-        try {
-            $notConfirmed = $this->persistEvidence(
-                $submissionPublicId,
-                $provider->code(),
-                $evidence,
-                $correlationId,
-            );
-        } catch (Throwable $exception) {
-            $this->recordFindingSafely(
-                $submissionPublicId,
-                $evidence->outcome === 'success' && in_array($evidence->status, ['released', 'canceled', 'cancelled'], true)
-                    ? 'provider_released_evidence_persist_failed'
-                    : 'release_evidence_persist_failed',
-                'critical',
-                $provider->code(),
-                $evidence,
-                $correlationId,
-            );
-            throw $exception;
-        }
-        if ($notConfirmed !== null) {
-            return $notConfirmed;
-        }
+                try {
+                    $evidence = $provider->release($prepared);
+                } catch (Throwable $exception) {
+                    $this->recordFinding(
+                        $submissionPublicId,
+                        'release_call_uncertain',
+                        'critical',
+                        $provider->code(),
+                        null,
+                        $correlationId,
+                    );
+                    throw new RuntimeException('Gift-card reservation release outcome is uncertain; reconcile before retry.', 0, $exception);
+                }
 
-        try {
-            $settled = $this->settlePersistedReleaseInternal(
-                $submissionPublicId,
-                $provider->code(),
-                $correlationId,
-                false,
-            );
-            if ($settled === null) {
-                throw new RuntimeException('Gift-card release evidence disappeared before local finalization.');
-            }
+                try {
+                    $notConfirmed = $this->persistEvidence(
+                        $submissionPublicId,
+                        $provider->code(),
+                        $evidence,
+                        $correlationId,
+                    );
+                } catch (Throwable $exception) {
+                    $this->recordFindingSafely(
+                        $submissionPublicId,
+                        $evidence->outcome === 'success' && in_array($evidence->status, ['released', 'canceled', 'cancelled'], true)
+                            ? 'provider_released_evidence_persist_failed'
+                            : 'release_evidence_persist_failed',
+                        'critical',
+                        $provider->code(),
+                        $evidence,
+                        $correlationId,
+                    );
+                    throw $exception;
+                }
+                if ($notConfirmed !== null) {
+                    return $notConfirmed;
+                }
 
-            return $settled;
-        } catch (Throwable $exception) {
-            $this->recordFindingSafely(
-                $submissionPublicId,
-                'provider_released_local_not_released',
-                'critical',
-                $provider->code(),
-                $evidence,
-                $correlationId,
-            );
-            throw $exception;
-        }
+                try {
+                    $settled = $this->settlePersistedReleaseInternal(
+                        $submissionPublicId,
+                        $provider->code(),
+                        $correlationId,
+                        false,
+                    );
+                    if ($settled === null) {
+                        throw new RuntimeException('Gift-card release evidence disappeared before local finalization.');
+                    }
+
+                    return $settled;
+                } catch (Throwable $exception) {
+                    $this->recordFindingSafely(
+                        $submissionPublicId,
+                        'provider_released_local_not_released',
+                        'critical',
+                        $provider->code(),
+                        $evidence,
+                        $correlationId,
+                    );
+                    throw $exception;
+                }
+            },
+        );
     }
 
     public function settlePersistedRelease(

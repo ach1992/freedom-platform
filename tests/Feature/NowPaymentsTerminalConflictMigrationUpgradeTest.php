@@ -17,6 +17,7 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchasePaymentMaintenanceService;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsCreateRequest;
@@ -326,6 +327,27 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         );
         $this->migration()->up();
 
+        $competingIntentId = DB::table('payment_intents')
+            ->where('public_id', $competing->intentPublicId)
+            ->value('id');
+        self::assertNotNull($competingIntentId);
+        $providerMutationCalled = false;
+        try {
+            $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
+                (int) $competingIntentId,
+                function () use (&$providerMutationCalled): void {
+                    $providerMutationCalled = true;
+                },
+            );
+            self::fail('A stale competing provider claim must not cross normalized reconciliation after migration.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Purchase payment is locked by unresolved payment reconciliation.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertFalse($providerMutationCalled);
+
         try {
             $this->app->make(PurchasePaymentIntentService::class)->create(
                 $creationKey,
@@ -569,6 +591,192 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             'pending_manual_review',
             DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
         );
+    }
+
+    public function test_interrupted_upgrade_fence_blocks_runtime_provider_mutations_before_external_effects(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('provider-barrier-active-fence', 'failed');
+
+        $injected = false;
+        $needle = 'create or replace trigger nowpayments_observation_np_conflict_upgrade_insert_fence';
+        DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
+            if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected active provider-mutation fence.');
+        });
+
+        try {
+            $migration->up();
+            self::fail('Provider-mutation fence interruption must leave the durable migration boundary active.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame('Injected active provider-mutation fence.', $exception->getMessage());
+        }
+
+        self::assertTrue(
+            DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence'),
+        );
+        self::assertSame(
+            1,
+            DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                ->where('id', 1)
+                ->where('active', 1)
+                ->count(),
+        );
+        $called = false;
+        try {
+            $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
+                $fixture['payment_intent_id'],
+                function () use (&$called): void {
+                    $called = true;
+                },
+            );
+            self::fail('Persistent migration fence must reject provider mutation before its external effect callback.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'Purchase provider mutation is blocked by an active financial migration.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertFalse($called);
+    }
+
+    public function test_inflight_provider_mutation_is_drained_before_migration_preflight(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the NOWPayments provider-mutation migration regression.');
+        }
+
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('provider-barrier-inflight', 'failed');
+        $this->seedLegacyFinishedConflict(
+            $fixture['authority_id'],
+            $fixture['provider_payment_id'],
+            'provider-barrier-inflight',
+        );
+
+        $ready = sys_get_temp_dir().'/nowpayments-provider-barrier-ready-'.bin2hex(random_bytes(8));
+        $fenceActive = $ready.'.fence';
+        $pid = null;
+
+        try {
+            $pid = pcntl_fork();
+            self::assertNotSame(-1, $pid);
+            if ($pid === 0) {
+                try {
+                    $writerConfiguration = config('database.connections.mysql');
+                    if (! is_array($writerConfiguration)) {
+                        throw new RuntimeException('Provider-mutation writer database configuration is unavailable.');
+                    }
+                    config()->set('database.connections.np_provider_mutation_writer', $writerConfiguration);
+                    DB::setDefaultConnection('np_provider_mutation_writer');
+
+                    $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
+                        $fixture['payment_intent_id'],
+                        function () use ($ready, $fenceActive, $fixture): void {
+                            file_put_contents($ready, 'ready');
+                            $deadline = microtime(true) + 10.0;
+                            while (! file_exists($fenceActive)) {
+                                if (microtime(true) >= $deadline) {
+                                    throw new RuntimeException('Timed out waiting for the durable migration fence.');
+                                }
+                                usleep(1000);
+                            }
+
+                            // Keep the provider mutation in flight after the migration
+                            // has activated its durable fence. The migration must wait
+                            // for this callback and its local evidence persistence.
+                            usleep(150000);
+                            $hash = hash('sha256', 'np-provider-barrier-inflight-expired');
+                            DB::table('nowpayments_payment_observations')->insert([
+                                'nowpayments_payment_authority_id' => $fixture['authority_id'],
+                                'event_key' => 'nowpayments:'.$fixture['authority_id'].':status_lookup:'.substr($hash, 0, 32),
+                                'event_type' => 'status_lookup',
+                                'provider_payment_id' => $fixture['provider_payment_id'],
+                                'provider_status' => 'expired',
+                                'response_hash' => $hash,
+                                'occurred_at' => $this->timestamp(),
+                                'correlation_id' => $this->correlation('provider-barrier-inflight-expired'),
+                                'created_at' => $this->timestamp(),
+                            ]);
+                        },
+                    );
+
+                    pcntl_exec('/bin/true');
+                    file_put_contents($ready, 'error|pcntl_exec');
+                    exit(1);
+                } catch (Throwable $exception) {
+                    file_put_contents($ready, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($ready)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for the in-flight provider mutation barrier.');
+                }
+                usleep(1000);
+            }
+            $state = trim((string) file_get_contents($ready));
+            if ($state !== 'ready') {
+                throw new RuntimeException('In-flight provider mutation failed before migration: '.$state);
+            }
+
+            $fenceSignaled = false;
+            DB::listen(function (QueryExecuted $query) use (&$fenceSignaled, $fenceActive): void {
+                $sql = strtolower($query->sql);
+                if ($fenceSignaled
+                    || ! str_contains($sql, 'insert into')
+                    || ! str_contains($sql, 'nowpayments_terminal_conflict_upgrade_fence')) {
+                    return;
+                }
+
+                $fenceSignaled = true;
+                file_put_contents($fenceActive, 'active');
+            });
+
+            $migration->up();
+
+            self::assertTrue($fenceSignaled);
+            self::assertIsInt($pid);
+            pcntl_waitpid($pid, $status);
+            $pid = null;
+            self::assertSame(0, pcntl_wexitstatus($status));
+
+            $lateHash = hash('sha256', 'np-provider-barrier-inflight-expired');
+            self::assertSame(
+                1,
+                DB::table('nowpayments_reconciliation_findings')
+                    ->where('nowpayments_payment_authority_id', $fixture['authority_id'])
+                    ->where('code', 'terminal_finished_conflict_status_changed')
+                    ->where('severity', 'critical')
+                    ->where('provider_status', 'expired')
+                    ->where('evidence_hash', $lateHash)
+                    ->count(),
+            );
+            self::assertSame(
+                'manual_review',
+                DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+            );
+            self::assertSame(
+                'pending_manual_review',
+                DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+            );
+        } finally {
+            if (is_int($pid) && $pid > 0) {
+                pcntl_waitpid($pid, $status);
+            }
+            @unlink($ready);
+            @unlink($fenceActive);
+        }
     }
 
     public function test_inflight_competing_payment_intent_transaction_is_drained_before_preflight(): void
@@ -1486,6 +1694,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             $this->app->make(PurchasePromotionUsageAuthority::class),
             $this->app->make(PurchaseOrderService::class),
             $this->app->make(PurchaseSettlementService::class),
+            $this->app->make(PurchaseProviderMutationBarrier::class),
             $this->clock,
         );
     }

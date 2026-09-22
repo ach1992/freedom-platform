@@ -12,6 +12,7 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
@@ -1110,6 +1111,7 @@ final class NowPaymentsPaymentServiceTest extends TestCase
             $promotionUsage ?? $this->app->make(PurchasePromotionUsageAuthority::class),
             $this->app->make(PurchaseOrderService::class),
             $this->app->make(PurchaseSettlementService::class),
+            $this->app->make(PurchaseProviderMutationBarrier::class),
             $this->clock,
         );
     }

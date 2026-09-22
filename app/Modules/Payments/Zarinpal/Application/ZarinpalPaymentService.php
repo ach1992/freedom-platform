@@ -13,6 +13,7 @@ use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
@@ -43,6 +44,7 @@ final readonly class ZarinpalPaymentService
         private PurchasePromotionUsageAuthority $promotionUsage,
         private PurchaseOrderService $purchaseOrders,
         private PurchaseSettlementService $settlements,
+        private PurchaseProviderMutationBarrier $providerMutations,
         private Clock $clock,
     ) {}
 
@@ -212,85 +214,117 @@ final readonly class ZarinpalPaymentService
     /** @param array{merchant_id:string,callback_url:string,hash:string} $configuration */
     private function executeFreshRequest(stdClass $request, array $configuration, string $correlationId, bool $prePaymentOrderAware): ZarinpalPaymentReceipt
     {
-        $intent = $this->intentById($this->database->connection(), $this->positiveInt($request->payment_intent_id, 'Payment intent ID'));
-        if ($intent === null) {
-            throw new RuntimeException('Zarinpal request payment intent disappeared.');
-        }
-        $result = $this->transport->request(
-            $configuration['merchant_id'],
-            $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
-            $request->callback_url,
-            'Freedom purchase '.$intent->public_id,
-            $intent->public_id,
-        );
-
-        return $this->database->connection()->transaction(function (Connection $connection) use (
-            $request,
-            $result,
-            $correlationId,
-            $prePaymentOrderAware,
-        ): ZarinpalPaymentReceipt {
-            $current = $this->requestById($connection, $this->positiveInt($request->id, 'Zarinpal request ID'), true);
-            if ($current === null) {
-                throw new RuntimeException('Zarinpal request disappeared after provider mutation.');
-            }
-            if ($this->state($current->state) !== ZarinpalRequestState::Initiating) {
-                return $this->receipt($current, true);
-            }
-
-            if ($result->uncertain) {
-                $this->updateRequestState($connection, $current, ZarinpalRequestState::Uncertain);
-                $fresh = $this->requiredRequest($connection, (int) $current->id);
-                $this->observe($connection, $fresh, 'request_uncertain', null, null, null, $correlationId);
-
-                return $this->receipt($fresh, false);
-            }
-            if (! $result->accepted || $result->authority === null) {
-                $this->updateRequestState(
-                    $connection,
-                    $current,
-                    ZarinpalRequestState::Failed,
-                    ['request_provider_code' => $result->providerCode],
+        return $this->providerMutations->runForPaymentIntent(
+            $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+            function () use ($request, $configuration, $correlationId, $prePaymentOrderAware): ZarinpalPaymentReceipt {
+                $providerRequest = $this->requestById(
+                    $this->database->connection(),
+                    $this->positiveInt($request->id, 'Zarinpal request ID'),
                 );
-                if ($prePaymentOrderAware) {
-                    $this->terminalizeIntentFailure(
+                if ($providerRequest === null) {
+                    throw new RuntimeException('Zarinpal request disappeared before provider mutation.');
+                }
+                if ($this->state($providerRequest->state) !== ZarinpalRequestState::Initiating) {
+                    return $this->receipt($providerRequest, true);
+                }
+
+                $intent = $this->intentById(
+                    $this->database->connection(),
+                    $this->positiveInt($providerRequest->payment_intent_id, 'Payment intent ID'),
+                );
+                if ($intent === null) {
+                    throw new RuntimeException('Zarinpal request payment intent disappeared.');
+                }
+                $this->assertZarinpalIntentIdentity($intent);
+                if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
+                    throw new RuntimeException('Zarinpal purchase identity is incomplete.');
+                }
+                $orderAvailability = $this->purchaseOrders->settlementAvailabilityFromQuote(
+                    $intent->source_quote_public_id,
+                    (int) $intent->user_id,
+                );
+                if (($prePaymentOrderAware && $orderAvailability !== PurchaseOrderSettlementAvailability::AwaitingPayment)
+                    || (! $prePaymentOrderAware && $orderAvailability !== PurchaseOrderSettlementAvailability::Absent)) {
+                    return $this->abortFreshRequestBeforeProvider($providerRequest, $correlationId);
+                }
+
+                $result = $this->transport->request(
+                    $configuration['merchant_id'],
+                    $this->positiveInt($providerRequest->amount_irr, 'Zarinpal request amount'),
+                    $providerRequest->callback_url,
+                    'Freedom purchase '.$intent->public_id,
+                    $intent->public_id,
+                );
+
+                return $this->database->connection()->transaction(function (Connection $connection) use (
+                    $providerRequest,
+                    $result,
+                    $correlationId,
+                    $prePaymentOrderAware,
+                ): ZarinpalPaymentReceipt {
+                    $current = $this->requestById($connection, $this->positiveInt($providerRequest->id, 'Zarinpal request ID'), true);
+                    if ($current === null) {
+                        throw new RuntimeException('Zarinpal request disappeared after provider mutation.');
+                    }
+                    if ($this->state($current->state) !== ZarinpalRequestState::Initiating) {
+                        return $this->receipt($current, true);
+                    }
+
+                    if ($result->uncertain) {
+                        $this->updateRequestState($connection, $current, ZarinpalRequestState::Uncertain);
+                        $fresh = $this->requiredRequest($connection, (int) $current->id);
+                        $this->observe($connection, $fresh, 'request_uncertain', null, null, null, $correlationId);
+
+                        return $this->receipt($fresh, false);
+                    }
+                    if (! $result->accepted || $result->authority === null) {
+                        $this->updateRequestState(
+                            $connection,
+                            $current,
+                            ZarinpalRequestState::Failed,
+                            ['request_provider_code' => $result->providerCode],
+                        );
+                        if ($prePaymentOrderAware) {
+                            $this->terminalizeIntentFailure(
+                                $connection,
+                                $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                                $correlationId,
+                                'zarinpal_request_rejected',
+                            );
+                        }
+                        $fresh = $this->requiredRequest($connection, (int) $current->id);
+                        $this->observe($connection, $fresh, 'request_rejected', null, $result->providerCode, null, $correlationId);
+
+                        return $this->receipt($fresh, false);
+                    }
+
+                    $this->assertAuthority($result->authority);
+                    $acceptedAt = $this->timestamp();
+                    $this->updateRequestState(
+                        $connection,
+                        $current,
+                        ZarinpalRequestState::Redirectable,
+                        [
+                            'authority' => $result->authority,
+                            'request_provider_code' => $result->providerCode ?? 100,
+                            'authority_received_at' => $acceptedAt,
+                        ],
+                    );
+                    $this->transitionIntent(
                         $connection,
                         $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                        PaymentIntentState::Created,
+                        PaymentIntentState::AwaitingUserAction,
+                        'zarinpal_authority_accepted',
                         $correlationId,
-                        'zarinpal_request_rejected',
                     );
-                }
-                $fresh = $this->requiredRequest($connection, (int) $current->id);
-                $this->observe($connection, $fresh, 'request_rejected', null, $result->providerCode, null, $correlationId);
+                    $fresh = $this->requiredRequest($connection, (int) $current->id);
+                    $this->observe($connection, $fresh, 'request_accepted', null, $result->providerCode ?? 100, null, $correlationId);
 
-                return $this->receipt($fresh, false);
-            }
-
-            $this->assertAuthority($result->authority);
-            $acceptedAt = $this->timestamp();
-            $this->updateRequestState(
-                $connection,
-                $current,
-                ZarinpalRequestState::Redirectable,
-                [
-                    'authority' => $result->authority,
-                    'request_provider_code' => $result->providerCode ?? 100,
-                    'authority_received_at' => $acceptedAt,
-                ],
-            );
-            $this->transitionIntent(
-                $connection,
-                $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
-                PaymentIntentState::Created,
-                PaymentIntentState::AwaitingUserAction,
-                'zarinpal_authority_accepted',
-                $correlationId,
-            );
-            $fresh = $this->requiredRequest($connection, (int) $current->id);
-            $this->observe($connection, $fresh, 'request_accepted', null, $result->providerCode ?? 100, null, $correlationId);
-
-            return $this->receipt($fresh, false);
-        });
+                    return $this->receipt($fresh, false);
+                });
+            },
+        );
     }
 
     private function abortFreshRequestBeforeProvider(stdClass $request, string $correlationId): ZarinpalPaymentReceipt
@@ -443,81 +477,86 @@ final readonly class ZarinpalPaymentService
             return $this->receipt($request, true);
         }
 
-        $prePaymentOrderAware = $this->prePaymentOrderAware($request);
-        $observationWatermark = $this->prepareVerificationAttempt(
-            $requestId,
+        return $this->providerMutations->runForPaymentIntent(
             $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
-            $prePaymentOrderAware,
-            $correlationId,
-        );
-        if ($observationWatermark === null) {
-            return $this->receipt($this->requiredRequest($connection, $requestId), true);
-        }
-        $result = $this->transport->verify(
-            $configuration['merchant_id'],
-            $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
-            $request->authority,
-        );
-        if ($result->uncertain) {
-            return $this->convergeNonVerifiedResult(
-                $requestId,
-                'uncertain',
-                null,
-                $prePaymentOrderAware,
-                $correlationId,
-            );
-        }
-        if (! $result->verified || $result->refId === null || ! in_array($result->providerCode, [100, 101], true)) {
-            return $this->convergeNonVerifiedResult(
-                $requestId,
-                'rejected',
-                $result->providerCode,
-                $prePaymentOrderAware,
-                $correlationId,
-            );
-        }
+            function () use ($requestId, $correlationId, $configuration, $connection, $request): ZarinpalPaymentReceipt {
+                $prePaymentOrderAware = $this->prePaymentOrderAware($request);
+                $observationWatermark = $this->prepareVerificationAttempt(
+                    $requestId,
+                    $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+                    $prePaymentOrderAware,
+                    $correlationId,
+                );
+                if ($observationWatermark === null) {
+                    return $this->receipt($this->requiredRequest($connection, $requestId), true);
+                }
+                $result = $this->transport->verify(
+                    $configuration['merchant_id'],
+                    $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
+                    $request->authority,
+                );
+                if ($result->uncertain) {
+                    return $this->convergeNonVerifiedResult(
+                        $requestId,
+                        'uncertain',
+                        null,
+                        $prePaymentOrderAware,
+                        $correlationId,
+                    );
+                }
+                if (! $result->verified || $result->refId === null || ! in_array($result->providerCode, [100, 101], true)) {
+                    return $this->convergeNonVerifiedResult(
+                        $requestId,
+                        'rejected',
+                        $result->providerCode,
+                        $prePaymentOrderAware,
+                        $correlationId,
+                    );
+                }
 
-        $verifiedAt = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
-        $normalizedHash = hash('sha256', json_encode([
-            'provider' => self::PROVIDER_CODE,
-            'authority' => $request->authority,
-            'provider_ref_id' => $result->refId,
-            'amount_irr' => $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
-            'currency' => 'IRR',
-            'result' => 'verified',
-        ], JSON_THROW_ON_ERROR));
-        $providerEventId = 'zarinpal.verify:'.$request->authority;
-        $verifiedEvent = new VerifiedPaymentEvent(
-            $providerEventId,
-            $normalizedHash,
-            new PaymentEvidence(
-                ProviderOperationOutcome::Success,
-                PaymentEvidenceAuthority::Authoritative,
-                PaymentTransactionStatus::Settled,
-                $result->refId,
-                $providerEventId,
-                Money::irr($this->positiveInt($request->amount_irr, 'Zarinpal request amount')),
-                $verifiedAt,
-                $verifiedAt,
-                $normalizedHash,
-                [
-                    'authority_hash' => hash('sha256', $request->authority),
+                $verifiedAt = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+                $normalizedHash = hash('sha256', json_encode([
                     'provider' => self::PROVIDER_CODE,
-                    'verification' => 'server_side',
-                ],
-            ),
-        );
+                    'authority' => $request->authority,
+                    'provider_ref_id' => $result->refId,
+                    'amount_irr' => $this->positiveInt($request->amount_irr, 'Zarinpal request amount'),
+                    'currency' => 'IRR',
+                    'result' => 'verified',
+                ], JSON_THROW_ON_ERROR));
+                $providerEventId = 'zarinpal.verify:'.$request->authority;
+                $verifiedEvent = new VerifiedPaymentEvent(
+                    $providerEventId,
+                    $normalizedHash,
+                    new PaymentEvidence(
+                        ProviderOperationOutcome::Success,
+                        PaymentEvidenceAuthority::Authoritative,
+                        PaymentTransactionStatus::Settled,
+                        $result->refId,
+                        $providerEventId,
+                        Money::irr($this->positiveInt($request->amount_irr, 'Zarinpal request amount')),
+                        $verifiedAt,
+                        $verifiedAt,
+                        $normalizedHash,
+                        [
+                            'authority_hash' => hash('sha256', $request->authority),
+                            'provider' => self::PROVIDER_CODE,
+                            'verification' => 'server_side',
+                        ],
+                    ),
+                );
 
-        return $this->convergeVerifiedPayment(
-            $requestId,
-            $result->refId,
-            $result->providerCode,
-            $normalizedHash,
-            $verifiedAt,
-            $verifiedEvent,
-            $prePaymentOrderAware,
-            $observationWatermark,
-            $correlationId,
+                return $this->convergeVerifiedPayment(
+                    $requestId,
+                    $result->refId,
+                    $result->providerCode,
+                    $normalizedHash,
+                    $verifiedAt,
+                    $verifiedEvent,
+                    $prePaymentOrderAware,
+                    $observationWatermark,
+                    $correlationId,
+                );
+            },
         );
     }
 

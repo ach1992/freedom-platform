@@ -14,6 +14,7 @@ use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchasePaymentIntentReceipt;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsCreateRequest;
@@ -51,6 +52,7 @@ final readonly class NowPaymentsPaymentService
         private PurchasePromotionUsageAuthority $promotionUsage,
         private PurchaseOrderService $purchaseOrders,
         private PurchaseSettlementService $settlements,
+        private PurchaseProviderMutationBarrier $providerMutations,
         private Clock $clock,
     ) {}
 
@@ -326,21 +328,51 @@ final readonly class NowPaymentsPaymentService
             );
         }
 
-        try {
-            $result = $this->transport->create(new NowPaymentsCreateRequest(
-                (string) $authority->price_amount_usd,
-                (string) $authority->pay_currency,
-                (string) $authority->order_id,
-                'Freedom purchase '.$intentPublicId,
-                (string) $authority->callback_url,
-            ));
-        } catch (NowPaymentsTransportException $exception) {
-            return $this->recordCreateFailure($authority, $exception->uncertain, $correlationId);
-        } catch (Throwable) {
-            return $this->recordCreateFailure($authority, true, $correlationId);
-        }
+        return $this->providerMutations->runForPaymentIntent(
+            $this->positiveInt($authority->payment_intent_id, 'NOWPayments payment intent ID'),
+            function () use (
+                $authority,
+                $intentPublicId,
+                $correlationId,
+                $purchaseUserId,
+                $purchaseQuotePublicId,
+            ): NowPaymentsPaymentReceipt {
+                $current = $this->authorityById(
+                    $this->database->connection(),
+                    $this->positiveInt($authority->id, 'NOWPayments authority ID'),
+                );
+                if ($current === null) {
+                    throw new RuntimeException('NOWPayments authority disappeared before provider mutation.');
+                }
+                if ($this->authorityState((string) $current->state) !== NowPaymentsAuthorityState::Initiating) {
+                    return $this->receipt($current, true);
+                }
+                if ($purchaseUserId !== null && $purchaseQuotePublicId !== null
+                    && ! $this->purchaseExecutionAvailable($purchaseUserId, $purchaseQuotePublicId)) {
+                    return $this->abortFreshAuthorityBeforeProvider(
+                        $current,
+                        $correlationId,
+                        'nowpayments_purchase_order_or_promotion_unavailable',
+                    );
+                }
 
-        return $this->acceptCreateResult($authority, $result, $correlationId);
+                try {
+                    $result = $this->transport->create(new NowPaymentsCreateRequest(
+                        (string) $current->price_amount_usd,
+                        (string) $current->pay_currency,
+                        (string) $current->order_id,
+                        'Freedom purchase '.$intentPublicId,
+                        (string) $current->callback_url,
+                    ));
+                } catch (NowPaymentsTransportException $exception) {
+                    return $this->recordCreateFailure($current, $exception->uncertain, $correlationId);
+                } catch (Throwable) {
+                    return $this->recordCreateFailure($current, true, $correlationId);
+                }
+
+                return $this->acceptCreateResult($current, $result, $correlationId);
+            },
+        );
     }
 
     /** @requirement IPG-002 PAY-002 PAY-003 DAT-003 DAT-004 INT-001 INT-002 QUA-004 */

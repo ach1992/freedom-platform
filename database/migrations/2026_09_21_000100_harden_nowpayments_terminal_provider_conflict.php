@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 
@@ -18,53 +19,57 @@ return new class extends Migration
         // through canonical guard composition, final evidence revalidation and
         // normalization. Any interrupted run therefore fails closed and can re-enter.
         $this->activateUpgradeFence();
-        $this->installUpgradeFences();
+        app(PurchaseProviderMutationBarrier::class)->blockAll(function (): void {
+            $this->installUpgradeFences();
 
-        $this->preflightLegacyTerminalProviderFinishedConflicts();
+            $this->preflightLegacyTerminalProviderFinishedConflicts();
 
-        $this->createConflictAwarePaymentIntentInsertGuard();
-        $this->createConflictAwareNowPaymentsAuthorityGuard();
-        $this->createConflictAwarePaymentIntentGuard();
+            $this->createConflictAwarePaymentIntentInsertGuard();
+            $this->createConflictAwareNowPaymentsAuthorityGuard();
+            $this->createConflictAwarePaymentIntentGuard();
 
-        // Re-read only after every canonical successor guard is durably composed.
-        // The migration fence prevents payment/provider writers from changing this
-        // evidence set between the revalidation and normalization steps.
-        $legacyConflicts = $this->preflightLegacyTerminalProviderFinishedConflicts();
-        $this->normalizeLegacyTerminalProviderFinishedConflicts($legacyConflicts);
-        $this->assertLegacyTerminalProviderFinishedConflictsNormalized(
-            $this->preflightLegacyTerminalProviderFinishedConflicts(),
-        );
+            // Re-read only after every canonical successor guard is durably composed.
+            // The migration fence prevents payment/provider writers from changing this
+            // evidence set between the revalidation and normalization steps.
+            $legacyConflicts = $this->preflightLegacyTerminalProviderFinishedConflicts();
+            $this->normalizeLegacyTerminalProviderFinishedConflicts($legacyConflicts);
+            $this->assertLegacyTerminalProviderFinishedConflictsNormalized(
+                $this->preflightLegacyTerminalProviderFinishedConflicts(),
+            );
 
-        $this->releaseUpgradeFence();
+            $this->releaseUpgradeFence();
+        });
     }
 
     public function down(): void
     {
         $this->activateUpgradeFence();
-        $this->installUpgradeFences();
+        app(PurchaseProviderMutationBarrier::class)->blockAll(function (): void {
+            $this->installUpgradeFences();
 
-        if (DB::table('nowpayments_reconciliation_findings')
-            ->whereIn('code', [
-                'terminal_local_state_conflicts_with_finished_provider',
-                'terminal_finished_conflict_status_changed',
-                'terminal_provider_finished_conflict_competing_intent',
-            ])
-            ->exists()) {
-            // No predecessor guard has been restored yet. Re-enable normal traffic
-            // under the still-current successor guards before refusing the semantic
-            // rollback.
+            if (DB::table('nowpayments_reconciliation_findings')
+                ->whereIn('code', [
+                    'terminal_local_state_conflicts_with_finished_provider',
+                    'terminal_finished_conflict_status_changed',
+                    'terminal_provider_finished_conflict_competing_intent',
+                ])
+                ->exists()) {
+                // No predecessor guard has been restored yet. Re-enable normal traffic
+                // under the still-current successor guards before refusing the semantic
+                // rollback.
+                $this->releaseUpgradeFence();
+
+                throw new RuntimeException(
+                    'Cannot roll back terminal NOWPayments conflict hardening while terminal-conflict reconciliation evidence exists.',
+                );
+            }
+
+            $this->createPriorPaymentIntentGuard();
+            $this->createPriorPaymentIntentInsertGuard();
+            $this->createPriorNowPaymentsAuthorityGuard();
+
             $this->releaseUpgradeFence();
-
-            throw new RuntimeException(
-                'Cannot roll back terminal NOWPayments conflict hardening while terminal-conflict reconciliation evidence exists.',
-            );
-        }
-
-        $this->createPriorPaymentIntentGuard();
-        $this->createPriorPaymentIntentInsertGuard();
-        $this->createPriorNowPaymentsAuthorityGuard();
-
-        $this->releaseUpgradeFence();
+        });
     }
 
     /**
