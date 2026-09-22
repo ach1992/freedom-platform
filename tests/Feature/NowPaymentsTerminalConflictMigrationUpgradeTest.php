@@ -39,6 +39,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PDO;
 use PDOException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\Support\RestoresDatabaseTrigger;
 use Tests\TestCase;
@@ -921,77 +922,67 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $fixture['order_public_id'])->value('state'));
     }
 
-    public function test_every_canonical_trigger_replacement_cut_remains_fenced_and_reentrant_up_and_down(): void
-    {
+    #[DataProvider('canonicalTriggerReplacementCuts')]
+    public function test_every_canonical_trigger_replacement_cut_remains_fenced_and_reentrant_up_and_down(
+        string $direction,
+        string $trigger,
+        int $index,
+    ): void {
         $migration = $this->migration();
-        $migration->down();
-        $canonicalTriggers = [
+        if ($direction === 'up') {
+            $migration->down();
+        }
+
+        $fixture = $this->legacyTerminalConflictFixture($direction.'-cut-'.$index, 'failed');
+        $injected = false;
+        $needle = 'create or replace trigger '.$trigger;
+        DB::listen(function (QueryExecuted $query) use (&$injected, $needle, $direction): void {
+            if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
+                return;
+            }
+            $injected = true;
+            $phase = $direction === 'up' ? 'trigger replacement' : 'rollback trigger replacement';
+            throw new RuntimeException('Injected committed '.$phase.' cut: '.$needle);
+        });
+
+        try {
+            $migration->{$direction}();
+            self::fail(ucfirst($direction).' migration trigger replacement cut must be injectable.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            $phase = $direction === 'up' ? 'trigger replacement' : 'rollback trigger replacement';
+            self::assertSame('Injected committed '.$phase.' cut: '.$needle, $exception->getMessage());
+        }
+
+        $this->assertUpgradeFenceActive();
+        $this->assertCanonicalFinancialTriggersPresent();
+        $this->assertFailClosedCutWithSecondConnection($fixture, $direction.'-'.$index);
+
+        $migration->{$direction}();
+        $this->assertUpgradeFencesAbsent();
+
+        if ($direction === 'down') {
+            $migration->up();
+            $this->assertUpgradeFencesAbsent();
+        }
+    }
+
+    /** @return array<string,array{string,string,int}> */
+    public static function canonicalTriggerReplacementCuts(): array
+    {
+        $triggers = [
             'payment_intents_insert_guard',
             'nowpayments_authority_update_guard',
             'payment_intents_update_guard',
         ];
-
-        foreach ($canonicalTriggers as $index => $trigger) {
-            $fixture = $this->legacyTerminalConflictFixture('up-cut-'.$index, 'failed');
-            $injected = false;
-            $needle = 'create or replace trigger '.$trigger;
-            DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
-                if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
-                    return;
-                }
-                $injected = true;
-                throw new RuntimeException('Injected committed trigger replacement cut: '.$needle);
-            });
-
-            try {
-                $migration->up();
-                self::fail('Up migration trigger replacement cut must be injectable.');
-            } catch (RuntimeException $exception) {
-                self::assertTrue($injected);
-                self::assertSame('Injected committed trigger replacement cut: '.$needle, $exception->getMessage());
-            }
-
-            $this->assertUpgradeFenceActive();
-            $this->assertCanonicalFinancialTriggersPresent();
-            $this->assertFailClosedCutWithSecondConnection($fixture, 'up-'.$index);
-
-            $migration->up();
-            $this->assertUpgradeFencesAbsent();
-            $migration->down();
-        }
-
-        $migration->up();
-
-        foreach ($canonicalTriggers as $index => $trigger) {
-            $fixture = $this->legacyTerminalConflictFixture('down-cut-'.$index, 'failed');
-            $injected = false;
-            $needle = 'create or replace trigger '.$trigger;
-            DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
-                if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
-                    return;
-                }
-                $injected = true;
-                throw new RuntimeException('Injected committed rollback trigger replacement cut: '.$needle);
-            });
-
-            try {
-                $migration->down();
-                self::fail('Down migration trigger replacement cut must be injectable.');
-            } catch (RuntimeException $exception) {
-                self::assertTrue($injected);
-                self::assertSame('Injected committed rollback trigger replacement cut: '.$needle, $exception->getMessage());
-            }
-
-            $this->assertUpgradeFenceActive();
-            $this->assertCanonicalFinancialTriggersPresent();
-            $this->assertFailClosedCutWithSecondConnection($fixture, 'down-'.$index);
-
-            $migration->down();
-            $this->assertUpgradeFencesAbsent();
-            if ($index !== array_key_last($canonicalTriggers)) {
-                $migration->up();
+        $cases = [];
+        foreach (['up', 'down'] as $direction) {
+            foreach ($triggers as $index => $trigger) {
+                $cases[$direction.'-'.$trigger] = [$direction, $trigger, $index];
             }
         }
+
+        return $cases;
     }
 
     public function test_exceptional_reopens_require_one_exact_finished_observation_finding_pair(): void
