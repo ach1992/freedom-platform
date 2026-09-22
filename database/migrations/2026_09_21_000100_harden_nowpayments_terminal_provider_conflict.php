@@ -645,6 +645,25 @@ END
 SQL);
 
         DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER promotion_release_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON promotion_usage_releases
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN promotion_usage_reservations reservation_row
+            ON reservation_row.id = NEW.promotion_usage_reservation_id
+        INNER JOIN quotes quote_row ON quote_row.id = reservation_row.quote_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND quote_row.action_snapshot = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase promotion release is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
 CREATE OR REPLACE TRIGGER purchase_settlement_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON purchase_settlements
 FOR EACH ROW
@@ -670,6 +689,7 @@ SQL);
 
         foreach ([
             'DROP TRIGGER IF EXISTS purchase_settlement_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS promotion_release_np_conflict_upgrade_insert_fence',
             'DROP TRIGGER IF EXISTS promotion_reservation_np_conflict_upgrade_insert_fence',
             'DROP TRIGGER IF EXISTS purchase_wallet_np_conflict_upgrade_insert_fence',
             'DROP TRIGGER IF EXISTS wallet_hold_np_conflict_upgrade_insert_fence',

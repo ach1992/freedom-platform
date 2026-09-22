@@ -1243,6 +1243,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             'wallet_hold_np_conflict_upgrade_insert_fence',
             'purchase_wallet_np_conflict_upgrade_insert_fence',
             'promotion_reservation_np_conflict_upgrade_insert_fence',
+            'promotion_release_np_conflict_upgrade_insert_fence',
             'purchase_settlement_np_conflict_upgrade_insert_fence',
         ];
     }
