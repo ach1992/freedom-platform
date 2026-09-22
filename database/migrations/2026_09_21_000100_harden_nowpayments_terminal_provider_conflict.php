@@ -13,24 +13,36 @@ return new class extends Migration
      */
     public function up(): void
     {
-        $legacyConflicts = $this->preflightLegacyTerminalProviderFinishedConflicts();
+        // MariaDB commits DDL per statement. Persist a migration-owned financial
+        // write fence before the first decision-relevant read, then keep it active
+        // through canonical guard composition, final evidence revalidation and
+        // normalization. Any interrupted run therefore fails closed and can re-enter.
+        $this->activateUpgradeFence();
+        $this->installUpgradeFences();
 
-        // Install the cross-method creation fence first. It recognizes both the
-        // normalized pending-manual state and exact legacy conflict evidence.
-        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_insert_guard');
+        $this->preflightLegacyTerminalProviderFinishedConflicts();
+
         $this->createConflictAwarePaymentIntentInsertGuard();
-
-        DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
         $this->createConflictAwareNowPaymentsAuthorityGuard();
-
-        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_update_guard');
         $this->createConflictAwarePaymentIntentGuard();
 
+        // Re-read only after every canonical successor guard is durably composed.
+        // The migration fence prevents payment/provider writers from changing this
+        // evidence set between the revalidation and normalization steps.
+        $legacyConflicts = $this->preflightLegacyTerminalProviderFinishedConflicts();
         $this->normalizeLegacyTerminalProviderFinishedConflicts($legacyConflicts);
+        $this->assertLegacyTerminalProviderFinishedConflictsNormalized(
+            $this->preflightLegacyTerminalProviderFinishedConflicts(),
+        );
+
+        $this->releaseUpgradeFence();
     }
 
     public function down(): void
     {
+        $this->activateUpgradeFence();
+        $this->installUpgradeFences();
+
         if (DB::table('nowpayments_reconciliation_findings')
             ->whereIn('code', [
                 'terminal_local_state_conflicts_with_finished_provider',
@@ -38,19 +50,21 @@ return new class extends Migration
                 'terminal_provider_finished_conflict_competing_intent',
             ])
             ->exists()) {
+            // No predecessor guard has been restored yet. Re-enable normal traffic
+            // under the still-current successor guards before refusing the semantic
+            // rollback.
+            $this->releaseUpgradeFence();
+
             throw new RuntimeException(
                 'Cannot roll back terminal NOWPayments conflict hardening while terminal-conflict reconciliation evidence exists.',
             );
         }
 
-        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_update_guard');
         $this->createPriorPaymentIntentGuard();
-
-        DB::unprepared('DROP TRIGGER IF EXISTS payment_intents_insert_guard');
         $this->createPriorPaymentIntentInsertGuard();
-
-        DB::unprepared('DROP TRIGGER IF EXISTS nowpayments_authority_update_guard');
         $this->createPriorNowPaymentsAuthorityGuard();
+
+        $this->releaseUpgradeFence();
     }
 
     /**
@@ -64,7 +78,7 @@ return new class extends Migration
      *     finished_observation_id:int,
      *     finished_observed_at:string,
      *     correlation_id:string,
-     *     contradictory_observation:object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null
+     *     contradictory_observations:list<object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}>
      * }>
      */
     private function preflightLegacyTerminalProviderFinishedConflicts(): array
@@ -166,8 +180,8 @@ return new class extends Migration
                 );
             }
 
-            /** @var object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null $contradictoryObservation */
-            $contradictoryObservation = DB::table('nowpayments_payment_observations')
+            /** @var list<object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}> $contradictoryObservations */
+            $contradictoryObservations = DB::table('nowpayments_payment_observations')
                 ->where('nowpayments_payment_authority_id', $authorityId)
                 ->where('event_type', 'status_lookup')
                 ->where('id', '>', (int) $finishedObservation->id)
@@ -176,7 +190,8 @@ return new class extends Migration
                         ->orWhere('provider_status', '<>', 'finished');
                 })
                 ->orderBy('id')
-                ->first(['id', 'provider_status', 'response_hash', 'occurred_at', 'correlation_id']);
+                ->get(['id', 'provider_status', 'response_hash', 'occurred_at', 'correlation_id'])
+                ->all();
 
             $conflicts[] = [
                 'authority_id' => $authorityId,
@@ -184,7 +199,7 @@ return new class extends Migration
                 'finished_observation_id' => (int) $finishedObservation->id,
                 'finished_observed_at' => (string) $finishedObservation->occurred_at,
                 'correlation_id' => (string) $finishedObservation->correlation_id,
-                'contradictory_observation' => $contradictoryObservation,
+                'contradictory_observations' => $contradictoryObservations,
             ];
         }
 
@@ -198,7 +213,7 @@ return new class extends Migration
      *     finished_observation_id:int,
      *     finished_observed_at:string,
      *     correlation_id:string,
-     *     contradictory_observation:object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null
+     *     contradictory_observations:list<object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}>
      * }> $conflicts
      */
     private function normalizeLegacyTerminalProviderFinishedConflicts(array $conflicts): void
@@ -271,9 +286,7 @@ return new class extends Migration
                     throw new RuntimeException('Legacy NOWPayments PaymentIntent is no longer normalizable.');
                 }
 
-                /** @var object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}|null $observation */
-                $observation = $conflict['contradictory_observation'];
-                if ($observation !== null) {
+                foreach ($conflict['contradictory_observations'] as $observation) {
                     $responseHash = strtolower((string) $observation->response_hash);
                     $findingKey = 'nowpayments:'.$conflict['authority_id']
                         .':terminal_finished_conflict_status_changed:'.substr($responseHash, 0, 32);
@@ -294,6 +307,388 @@ return new class extends Migration
         }, 3);
     }
 
+    /**
+     * Verify that every legacy conflict discovered under the migration fence is
+     * represented by the canonical fail-closed state and every durable later
+     * contradictory status has corresponding sticky reconciliation evidence.
+     *
+     * @param list<array{
+     *     authority_id:int,
+     *     payment_intent_id:int,
+     *     finished_observation_id:int,
+     *     finished_observed_at:string,
+     *     correlation_id:string,
+     *     contradictory_observations:list<object{id:int|string,provider_status:string|null,response_hash:string,occurred_at:string,correlation_id:string}>
+     * }> $conflicts
+     */
+    private function assertLegacyTerminalProviderFinishedConflictsNormalized(array $conflicts): void
+    {
+        foreach ($conflicts as $conflict) {
+            $authority = DB::table('nowpayments_payment_authorities')
+                ->where('id', $conflict['authority_id'])
+                ->first(['payment_intent_id', 'state', 'provider_status']);
+            $intent = DB::table('payment_intents')
+                ->where('id', $conflict['payment_intent_id'])
+                ->first(['state']);
+
+            if ($authority === null
+                || $intent === null
+                || (int) $authority->payment_intent_id !== $conflict['payment_intent_id']
+                || $authority->state !== 'manual_review'
+                || $authority->provider_status !== 'finished'
+                || $intent->state !== 'pending_manual_review'
+                || DB::table('purchase_settlements')
+                    ->where('payment_intent_id', $conflict['payment_intent_id'])
+                    ->exists()) {
+                throw new RuntimeException(
+                    'Legacy NOWPayments terminal conflict did not converge to exact fail-closed canonical state.',
+                );
+            }
+
+            foreach ($conflict['contradictory_observations'] as $observation) {
+                $responseHash = strtolower((string) $observation->response_hash);
+                $exists = DB::table('nowpayments_reconciliation_findings')
+                    ->where('nowpayments_payment_authority_id', $conflict['authority_id'])
+                    ->where('code', 'terminal_finished_conflict_status_changed')
+                    ->where('severity', 'critical')
+                    ->where('provider_status', $observation->provider_status)
+                    ->where('evidence_hash', $responseHash)
+                    ->exists();
+                if (! $exists) {
+                    throw new RuntimeException(
+                        'Legacy NOWPayments contradictory status history did not converge to sticky reconciliation evidence.',
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Activate a persistent migration-local cut before any legacy evidence is read.
+     * The marker is DML while all fence triggers use CREATE OR REPLACE. A crash
+     * therefore leaves a fail-closed cut or occurs before decision-relevant reads.
+     */
+    private function activateUpgradeFence(): void
+    {
+        DB::statement(<<<'SQL'
+CREATE TABLE IF NOT EXISTS nowpayments_terminal_conflict_upgrade_fence (
+    id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+    active TINYINT UNSIGNED NOT NULL,
+    activated_at DATETIME(6) NOT NULL,
+    CONSTRAINT nowpayments_terminal_conflict_upgrade_fence_id_chk CHECK (id = 1),
+    CONSTRAINT nowpayments_terminal_conflict_upgrade_fence_active_chk CHECK (active = 1)
+) ENGINE=InnoDB
+SQL);
+
+        $shape = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'nowpayments_terminal_conflict_upgrade_fence'
+  AND COLUMN_NAME IN ('id','active','activated_at')
+SQL);
+        if ($shape === null || (int) $shape->aggregate !== 3) {
+            throw new RuntimeException('NOWPayments terminal-conflict upgrade fence table is partially applied.');
+        }
+
+        DB::statement(<<<'SQL'
+INSERT INTO nowpayments_terminal_conflict_upgrade_fence (id, active, activated_at)
+VALUES (1, 1, UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE active = 1, activated_at = VALUES(activated_at)
+SQL);
+    }
+
+    private function installUpgradeFences(): void
+    {
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER payment_intents_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON payment_intents
+FOR EACH ROW
+BEGIN
+    IF NEW.purpose = 'purchase'
+       AND EXISTS (
+           SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+           WHERE fence_row.id = 1 AND fence_row.active = 1
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase payment creation is fenced while NOWPayments conflict authority migration converges.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER payment_intents_np_conflict_upgrade_update_fence
+BEFORE UPDATE ON payment_intents
+FOR EACH ROW
+BEGIN
+    DECLARE exact_reopen_count INT DEFAULT 0;
+
+    IF EXISTS (
+        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+    ) AND OLD.purpose = 'purchase' THEN
+        IF OLD.provider_code = 'nowpayments'
+           AND OLD.payment_method_code = 'nowpayments'
+           AND OLD.state IN ('failed','expired')
+           AND NEW.state = 'pending_manual_review' THEN
+            SELECT COUNT(DISTINCT authority_row.id) INTO exact_reopen_count
+            FROM nowpayments_payment_authorities authority_row
+            INNER JOIN nowpayments_reconciliation_findings finding_row
+                ON finding_row.nowpayments_payment_authority_id = authority_row.id
+               AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
+               AND finding_row.severity = 'critical'
+               AND finding_row.provider_status = 'finished'
+            INNER JOIN nowpayments_payment_observations observation_row
+                ON observation_row.nowpayments_payment_authority_id = authority_row.id
+               AND observation_row.event_type = 'status_lookup'
+               AND observation_row.provider_payment_id = authority_row.provider_payment_id
+               AND observation_row.provider_status = 'finished'
+               AND observation_row.response_hash = finding_row.evidence_hash
+            WHERE authority_row.payment_intent_id = OLD.id
+              AND authority_row.state = 'manual_review'
+              AND authority_row.provider_status = 'finished'
+              AND NOT EXISTS (
+                  SELECT 1 FROM purchase_settlements settlement_row
+                  WHERE settlement_row.payment_intent_id = OLD.id
+              );
+        END IF;
+
+        IF exact_reopen_count <> 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase payment updates are fenced while NOWPayments conflict authority migration converges.';
+        END IF;
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER nowpayments_authority_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON nowpayments_payment_authorities
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority creation is fenced while conflict authority migration converges.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER nowpayments_authority_np_conflict_upgrade_update_fence
+BEFORE UPDATE ON nowpayments_payment_authorities
+FOR EACH ROW
+BEGIN
+    DECLARE exact_reopen_count INT DEFAULT 0;
+
+    IF EXISTS (
+        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+    ) THEN
+        IF OLD.state IN ('failed','expired')
+           AND NEW.state = 'manual_review'
+           AND NEW.provider_status = 'finished'
+           AND OLD.provider_payment_id IS NOT NULL THEN
+            SELECT COUNT(DISTINCT finding_row.id) INTO exact_reopen_count
+            FROM nowpayments_reconciliation_findings finding_row
+            INNER JOIN nowpayments_payment_observations observation_row
+                ON observation_row.nowpayments_payment_authority_id = finding_row.nowpayments_payment_authority_id
+               AND observation_row.event_type = 'status_lookup'
+               AND observation_row.provider_payment_id = OLD.provider_payment_id
+               AND observation_row.provider_status = 'finished'
+               AND observation_row.response_hash = finding_row.evidence_hash
+            WHERE finding_row.nowpayments_payment_authority_id = OLD.id
+              AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
+              AND finding_row.severity = 'critical'
+              AND finding_row.provider_status = 'finished'
+              AND NOT EXISTS (
+                  SELECT 1 FROM purchase_settlements settlement_row
+                  WHERE settlement_row.payment_intent_id = OLD.payment_intent_id
+              );
+        END IF;
+
+        IF exact_reopen_count < 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority updates are fenced while conflict authority migration converges.';
+        END IF;
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER nowpayments_observation_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON nowpayments_payment_observations
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments status evidence is fenced while conflict authority migration converges.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER zarinpal_request_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON zarinpal_payment_requests
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND intent_row.purpose = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal purchase authority creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER usdt_authority_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON usdt_payment_authorities
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND intent_row.purpose = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'USDT purchase authority creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER c2c_reservation_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON c2c_amount_reservations
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND intent_row.purpose = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Card-to-card purchase authority creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER gift_card_submission_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON gift_card_submissions
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND intent_row.purpose = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Gift-card purchase authority creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER wallet_hold_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON wallet_holds
+FOR EACH ROW
+BEGIN
+    IF NEW.source_type = 'payment_intent'
+       AND EXISTS (
+           SELECT 1
+           FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+           INNER JOIN payment_intents intent_row ON intent_row.public_id = NEW.source_id
+           WHERE fence_row.id = 1 AND fence_row.active = 1
+             AND intent_row.purpose = 'purchase'
+       ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet purchase hold creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER purchase_wallet_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON purchase_wallet_reservations
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet purchase reservation creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER promotion_reservation_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON promotion_usage_reservations
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN quotes quote_row ON quote_row.id = NEW.quote_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND quote_row.action_snapshot = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase promotion reservation creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE TRIGGER purchase_settlement_np_conflict_upgrade_insert_fence
+BEFORE INSERT ON purchase_settlements
+FOR EACH ROW
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
+        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
+        WHERE fence_row.id = 1 AND fence_row.active = 1
+          AND intent_row.purpose = 'purchase'
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase settlement creation is fenced during NOWPayments conflict migration.';
+    END IF;
+END
+SQL);
+    }
+
+    private function releaseUpgradeFence(): void
+    {
+        if (DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence')) {
+            DB::table('nowpayments_terminal_conflict_upgrade_fence')->where('id', 1)->delete();
+        }
+
+        foreach ([
+            'purchase_settlement_np_conflict_upgrade_insert_fence',
+            'promotion_reservation_np_conflict_upgrade_insert_fence',
+            'purchase_wallet_np_conflict_upgrade_insert_fence',
+            'wallet_hold_np_conflict_upgrade_insert_fence',
+            'gift_card_submission_np_conflict_upgrade_insert_fence',
+            'c2c_reservation_np_conflict_upgrade_insert_fence',
+            'usdt_authority_np_conflict_upgrade_insert_fence',
+            'zarinpal_request_np_conflict_upgrade_insert_fence',
+            'nowpayments_observation_np_conflict_upgrade_insert_fence',
+            'nowpayments_authority_np_conflict_upgrade_update_fence',
+            'nowpayments_authority_np_conflict_upgrade_insert_fence',
+            'payment_intents_np_conflict_upgrade_update_fence',
+            'payment_intents_np_conflict_upgrade_insert_fence',
+        ] as $trigger) {
+            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
+        }
+
+        DB::statement('DROP TABLE IF EXISTS nowpayments_terminal_conflict_upgrade_fence');
+    }
+
     private function timestamp(): string
     {
         return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
@@ -302,7 +697,7 @@ return new class extends Migration
     private function createConflictAwareNowPaymentsAuthorityGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER nowpayments_authority_update_guard
+CREATE OR REPLACE TRIGGER nowpayments_authority_update_guard
 BEFORE UPDATE ON nowpayments_payment_authorities
 FOR EACH ROW
 BEGIN
@@ -369,22 +764,26 @@ BEGIN
     END IF;
 
     IF OLD.state IN ('failed','expired') AND NEW.state = 'manual_review' THEN
-        SELECT COUNT(*) INTO finished_status_observation_count
-        FROM nowpayments_payment_observations observation_row
-        WHERE observation_row.nowpayments_payment_authority_id = OLD.id
-          AND observation_row.event_type = 'status_lookup'
-          AND observation_row.provider_payment_id = OLD.provider_payment_id
-          AND observation_row.provider_status = 'finished';
-
-        SELECT COUNT(*) INTO terminal_finished_finding_count
+        SELECT COUNT(DISTINCT finding_row.id) INTO finished_status_observation_count
         FROM nowpayments_reconciliation_findings finding_row
+        INNER JOIN nowpayments_payment_observations observation_row
+            ON observation_row.nowpayments_payment_authority_id = finding_row.nowpayments_payment_authority_id
+           AND observation_row.event_type = 'status_lookup'
+           AND observation_row.provider_payment_id = OLD.provider_payment_id
+           AND observation_row.provider_status = 'finished'
+           AND observation_row.response_hash = finding_row.evidence_hash
         WHERE finding_row.nowpayments_payment_authority_id = OLD.id
           AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
           AND finding_row.severity = 'critical'
-          AND finding_row.provider_status = 'finished';
+          AND finding_row.provider_status = 'finished'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM purchase_settlements settlement_row
+              WHERE settlement_row.payment_intent_id = OLD.payment_intent_id
+          );
 
-        IF finished_status_observation_count < 1 OR terminal_finished_finding_count < 1 THEN
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments provider-finished recovery requires durable finished-status reconciliation evidence.';
+        IF finished_status_observation_count < 1 THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Terminal NOWPayments provider-finished recovery requires one exact durable observation/finding evidence pair and no settlement.';
         END IF;
     END IF;
 
@@ -395,7 +794,7 @@ BEGIN
         (OLD.state = 'manual_review' AND NEW.state IN ('finished','failed','expired')) OR
         (OLD.state IN ('failed','expired') AND NEW.state = 'manual_review'
          AND NEW.provider_payment_id IS NOT NULL AND NEW.provider_status = 'finished'
-         AND finished_status_observation_count >= 1 AND terminal_finished_finding_count >= 1)
+         AND finished_status_observation_count >= 1)
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority state transition is invalid.';
     END IF;
@@ -406,7 +805,7 @@ SQL);
     private function createPriorNowPaymentsAuthorityGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER nowpayments_authority_update_guard
+CREATE OR REPLACE TRIGGER nowpayments_authority_update_guard
 BEFORE UPDATE ON nowpayments_payment_authorities
 FOR EACH ROW
 BEGIN
@@ -459,7 +858,7 @@ SQL);
     private function createConflictAwarePaymentIntentInsertGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER payment_intents_insert_guard
+CREATE OR REPLACE TRIGGER payment_intents_insert_guard
 BEFORE INSERT ON payment_intents
 FOR EACH ROW
 BEGIN
@@ -564,7 +963,7 @@ SQL);
     private function createPriorPaymentIntentInsertGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER payment_intents_insert_guard
+CREATE OR REPLACE TRIGGER payment_intents_insert_guard
 BEFORE INSERT ON payment_intents
 FOR EACH ROW
 BEGIN
@@ -631,7 +1030,7 @@ SQL);
     private function createConflictAwarePaymentIntentGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER payment_intents_update_guard
+CREATE OR REPLACE TRIGGER payment_intents_update_guard
 BEFORE UPDATE ON payment_intents
 FOR EACH ROW
 BEGIN
@@ -711,6 +1110,12 @@ BEGIN
           AND EXISTS (
               SELECT 1
               FROM nowpayments_reconciliation_findings finding_row
+              INNER JOIN nowpayments_payment_observations observation_row
+                  ON observation_row.nowpayments_payment_authority_id = finding_row.nowpayments_payment_authority_id
+                 AND observation_row.event_type = 'status_lookup'
+                 AND observation_row.provider_payment_id = authority_row.provider_payment_id
+                 AND observation_row.provider_status = 'finished'
+                 AND observation_row.response_hash = finding_row.evidence_hash
               WHERE finding_row.nowpayments_payment_authority_id = authority_row.id
                 AND finding_row.code = 'terminal_local_state_conflicts_with_finished_provider'
                 AND finding_row.severity = 'critical'
@@ -828,7 +1233,7 @@ SQL);
     private function createPriorPaymentIntentGuard(): void
     {
         DB::unprepared(<<<'SQL'
-CREATE TRIGGER payment_intents_update_guard
+CREATE OR REPLACE TRIGGER payment_intents_update_guard
 BEFORE UPDATE ON payment_intents
 FOR EACH ROW
 BEGIN

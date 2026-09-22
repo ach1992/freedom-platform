@@ -31,11 +31,16 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use PDO;
+use PDOException;
 use RuntimeException;
+use Tests\Support\RestoresDatabaseTrigger;
 use Tests\TestCase;
 
 final class LegacyUpgradeNowPaymentsTransport implements NowPaymentsTransport
@@ -141,6 +146,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use DatabaseTruncation;
+    use RestoresDatabaseTrigger;
 
     private LegacyUpgradeNowPaymentsTransport $transport;
 
@@ -205,6 +211,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             'unresolved_purchase_manual_review_count',
             $this->triggerAction('payment_intents_insert_guard'),
         );
+        $this->assertUpgradeFencesAbsent();
     }
 
     public function test_upgrade_normalizes_legacy_failed_and_expired_conflicts_and_blocks_fresh_competing_intent(): void
@@ -478,6 +485,315 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         self::assertStringNotContainsString('unresolved_purchase_manual_review_count', $intentInsertGuard);
         self::assertSame('failed', DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'));
         self::assertSame('failed', DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'));
+        $this->assertUpgradeFenceActive();
+    }
+
+    public function test_upgrade_fence_precedes_preflight_and_blocks_second_connection_payment_writers(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+
+        $fixture = $this->legacyTerminalConflictFixture('preflight-fence', 'failed');
+        $zarinpalDecision = $this->zarinpalDecision(
+            $fixture['user_id'],
+            $fixture['quote_public_id'],
+            $fixture['quote_configuration_hash'],
+            'preflight-fence',
+        );
+        $creationKey = 'legacy-upgrade-zarinpal-preflight-fence';
+        $competing = $this->app->make(PurchasePaymentIntentService::class)->create(
+            $creationKey,
+            $fixture['user_id'],
+            $fixture['quote_public_id'],
+            $zarinpalDecision,
+            'zarinpal',
+            $this->correlation('legacy-upgrade-zarinpal-preflight-fence'),
+        );
+        $competingIntentId = DB::table('payment_intents')
+            ->where('public_id', $competing->intentPublicId)
+            ->value('id');
+        self::assertNotNull($competingIntentId);
+
+        $this->seedLegacyFinishedConflict(
+            $fixture['authority_id'],
+            $fixture['provider_payment_id'],
+            'preflight-fence',
+        );
+        $observationCount = DB::table('nowpayments_payment_observations')
+            ->where('nowpayments_payment_authority_id', $fixture['authority_id'])
+            ->count();
+
+        $injected = false;
+        DB::listen(function (QueryExecuted $query) use (&$injected): void {
+            $sql = strtolower($query->sql);
+            if ($injected
+                || ! str_contains($sql, 'select distinct')
+                || ! str_contains($sql, 'nowpayments_reconciliation_findings')) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected after fenced NOWPayments legacy preflight read.');
+        });
+
+        try {
+            $migration->up();
+            self::fail('Preflight cut injector must interrupt the fenced migration.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame('Injected after fenced NOWPayments legacy preflight read.', $exception->getMessage());
+        }
+
+        $this->assertUpgradeFenceActive();
+        self::assertStringNotContainsString(
+            'finished_status_observation_count',
+            $this->triggerAction('nowpayments_authority_update_guard'),
+        );
+
+        $replay = $this->app->make(PurchasePaymentIntentService::class)->create(
+            $creationKey,
+            $fixture['user_id'],
+            $fixture['quote_public_id'],
+            $zarinpalDecision,
+            'zarinpal',
+            $this->correlation('legacy-upgrade-zarinpal-preflight-fence-replay'),
+        );
+        self::assertSame($competing->intentPublicId, $replay->intentPublicId);
+
+        $pdo = $this->independentPdo();
+        $this->assertPdoRejected(
+            fn () => $this->clonePaymentIntentViaPdo($pdo, (int) $competingIntentId, 'preflight-fresh'),
+            'Purchase payment creation is fenced',
+        );
+        $this->assertPdoRejected(
+            fn () => $this->insertZarinpalRequestViaPdo($pdo, (int) $competingIntentId, 'preflight-replay'),
+            'Zarinpal purchase authority creation is fenced',
+        );
+        $this->assertPdoRejected(
+            fn () => $this->insertNowPaymentsObservationViaPdo(
+                $pdo,
+                $fixture['authority_id'],
+                $fixture['provider_payment_id'],
+                'expired',
+                'preflight-late-status',
+            ),
+            'NOWPayments status evidence is fenced',
+        );
+
+        self::assertSame(
+            $observationCount,
+            DB::table('nowpayments_payment_observations')
+                ->where('nowpayments_payment_authority_id', $fixture['authority_id'])
+                ->count(),
+        );
+        self::assertSame(0, DB::table('zarinpal_payment_requests')->where('payment_intent_id', $competingIntentId)->count());
+
+        $migration->up();
+        $this->assertUpgradeFencesAbsent();
+        self::assertSame(
+            'manual_review',
+            DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+        );
+        self::assertSame(
+            'pending_manual_review',
+            DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+        );
+
+        $this->transport->statusValue = 'finished';
+        $this->transport->actuallyPaid = $this->transport->payAmount;
+        $stillManual = $this->service()->refresh(
+            $fixture['payment_intent_public_id'],
+            $this->correlation('preflight-fence-finished'),
+        );
+        self::assertSame(NowPaymentsAuthorityState::ManualReview, $stillManual->state);
+        self::assertNull($stillManual->settlementPublicId);
+        self::assertSame(0, DB::table('purchase_settlements')->where('payment_intent_id', $fixture['payment_intent_id'])->count());
+        self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $fixture['order_public_id'])->value('state'));
+    }
+
+    public function test_every_canonical_trigger_replacement_cut_remains_fenced_and_reentrant_up_and_down(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        $canonicalTriggers = [
+            'payment_intents_insert_guard',
+            'nowpayments_authority_update_guard',
+            'payment_intents_update_guard',
+        ];
+
+        foreach ($canonicalTriggers as $index => $trigger) {
+            $fixture = $this->legacyTerminalConflictFixture('up-cut-'.$index, 'failed');
+            $injected = false;
+            $needle = 'create or replace trigger '.$trigger;
+            DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
+                if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
+                    return;
+                }
+                $injected = true;
+                throw new RuntimeException('Injected committed trigger replacement cut: '.$needle);
+            });
+
+            try {
+                $migration->up();
+                self::fail('Up migration trigger replacement cut must be injectable.');
+            } catch (RuntimeException $exception) {
+                self::assertTrue($injected);
+                self::assertSame('Injected committed trigger replacement cut: '.$needle, $exception->getMessage());
+            }
+
+            $this->assertUpgradeFenceActive();
+            $this->assertCanonicalFinancialTriggersPresent();
+            $this->assertFailClosedCutWithSecondConnection($fixture, 'up-'.$index);
+
+            $migration->up();
+            $this->assertUpgradeFencesAbsent();
+            $migration->down();
+        }
+
+        $migration->up();
+
+        foreach ($canonicalTriggers as $index => $trigger) {
+            $fixture = $this->legacyTerminalConflictFixture('down-cut-'.$index, 'failed');
+            $injected = false;
+            $needle = 'create or replace trigger '.$trigger;
+            DB::listen(function (QueryExecuted $query) use (&$injected, $needle): void {
+                if ($injected || ! str_contains(strtolower($query->sql), $needle)) {
+                    return;
+                }
+                $injected = true;
+                throw new RuntimeException('Injected committed rollback trigger replacement cut: '.$needle);
+            });
+
+            try {
+                $migration->down();
+                self::fail('Down migration trigger replacement cut must be injectable.');
+            } catch (RuntimeException $exception) {
+                self::assertTrue($injected);
+                self::assertSame('Injected committed rollback trigger replacement cut: '.$needle, $exception->getMessage());
+            }
+
+            $this->assertUpgradeFenceActive();
+            $this->assertCanonicalFinancialTriggersPresent();
+            $this->assertFailClosedCutWithSecondConnection($fixture, 'down-'.$index);
+
+            $migration->down();
+            $this->assertUpgradeFencesAbsent();
+            if ($index !== array_key_last($canonicalTriggers)) {
+                $migration->up();
+            }
+        }
+    }
+
+    public function test_exceptional_reopens_require_one_exact_finished_observation_finding_pair(): void
+    {
+        $authorityFixture = $this->legacyTerminalConflictFixture('exact-pair-authority', 'failed');
+        $authorityObservationHash = hash('sha256', 'exact-pair-authority-observation');
+        $authorityFindingHash = hash('sha256', 'exact-pair-authority-finding');
+        $this->insertFinishedObservation(
+            $authorityFixture['authority_id'],
+            $authorityFixture['provider_payment_id'],
+            $authorityObservationHash,
+            'exact-pair-authority-observation',
+        );
+        $this->insertTerminalConflictFinding(
+            $authorityFixture['authority_id'],
+            $authorityFindingHash,
+            'exact-pair-authority-finding',
+        );
+
+        try {
+            DB::table('nowpayments_payment_authorities')
+                ->where('id', $authorityFixture['authority_id'])
+                ->update([
+                    'state' => 'manual_review',
+                    'provider_status' => 'finished',
+                    'last_status_at' => $this->timestamp(),
+                    'updated_at' => $this->timestamp(),
+                ]);
+            self::fail('Mismatched observation/finding hashes must not authorize authority reopen.');
+        } catch (QueryException) {
+            self::assertSame(
+                'failed',
+                DB::table('nowpayments_payment_authorities')->where('id', $authorityFixture['authority_id'])->value('state'),
+            );
+        }
+
+        $this->insertFinishedObservation(
+            $authorityFixture['authority_id'],
+            $authorityFixture['provider_payment_id'],
+            $authorityFindingHash,
+            'exact-pair-authority-matched',
+        );
+        self::assertSame(
+            1,
+            DB::table('nowpayments_payment_authorities')
+                ->where('id', $authorityFixture['authority_id'])
+                ->where('state', 'failed')
+                ->update([
+                    'state' => 'manual_review',
+                    'provider_status' => 'finished',
+                    'last_status_at' => $this->timestamp(),
+                    'updated_at' => $this->timestamp(),
+                ]),
+        );
+
+        $intentFixture = $this->legacyTerminalConflictFixture('exact-pair-intent', 'expired');
+        $intentObservationHash = hash('sha256', 'exact-pair-intent-observation');
+        $intentFindingHash = hash('sha256', 'exact-pair-intent-finding');
+        $this->insertFinishedObservation(
+            $intentFixture['authority_id'],
+            $intentFixture['provider_payment_id'],
+            $intentObservationHash,
+            'exact-pair-intent-observation',
+        );
+        $this->insertTerminalConflictFinding(
+            $intentFixture['authority_id'],
+            $intentFindingHash,
+            'exact-pair-intent-finding',
+        );
+
+        $this->withDatabaseTriggerDisabled('nowpayments_authority_update_guard', function () use ($intentFixture): void {
+            DB::table('nowpayments_payment_authorities')
+                ->where('id', $intentFixture['authority_id'])
+                ->update([
+                    'state' => 'manual_review',
+                    'provider_status' => 'finished',
+                    'last_status_at' => $this->timestamp(),
+                    'updated_at' => $this->timestamp(),
+                ]);
+        });
+
+        try {
+            DB::table('payment_intents')
+                ->where('id', $intentFixture['payment_intent_id'])
+                ->update([
+                    'state' => 'pending_manual_review',
+                    'updated_at' => $this->timestamp(),
+                ]);
+            self::fail('Mismatched observation/finding hashes must not authorize PaymentIntent reopen.');
+        } catch (QueryException) {
+            self::assertSame(
+                'expired',
+                DB::table('payment_intents')->where('id', $intentFixture['payment_intent_id'])->value('state'),
+            );
+        }
+
+        $this->insertFinishedObservation(
+            $intentFixture['authority_id'],
+            $intentFixture['provider_payment_id'],
+            $intentFindingHash,
+            'exact-pair-intent-matched',
+        );
+        self::assertSame(
+            1,
+            DB::table('payment_intents')
+                ->where('id', $intentFixture['payment_intent_id'])
+                ->where('state', 'expired')
+                ->update([
+                    'state' => 'pending_manual_review',
+                    'updated_at' => $this->timestamp(),
+                ]),
+        );
     }
 
     /** @var array<string,array{
@@ -700,6 +1016,273 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             new UsdtCircuitBreaker(new Repository(new ArrayStore), $this->clock, 3, 60),
             $this->clock,
         );
+    }
+
+    private function assertUpgradeFenceActive(): void
+    {
+        self::assertTrue(
+            DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence'),
+        );
+        self::assertSame(
+            1,
+            DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                ->where('id', 1)
+                ->where('active', 1)
+                ->count(),
+        );
+
+        foreach ($this->upgradeFenceTriggers() as $trigger) {
+            self::assertTrue($this->triggerExists($trigger), 'Missing active migration fence: '.$trigger);
+        }
+    }
+
+    private function assertUpgradeFencesAbsent(): void
+    {
+        foreach ($this->upgradeFenceTriggers() as $trigger) {
+            self::assertFalse($this->triggerExists($trigger), 'Stale migration fence remained: '.$trigger);
+        }
+        self::assertFalse(
+            DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence'),
+        );
+    }
+
+    /** @return list<string> */
+    private function upgradeFenceTriggers(): array
+    {
+        return [
+            'payment_intents_np_conflict_upgrade_insert_fence',
+            'payment_intents_np_conflict_upgrade_update_fence',
+            'nowpayments_authority_np_conflict_upgrade_insert_fence',
+            'nowpayments_authority_np_conflict_upgrade_update_fence',
+            'nowpayments_observation_np_conflict_upgrade_insert_fence',
+            'zarinpal_request_np_conflict_upgrade_insert_fence',
+            'usdt_authority_np_conflict_upgrade_insert_fence',
+            'c2c_reservation_np_conflict_upgrade_insert_fence',
+            'gift_card_submission_np_conflict_upgrade_insert_fence',
+            'wallet_hold_np_conflict_upgrade_insert_fence',
+            'purchase_wallet_np_conflict_upgrade_insert_fence',
+            'promotion_reservation_np_conflict_upgrade_insert_fence',
+            'purchase_settlement_np_conflict_upgrade_insert_fence',
+        ];
+    }
+
+    private function assertCanonicalFinancialTriggersPresent(): void
+    {
+        foreach ([
+            'payment_intents_insert_guard',
+            'payment_intents_update_guard',
+            'nowpayments_authority_update_guard',
+        ] as $trigger) {
+            self::assertTrue($this->triggerExists($trigger), 'Canonical financial trigger disappeared: '.$trigger);
+        }
+    }
+
+    /**
+     * @param array{
+     *     user_id:int,
+     *     quote_public_id:string,
+     *     quote_configuration_hash:string,
+     *     order_public_id:string,
+     *     authority_id:int,
+     *     provider_payment_id:string,
+     *     payment_intent_id:int,
+     *     payment_intent_public_id:string
+     * } $fixture
+     */
+    private function assertFailClosedCutWithSecondConnection(array $fixture, string $suffix): void
+    {
+        $pdo = $this->independentPdo();
+        $this->assertPdoRejected(
+            fn () => $this->clonePaymentIntentViaPdo($pdo, $fixture['payment_intent_id'], 'cut-'.$suffix),
+            'Purchase payment creation is fenced',
+        );
+        $this->assertPdoRejected(
+            fn () => $this->insertNowPaymentsObservationViaPdo(
+                $pdo,
+                $fixture['authority_id'],
+                $fixture['provider_payment_id'],
+                'expired',
+                'cut-'.$suffix,
+            ),
+            'NOWPayments status evidence is fenced',
+        );
+
+        $this->assertPdoRejected(
+            fn () => $pdo->exec(
+                'UPDATE nowpayments_payment_authorities SET amount_irr = amount_irr + 1 WHERE id = '
+                .$fixture['authority_id'],
+            ),
+            '',
+        );
+        $this->assertPdoRejected(
+            fn () => $pdo->exec(
+                "UPDATE payment_intents SET state = 'captured', captured_at = UTC_TIMESTAMP(6) WHERE id = "
+                .$fixture['payment_intent_id'],
+            ),
+            '',
+        );
+
+        self::assertSame(
+            10_000_000,
+            (int) DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('amount_irr'),
+        );
+        self::assertContains(
+            DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+            ['failed', 'expired'],
+        );
+    }
+
+    private function assertPdoRejected(callable $action, string $messageFragment): void
+    {
+        try {
+            $action();
+            self::fail('Expected independent MariaDB writer to remain fenced.');
+        } catch (PDOException $exception) {
+            if ($messageFragment !== '') {
+                self::assertStringContainsString($messageFragment, $exception->getMessage());
+            }
+        }
+    }
+
+    private function independentPdo(): PDO
+    {
+        $database = config('database.connections.mysql');
+        self::assertIsArray($database);
+
+        return new PDO(
+            sprintf(
+                'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
+                (string) $database['host'],
+                (int) $database['port'],
+                (string) $database['database'],
+            ),
+            (string) $database['username'],
+            (string) $database['password'],
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
+        );
+    }
+
+    private function clonePaymentIntentViaPdo(PDO $pdo, int $sourceIntentId, string $suffix): void
+    {
+        $source = DB::table('payment_intents')->where('id', $sourceIntentId)->first();
+        self::assertNotNull($source);
+        $row = (array) $source;
+        unset($row['id']);
+        $row['public_id'] = (string) Str::ulid();
+        $row['creation_key'] = 'np-upgrade-fence-'.substr(hash('sha256', $suffix), 0, 32);
+        $row['creation_correlation_id'] = $this->correlation('clone-'.$suffix);
+
+        $columns = array_keys($row);
+        $quotedColumns = implode(',', array_map(
+            static fn (string $column): string => chr(96).$column.chr(96),
+            $columns,
+        ));
+        $placeholders = implode(',', array_fill(0, count($columns), '?'));
+        $statement = $pdo->prepare(
+            'INSERT INTO payment_intents ('.$quotedColumns.') VALUES ('.$placeholders.')',
+        );
+        $statement->execute(array_values($row));
+    }
+
+    private function insertZarinpalRequestViaPdo(PDO $pdo, int $paymentIntentId, string $suffix): void
+    {
+        $intent = DB::table('payment_intents')->where('id', $paymentIntentId)->first(['amount_irr', 'currency']);
+        self::assertNotNull($intent);
+        $timestamp = $this->timestamp();
+
+        $statement = $pdo->prepare(<<<'SQL'
+INSERT INTO zarinpal_payment_requests
+(public_id,request_key,payload_hash,payment_intent_id,promotion_usage_reservation_id,merchant_configuration_hash,authority,state,amount_irr,currency,callback_url,request_provider_code,request_attempted_at,authority_received_at,created_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+SQL);
+        $statement->execute([
+            (string) Str::ulid(),
+            'np-upgrade-fence-zarinpal-'.substr(hash('sha256', $suffix), 0, 24),
+            hash('sha256', 'zarinpal-payload-'.$suffix),
+            $paymentIntentId,
+            null,
+            hash('sha256', 'zarinpal-merchant-'.$suffix),
+            null,
+            'initiating',
+            (int) $intent->amount_irr,
+            (string) $intent->currency,
+            'https://payments.example.test/payments/zarinpal/callback',
+            null,
+            $timestamp,
+            null,
+            $timestamp,
+            $timestamp,
+        ]);
+    }
+
+    private function insertNowPaymentsObservationViaPdo(
+        PDO $pdo,
+        int $authorityId,
+        string $providerPaymentId,
+        string $providerStatus,
+        string $suffix,
+    ): void {
+        $hash = hash('sha256', 'np-upgrade-fence-observation-'.$suffix);
+        $timestamp = $this->timestamp();
+        $statement = $pdo->prepare(<<<'SQL'
+INSERT INTO nowpayments_payment_observations
+(nowpayments_payment_authority_id,event_key,event_type,provider_payment_id,provider_status,response_hash,occurred_at,correlation_id,created_at)
+VALUES (?,?,?,?,?,?,?,?,?)
+SQL);
+        $statement->execute([
+            $authorityId,
+            'nowpayments:'.$authorityId.':status_lookup:'.substr($hash, 0, 32),
+            'status_lookup',
+            $providerPaymentId,
+            $providerStatus,
+            $hash,
+            $timestamp,
+            $this->correlation('pdo-observation-'.$suffix),
+            $timestamp,
+        ]);
+    }
+
+    private function insertFinishedObservation(
+        int $authorityId,
+        string $providerPaymentId,
+        string $responseHash,
+        string $suffix,
+    ): void {
+        DB::table('nowpayments_payment_observations')->insert([
+            'nowpayments_payment_authority_id' => $authorityId,
+            'event_key' => 'nowpayments:'.$authorityId.':status_lookup:'.substr($responseHash, 0, 32),
+            'event_type' => 'status_lookup',
+            'provider_payment_id' => $providerPaymentId,
+            'provider_status' => 'finished',
+            'response_hash' => $responseHash,
+            'occurred_at' => $this->timestamp(),
+            'correlation_id' => $this->correlation($suffix),
+            'created_at' => $this->timestamp(),
+        ]);
+    }
+
+    private function insertTerminalConflictFinding(int $authorityId, string $evidenceHash, string $suffix): void
+    {
+        DB::table('nowpayments_reconciliation_findings')->insert([
+            'nowpayments_payment_authority_id' => $authorityId,
+            'finding_key' => 'nowpayments:'.$authorityId
+                .':terminal_local_state_conflicts_with_finished_provider:'.substr($evidenceHash, 0, 32),
+            'code' => 'terminal_local_state_conflicts_with_finished_provider',
+            'severity' => 'critical',
+            'provider_status' => 'finished',
+            'evidence_hash' => $evidenceHash,
+            'detected_at' => $this->timestamp(),
+            'correlation_id' => $this->correlation($suffix),
+            'created_at' => $this->timestamp(),
+        ]);
+    }
+
+    private function triggerExists(string $trigger): bool
+    {
+        return DB::table('information_schema.TRIGGERS')
+            ->where('TRIGGER_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('TRIGGER_NAME', $trigger)
+            ->exists();
     }
 
     private function migration(): Migration
