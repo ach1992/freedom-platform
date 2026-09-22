@@ -34,6 +34,7 @@ trait AssertsPurchaseProviderMutationAttempt
 
             $attempts = $probe->table('purchase_provider_mutation_attempts')
                 ->where('provider_code', $providerCode)
+                ->where('mutation_key', 'like', $mutationKeyPrefix.'%')
                 ->whereIn('state', ['prepared', 'external_started', 'reconciliation_required'])
                 ->get(['state', 'mutation_key']);
 
