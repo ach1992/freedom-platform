@@ -50,8 +50,6 @@ use DateTimeImmutable;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
-use Illuminate\Database\Events\QueryExecuted;
-use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -451,82 +449,6 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         self::assertSame(1, DB::table('payment_intents')->where('purpose', 'purchase')->count());
         self::assertSame(1, DB::table('promotion_usage_releases')->count());
         self::assertSame(0, DB::table('wallet_holds')->where('status', 'active')->count());
-    }
-
-    public function test_nowpayments_conflict_migration_fences_terminal_promotion_release_until_reentry_completes(): void
-    {
-        $source = $this->promotionSource('np-migration-release-fence', 1);
-        $checkout = $this->discountedCheckout(
-            $source,
-            $source['codes'][0],
-            'np-migration-release-fence',
-        );
-        $walletId = $this->fundedCashWallet(
-            $checkout['user_id'],
-            2_000_000,
-            'np-migration-release-fence',
-        );
-        $wallet = $this->app->make(PurchaseWalletPaymentService::class);
-        $intent = $wallet->reserve(
-            'wallet-promo-np-migration-release-fence',
-            $checkout['user_id'],
-            $walletId,
-            $checkout['quote']->quotePublicId,
-            $checkout['decision']->publicId,
-            $this->correlation('np-migration-release-fence-reserve'),
-        );
-        $wallet->cancel(
-            $intent->intentPublicId,
-            $this->correlation('np-migration-release-fence-cancel'),
-        );
-        $this->clock->value = $this->clock->value->modify('+31 minutes');
-
-        /** @var Migration $migration */
-        $migration = require database_path(
-            'migrations/2026_09_21_000100_harden_nowpayments_terminal_provider_conflict.php',
-        );
-        $migration->down();
-
-        $injected = false;
-        DB::listen(function (QueryExecuted $query) use (&$injected): void {
-            $sql = strtolower($query->sql);
-            if ($injected
-                || ! str_contains($sql, 'select distinct')
-                || ! str_contains($sql, 'nowpayments_reconciliation_findings')) {
-                return;
-            }
-
-            $injected = true;
-            throw new RuntimeException('Injected after complete NOWPayments migration fence composition.');
-        });
-
-        try {
-            $migration->up();
-            self::fail('Migration fence test must interrupt after complete fence composition.');
-        } catch (RuntimeException $exception) {
-            self::assertTrue($injected);
-            self::assertSame(
-                'Injected after complete NOWPayments migration fence composition.',
-                $exception->getMessage(),
-            );
-        }
-
-        self::assertSame(0, DB::table('promotion_usage_releases')->count());
-
-        $fenced = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
-        self::assertSame(1, $fenced->promotionReservationsExamined);
-        self::assertSame(0, $fenced->releasedPromotionReservations);
-        self::assertSame(1, $fenced->failures);
-        self::assertSame(0, DB::table('promotion_usage_releases')->count());
-
-        $migration->up();
-
-        $released = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
-        self::assertSame(1, $released->promotionReservationsExamined);
-        self::assertSame(1, $released->releasedPromotionReservations);
-        self::assertSame(0, $released->failures);
-        self::assertSame(1, DB::table('promotion_usage_releases')->count());
-        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
     }
 
     public function test_reselected_wallet_reuses_quote_promotion_reservation_and_maintenance_avoids_stale_terminal_failure(): void

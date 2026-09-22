@@ -4,12 +4,19 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Catalog\Application\CatalogChangeContext;
+use App\Modules\Catalog\Application\PlanOfferingService;
+use App\Modules\Catalog\Domain\ProductVisibility;
+use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
 use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\QuoteDiscountAuthorizationRequest;
+use App\Modules\Orders\Application\QuoteDiscountConsumptionRequest;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchasePaymentMaintenanceService;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsCreateRequest;
@@ -23,10 +30,12 @@ use App\Modules\Payments\Usdt\Domain\UsdtRate;
 use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
 use App\Modules\Payments\Usdt\Domain\UsdtRateProvider;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
+use App\Modules\Promotions\BenefitCodes\Domain\BenefitCodeType;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Database\Seeders\PromotionAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Cache\ArrayStore;
@@ -41,6 +50,7 @@ use PDO;
 use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\Support\RestoresDatabaseTrigger;
 use Tests\TestCase;
 use Throwable;
@@ -147,6 +157,7 @@ final class LegacyUpgradeNowPaymentsClock implements Clock
 final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
+    use CreatesBenefitCodeFixtures;
     use DatabaseTruncation;
     use RestoresDatabaseTrigger;
 
@@ -164,6 +175,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
+        $this->seed(PromotionAccessFoundationSeeder::class);
         $this->clock = new LegacyUpgradeNowPaymentsClock(new DateTimeImmutable('2026-09-21T18:00:00+00:00'));
         $this->app->instance(Clock::class, $this->clock);
         DB::statement('SET timestamp = '.$this->clock->value->getTimestamp());
@@ -922,6 +934,71 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $fixture['order_public_id'])->value('state'));
     }
 
+    public function test_upgrade_fence_blocks_terminal_promotion_release_until_reentry_completes(): void
+    {
+        [$userId, $quote, $decision] = $this->discountedNowPaymentsContext('promotion-release-fence');
+        $this->transport->providerPaymentId = 'legacy-promo-release-fence';
+        $created = $this->service()->initiatePurchase(
+            $userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $this->correlation('promo-release-create'),
+        );
+        self::assertSame(1, DB::table('promotion_usage_reservations')->count());
+
+        $this->transport->statusValue = 'failed';
+        $failed = $this->service()->refresh(
+            $created->paymentIntentPublicId,
+            $this->correlation('promo-release-failed'),
+        );
+        self::assertSame(NowPaymentsAuthorityState::Failed, $failed->state);
+        $this->clock->value = $this->clock->value->modify('+31 minutes');
+        DB::statement('SET timestamp = '.$this->clock->value->getTimestamp());
+
+        $migration = $this->migration();
+        $migration->down();
+        $injected = false;
+        DB::listen(function (QueryExecuted $query) use (&$injected): void {
+            $sql = strtolower($query->sql);
+            if ($injected
+                || ! str_contains($sql, 'select distinct')
+                || ! str_contains($sql, 'nowpayments_reconciliation_findings')) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected after complete NOWPayments migration fence composition.');
+        });
+
+        try {
+            $migration->up();
+            self::fail('Promotion release fence regression must interrupt after complete fence composition.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame(
+                'Injected after complete NOWPayments migration fence composition.',
+                $exception->getMessage(),
+            );
+        }
+
+        $this->assertUpgradeFenceActive();
+        $fenced = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
+        self::assertSame(1, $fenced->promotionReservationsExamined);
+        self::assertSame(0, $fenced->releasedPromotionReservations);
+        self::assertSame(1, $fenced->failures);
+        self::assertSame(0, DB::table('promotion_usage_releases')->count());
+
+        $migration->up();
+        $this->assertUpgradeFencesAbsent();
+
+        $released = $this->app->make(PurchasePaymentMaintenanceService::class)->run();
+        self::assertSame(1, $released->promotionReservationsExamined);
+        self::assertSame(1, $released->releasedPromotionReservations);
+        self::assertSame(0, $released->failures);
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
+        self::assertSame(0, DB::table('promotion_usage_redemptions')->count());
+    }
+
     #[DataProvider('canonicalTriggerReplacementCuts')]
     public function test_every_canonical_trigger_replacement_cut_remains_fenced_and_reentrant_up_and_down(
         string $direction,
@@ -1226,6 +1303,122 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             $quotePublicId,
             $quoteConfigurationHash,
         )->publicId;
+    }
+
+    /** @return array{0:int,1:object,2:object} */
+    private function discountedNowPaymentsContext(string $suffix): array
+    {
+        $offering = $this->activeBenefitOffering('np-upgrade-'.$suffix);
+        $version = (int) DB::table('plan_offerings')->where('id', $offering['id'])->value('version');
+        $this->app->make(PlanOfferingService::class)->setVisibility(
+            $offering['id'],
+            $version,
+            ProductVisibility::Visible,
+            new CatalogChangeContext(
+                'np-upgrade-visible-'.substr(hash('sha256', $suffix), 0, 24),
+                'np-upgrade-visible-correlation-'.substr(hash('sha256', $suffix), 0, 20),
+                'nowpayments_migration_test',
+                'Expose NOWPayments migration promotion fixture.',
+                $this->benefitOwner(),
+            ),
+        );
+        $rule = $this->usageRule(
+            $offering['id'],
+            'np.upgrade.promo.'.substr(hash('sha256', $suffix), 0, 16),
+            90_000,
+            1,
+            null,
+        );
+        $campaignCode = 'np.upgrade.discount.'.substr(hash('sha256', $suffix), 0, 12);
+        $this->benefitCampaign(
+            $campaignCode,
+            BenefitCodeType::DiscountGrant,
+            $this->discountDefinition($rule->ruleCode, $offering['id'], $offering['product_id'], $offering['server_id']),
+            'np-upgrade-'.$suffix,
+        );
+        $issue = $this->benefitIssue($campaignCode, 'np-upgrade-'.$suffix, 1);
+        $userId = $this->benefitUser('customer');
+        $quotes = $this->app->make(QuoteService::class);
+        $source = $quotes->create(
+            'np-upgrade-source-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $offering['id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $this->clock->value->modify('+30 minutes'),
+            ),
+            $this->correlation('promo-source-'.$suffix),
+        );
+        $discounts = $this->app->make(QuoteDiscountAuthority::class);
+        $authorization = $discounts->authorize(new QuoteDiscountAuthorizationRequest(
+            'np-upgrade-auth-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $source->quotePublicId,
+            $source->configurationSnapshotHash,
+            (string) $issue->items[0]->fullCode,
+            $this->correlation('promo-auth-'.$suffix),
+        ));
+        $quote = $quotes->create(
+            'np-upgrade-discounted-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $offering['id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                $authorization->ruleCode,
+                $authorization->discountIrr,
+                $this->clock->value->modify('+30 minutes'),
+            ),
+            $this->correlation('promo-discounted-'.$suffix),
+        );
+        $discounts->consume(new QuoteDiscountConsumptionRequest(
+            'np-upgrade-consume-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $authorization,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            $this->correlation('promo-consume-'.$suffix),
+        ));
+
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $administratorId = $this->benefitOwner();
+        $eligibility->configureMethod(
+            'np-upgrade-promo-method-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'nowpayments',
+            true,
+            false,
+            1,
+            'NOWPayments promotion migration fixture.',
+            $this->correlation('promo-method-'.$suffix),
+        );
+        $eligibility->recordHealth(
+            'np-upgrade-promo-health-'.substr(hash('sha256', $suffix), 0, 24),
+            $administratorId,
+            'nowpayments',
+            true,
+            $this->clock->value->modify('+10 minutes'),
+            'Healthy NOWPayments promotion migration observation.',
+            $this->correlation('promo-health-'.$suffix),
+        );
+        $decision = $eligibility->evaluate(
+            'np-upgrade-promo-decision-'.substr(hash('sha256', $suffix), 0, 24),
+            $userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+        );
+        $this->app->make(PurchaseOrderService::class)->openFromQuote(
+            $quote->quotePublicId,
+            $userId,
+            $this->correlation('promo-order-'.$suffix),
+        );
+
+        return [$userId, $quote, $decision];
     }
 
     /** @return array{0:int,1:object,2:object,3:object} */
