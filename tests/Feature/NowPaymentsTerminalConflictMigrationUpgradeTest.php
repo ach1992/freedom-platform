@@ -558,6 +558,133 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         );
     }
 
+    public function test_inflight_competing_payment_intent_transaction_is_drained_before_preflight(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for the NOWPayments migration in-flight PaymentIntent regression.');
+        }
+
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('inflight-intent', 'failed');
+        $zarinpalDecision = $this->zarinpalDecision(
+            $fixture['user_id'],
+            $fixture['quote_public_id'],
+            $fixture['quote_configuration_hash'],
+            'inflight-intent',
+        );
+        $this->seedLegacyFinishedConflict(
+            $fixture['authority_id'],
+            $fixture['provider_payment_id'],
+            'inflight-intent',
+        );
+
+        $barrier = sys_get_temp_dir().'/nowpayments-upgrade-inflight-intent-'.bin2hex(random_bytes(8));
+        $creationKey = 'legacy-upgrade-zarinpal-inflight-intent';
+        $pid = null;
+
+        try {
+            $pid = pcntl_fork();
+            self::assertNotSame(-1, $pid);
+            if ($pid === 0) {
+                try {
+                    $writerConfiguration = config('database.connections.mysql');
+                    if (! is_array($writerConfiguration)) {
+                        throw new RuntimeException('Migration writer database configuration is unavailable.');
+                    }
+                    config()->set('database.connections.np_migration_writer', $writerConfiguration);
+                    DB::setDefaultConnection('np_migration_writer');
+
+                    $paused = false;
+                    DB::listen(function (QueryExecuted $query) use (&$paused, $barrier): void {
+                        if ($paused || ! str_contains(strtolower($query->sql), 'insert into \`payment_intents\`')) {
+                            return;
+                        }
+
+                        $paused = true;
+                        file_put_contents($barrier, 'ready');
+                        usleep(250000);
+                    });
+
+                    $this->app->make(PurchasePaymentIntentService::class)->create(
+                        $creationKey,
+                        $fixture['user_id'],
+                        $fixture['quote_public_id'],
+                        $zarinpalDecision,
+                        'zarinpal',
+                        $this->correlation('inflight-intent-create'),
+                    );
+                    if (! $paused) {
+                        throw new RuntimeException('In-flight PaymentIntent writer did not cross the expected insert seam.');
+                    }
+
+                    pcntl_exec('/bin/true');
+                    file_put_contents($barrier, 'error|pcntl_exec');
+                    exit(1);
+                } catch (Throwable $exception) {
+                    file_put_contents($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($barrier)) {
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for the in-flight competing PaymentIntent transaction.');
+                }
+                usleep(1000);
+            }
+            $state = trim((string) file_get_contents($barrier));
+            if ($state !== 'ready') {
+                throw new RuntimeException('In-flight competing PaymentIntent writer failed before migration: '.$state);
+            }
+
+            // The first PaymentIntent fence DDL must wait for this transaction to
+            // commit before preflight is allowed to observe the legacy conflict.
+            $migration->up();
+
+            self::assertIsInt($pid);
+            pcntl_waitpid($pid, $status);
+            $pid = null;
+            self::assertSame(0, pcntl_wexitstatus($status));
+
+            $competitor = DB::table('payment_intents')
+                ->where('creation_key', $creationKey)
+                ->first(['id', 'source_quote_id', 'user_id', 'payment_method_code', 'state']);
+            self::assertNotNull($competitor);
+            self::assertSame('zarinpal', $competitor->payment_method_code);
+            self::assertSame(
+                'manual_review',
+                DB::table('nowpayments_payment_authorities')->where('id', $fixture['authority_id'])->value('state'),
+            );
+            self::assertSame(
+                'pending_manual_review',
+                DB::table('payment_intents')->where('id', $fixture['payment_intent_id'])->value('state'),
+            );
+
+            $this->transport->statusValue = 'finished';
+            $this->transport->actuallyPaid = $this->transport->payAmount;
+            $stillManual = $this->service()->refresh(
+                $fixture['payment_intent_public_id'],
+                $this->correlation('inflight-intent-finished'),
+            );
+            self::assertSame(NowPaymentsAuthorityState::ManualReview, $stillManual->state);
+            self::assertNull($stillManual->settlementPublicId);
+            self::assertSame(
+                0,
+                DB::table('purchase_settlements')
+                    ->where('payment_intent_id', $fixture['payment_intent_id'])
+                    ->count(),
+            );
+        } finally {
+            if (is_int($pid) && $pid > 0) {
+                pcntl_waitpid($pid, $status);
+            }
+            @unlink($barrier);
+        }
+    }
+
     public function test_inflight_legacy_status_transaction_is_drained_before_preflight_and_becomes_sticky(): void
     {
         if (! function_exists('pcntl_fork')) {
