@@ -54,18 +54,15 @@ final class PurchaseProviderMutationAttempt
             throw new RuntimeException('Provider mutation attempt lost its barrier slot before the external effect started.');
         }
 
-        $updated = $this->controlConnection->update(
-            <<<'SQL'
-UPDATE purchase_provider_mutation_attempts
-SET state = 'external_started',
-    external_started_at = UTC_TIMESTAMP(6),
-    updated_at = UTC_TIMESTAMP(6)
-WHERE id = ?
-  AND provider_session_id = ?
-  AND state = 'prepared'
-SQL,
-            [$this->attemptId, $this->providerSessionId],
-        );
+        $updated = $this->controlConnection->table('purchase_provider_mutation_attempts')
+            ->where('id', $this->attemptId)
+            ->where('provider_session_id', $this->providerSessionId)
+            ->where('state', 'prepared')
+            ->update([
+                'state' => 'external_started',
+                'external_started_at' => $this->controlConnection->raw('UTC_TIMESTAMP(6)'),
+                'updated_at' => $this->controlConnection->raw('UTC_TIMESTAMP(6)'),
+            ]);
         if ($updated !== 1) {
             throw new RuntimeException('Provider mutation attempt could not durably mark the external effect boundary.');
         }
@@ -120,10 +117,10 @@ SQL,
 
         // Resolved rows are no longer migration authority. Their durable state is
         // committed before deletion, so a deletion failure is availability-only.
-        $this->controlConnection->delete(
-            "DELETE FROM purchase_provider_mutation_attempts WHERE id = ? AND state IN ('completed','aborted')",
-            [$this->attemptId],
-        );
+        $this->controlConnection->table('purchase_provider_mutation_attempts')
+            ->where('id', $this->attemptId)
+            ->whereIn('state', ['completed', 'aborted'])
+            ->delete();
     }
 
     public function fail(): void
@@ -139,10 +136,10 @@ SQL,
                 true,
                 'Provider mutation attempt could not durably retire a failed pre-effect preparation.',
             );
-            $this->controlConnection->delete(
-                "DELETE FROM purchase_provider_mutation_attempts WHERE id = ? AND state = 'aborted'",
-                [$this->attemptId],
-            );
+            $this->controlConnection->table('purchase_provider_mutation_attempts')
+                ->where('id', $this->attemptId)
+                ->where('state', 'aborted')
+                ->delete();
 
             return;
         }
@@ -161,13 +158,16 @@ SQL,
         bool $resolved,
         string $failureMessage,
     ): void {
-        $resolvedSql = $resolved ? 'UTC_TIMESTAMP(6)' : 'NULL';
-        $updated = $this->controlConnection?->update(
-            "UPDATE purchase_provider_mutation_attempts
-             SET state = ?, resolved_at = {$resolvedSql}, updated_at = UTC_TIMESTAMP(6)
-             WHERE id = ? AND state = ?",
-            [$to, $this->attemptId, $from],
-        );
+        $connection = $this->controlConnection
+            ?? throw new RuntimeException('Provider mutation attempt control connection is unavailable.');
+        $updated = $connection->table('purchase_provider_mutation_attempts')
+            ->where('id', $this->attemptId)
+            ->where('state', $from)
+            ->update([
+                'state' => $to,
+                'resolved_at' => $resolved ? $connection->raw('UTC_TIMESTAMP(6)') : null,
+                'updated_at' => $connection->raw('UTC_TIMESTAMP(6)'),
+            ]);
         if ($updated !== 1) {
             throw new RuntimeException($failureMessage);
         }
