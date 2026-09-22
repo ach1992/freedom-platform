@@ -669,21 +669,21 @@ SQL);
         }
 
         foreach ([
-            'purchase_settlement_np_conflict_upgrade_insert_fence',
-            'promotion_reservation_np_conflict_upgrade_insert_fence',
-            'purchase_wallet_np_conflict_upgrade_insert_fence',
-            'wallet_hold_np_conflict_upgrade_insert_fence',
-            'gift_card_submission_np_conflict_upgrade_insert_fence',
-            'c2c_reservation_np_conflict_upgrade_insert_fence',
-            'usdt_authority_np_conflict_upgrade_insert_fence',
-            'zarinpal_request_np_conflict_upgrade_insert_fence',
-            'nowpayments_observation_np_conflict_upgrade_insert_fence',
-            'nowpayments_authority_np_conflict_upgrade_update_fence',
-            'nowpayments_authority_np_conflict_upgrade_insert_fence',
-            'payment_intents_np_conflict_upgrade_update_fence',
-            'payment_intents_np_conflict_upgrade_insert_fence',
-        ] as $trigger) {
-            DB::unprepared('DROP TRIGGER IF EXISTS '.$trigger);
+            'DROP TRIGGER IF EXISTS purchase_settlement_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS promotion_reservation_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS purchase_wallet_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS wallet_hold_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS gift_card_submission_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS c2c_reservation_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS usdt_authority_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS zarinpal_request_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS nowpayments_observation_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS nowpayments_authority_np_conflict_upgrade_update_fence',
+            'DROP TRIGGER IF EXISTS nowpayments_authority_np_conflict_upgrade_insert_fence',
+            'DROP TRIGGER IF EXISTS payment_intents_np_conflict_upgrade_update_fence',
+            'DROP TRIGGER IF EXISTS payment_intents_np_conflict_upgrade_insert_fence',
+        ] as $statement) {
+            DB::unprepared($statement);
         }
 
         DB::statement('DROP TABLE IF EXISTS nowpayments_terminal_conflict_upgrade_fence');
