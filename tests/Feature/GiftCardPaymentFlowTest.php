@@ -406,7 +406,7 @@ final class GiftCardPaymentFlowTest extends TestCase
             function () use ($service, $racing, $winner, $winnerProvider): void {
                 $this->assertExternalProviderMutationAttempt(
                     'gift_card',
-                    'gift-card:redeem:'.$racing->publicId,
+                    'gift-card:reserve:'.$racing->publicId,
                 );
                 $captured = $service->process(
                     $winner->publicId,
@@ -603,7 +603,11 @@ final class GiftCardPaymentFlowTest extends TestCase
         $raceProvider = new GiftCardRaceVerificationProvider(
             $this->evidence('validate', 'valid', 'order-race-first-validate', null, $purchase['amount']),
             $this->evidence('redeem', 'redeemed', 'order-race-first-redeem', 'order-race-first-tx', $purchase['amount']),
-            function () use ($service, $winner, $winnerProvider): void {
+            function () use ($service, $racing, $winner, $winnerProvider): void {
+                $this->assertExternalProviderMutationAttempt(
+                    'gift_card',
+                    'gift-card:redeem:'.$racing->publicId,
+                );
                 $captured = $service->process(
                     $winner->publicId,
                     $winnerProvider,
