@@ -83,7 +83,7 @@ final readonly class AdministratorRoleCatalogService
             ['active' => $active],
             function (Connection $connection) use ($roleCode, $active, $context): array {
                 $this->authorizeActor($context->actorAdministratorId);
-                $role = $this->customRole($connection, $roleCode, true);
+                $role = $this->lockCustomRoleWithAssignedAdministrators($connection, $roleCode);
                 $before = (bool) $role->is_active;
                 $invalidatedAdministrators = 0;
                 if ($before !== $active) {
@@ -240,6 +240,85 @@ final readonly class AdministratorRoleCatalogService
             }
 
             throw $exception;
+        }
+    }
+
+    /** @return object{id:int|string,is_active:int|bool} */
+    private function lockCustomRoleWithAssignedAdministrators(
+        Connection $connection,
+        string $roleCode,
+    ): object {
+        $unlockedRole = $this->customRole($connection, $roleCode, false);
+        $roleId = (int) $unlockedRole->id;
+        if ($roleId < 1) {
+            throw new RuntimeException('Custom role identity is invalid.');
+        }
+
+        $knownAdministratorIds = $this->assignedAdministratorIds($connection, $roleId, false);
+        $this->lockAdministrators($connection, $knownAdministratorIds);
+
+        // AdministratorAccessService locks the target administrator before the role.
+        // Match that order first. Once the role is locked, a concurrent canonical
+        // assignment cannot become visible until this mutation commits. A locking
+        // current-read then captures assignments that committed before our role lock.
+        $role = $this->customRole($connection, $roleCode, true);
+        $currentAdministratorIds = $this->assignedAdministratorIds($connection, $roleId, true);
+        $newAdministratorIds = array_values(array_diff(
+            $currentAdministratorIds,
+            $knownAdministratorIds,
+        ));
+        $this->lockAdministrators($connection, $newAdministratorIds);
+
+        return $role;
+    }
+
+    /** @return list<int> */
+    private function assignedAdministratorIds(
+        Connection $connection,
+        int $roleId,
+        bool $lock,
+    ): array {
+        $query = $connection->table('administrator_role_assignments')
+            ->where('role_id', $roleId)
+            ->whereNull('revoked_at')
+            ->orderBy('administrator_id');
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        /** @var list<int> $administratorIds */
+        $administratorIds = $query
+            ->pluck('administrator_id')
+            ->map(static fn (mixed $value): int => (int) $value)
+            ->filter(static fn (int $value): bool => $value > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        return $administratorIds;
+    }
+
+    /** @param list<int> $administratorIds */
+    private function lockAdministrators(Connection $connection, array $administratorIds): void
+    {
+        if ($administratorIds === []) {
+            return;
+        }
+
+        $lockedIds = $connection->table('administrators')
+            ->whereIn('id', $administratorIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->pluck('id')
+            ->map(static fn (mixed $value): int => (int) $value)
+            ->values()
+            ->all();
+
+        sort($administratorIds);
+        sort($lockedIds);
+        if ($lockedIds !== $administratorIds) {
+            throw new RuntimeException('Custom role assignment references an invalid administrator.');
         }
     }
 
