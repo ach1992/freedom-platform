@@ -33,10 +33,12 @@ use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use PDOException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -442,35 +444,35 @@ final class AgentBulkOrderServiceTest extends TestCase
         self::assertSame(1, DB::table('agent_bulk_orders')->count());
         self::assertSame(1, DB::table('agent_bulk_order_items')->count());
 
-        DB::unprepared(<<<'SQL'
-CREATE TRIGGER agent_bulk_order_test_unrelated_parent_failure
-BEFORE INSERT ON agent_bulk_orders
-FOR EACH ROW
-BEGIN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-unrelated-agent-bulk-parent-failure';
-END
-SQL);
-        try {
-            try {
-                $service->execute(
-                    'bulk-unrelated-query-parent-0002',
-                    $agent,
-                    [[
-                        'child_key' => 'bulk-unrelated-query-child-b',
-                        'purchase_settlement_public_id' => $settlement->settlementPublicId,
-                    ]],
-                    $this->purchaseOrderCorrelation('bulk-unrelated-query-second'),
-                );
-                self::fail('An unrelated QueryException must not be translated into a settlement-claim domain conflict.');
-            } catch (QueryException $exception) {
-                self::assertSame('45000', (string) ($exception->errorInfo[0] ?? $exception->getCode()));
-                self::assertStringContainsString(
-                    'simulated-unrelated-agent-bulk-parent-failure',
-                    (string) ($exception->errorInfo[2] ?? $exception->getMessage()),
-                );
+        DB::listen(static function (QueryExecuted $query): void {
+            if (! str_contains($query->sql, 'insert into `agent_bulk_orders`')) {
+                return;
             }
-        } finally {
-            DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_order_test_unrelated_parent_failure');
+
+            $previous = new PDOException('simulated-unrelated-agent-bulk-parent-failure');
+            $previous->errorInfo = ['HY000', 1105, 'simulated-unrelated-agent-bulk-parent-failure'];
+
+            throw new QueryException('mysql', $query->sql, $query->bindings, $previous);
+        });
+
+        try {
+            $service->execute(
+                'bulk-unrelated-query-parent-0002',
+                $agent,
+                [[
+                    'child_key' => 'bulk-unrelated-query-child-b',
+                    'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                ]],
+                $this->purchaseOrderCorrelation('bulk-unrelated-query-second'),
+            );
+            self::fail('An unrelated QueryException must not be translated into a settlement-claim domain conflict.');
+        } catch (QueryException $exception) {
+            self::assertSame('HY000', (string) ($exception->errorInfo[0] ?? ''));
+            self::assertSame(1105, (int) ($exception->errorInfo[1] ?? 0));
+            self::assertStringContainsString(
+                'simulated-unrelated-agent-bulk-parent-failure',
+                (string) ($exception->errorInfo[2] ?? $exception->getMessage()),
+            );
         }
 
         self::assertSame(1, DB::table('agent_bulk_orders')->count());
