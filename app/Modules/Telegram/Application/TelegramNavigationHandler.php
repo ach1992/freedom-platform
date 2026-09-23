@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\AccessControl\Application\AdministratorSearchPermissions;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
@@ -1035,6 +1036,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $requestKey,
     ): void {
         $rows = [];
+
+        if ($this->administratorSearchAvailableFor($action->userId)) {
+            $globalSearch = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdministratorSearchNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-global-search:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.global_search', $locale),
+                $globalSearch->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
 
         if ($this->administratorCustomerTargets->availableFor($action->userId)) {
             $customerSearch = $this->callbacks->issue(
@@ -3275,6 +3291,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         }
         if ($this->managedUsdtRateSettings->availableFor($action->userId)
             || $this->administratorCustomerTargets->availableFor($action->userId)
+            || $this->administratorSearchAvailableFor($action->userId)
             || $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
             || $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $admin = $this->callbacks->issue(
@@ -3312,6 +3329,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $this->correlationId($action, 'home'),
             $keyboard,
         );
+    }
+
+    private function administratorSearchAvailableFor(int $userId): bool
+    {
+        return $this->administratorUsers->allowsUser($userId, 'identity.customers.view')
+            || $this->administratorUsers->allowsUser($userId, AdministratorSearchPermissions::ORDER)
+            || $this->administratorUsers->allowsUser($userId, AdministratorSearchPermissions::PAYMENT)
+            || $this->administratorUsers->allowsUser($userId, AdministratorSearchPermissions::SERVICE);
     }
 
     private function renderPurchaseCatalog(

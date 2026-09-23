@@ -44,9 +44,29 @@ return [
         'admin' => [
             'control' => "Administrator Control Center\n\nAdministrative settings and tools are shown only when your current permission allows them and are re-authorized when executed.",
             'buttons' => [
+                'global_search' => 'Cross-entity Search',
                 'customer_search' => 'Customer Search',
                 'usdt_rate' => 'USDT / NOWPayments rate',
                 'client_guides' => 'Client Guides',
+            ],
+            'global_search' => [
+                'prompt' => "Cross-entity Search\n\nSend one exact public ID, Telegram ID/username, provider transaction ID, or receipt reference. Results are bounded and permission-filtered; broad/fuzzy listing is not available.",
+                'not_found' => 'No permitted entity matched that exact value.',
+                'results' => "Cross-entity Search Results\n\n:items\n\nSensitive evidence is masked unless your current permission allows it. Search authorization is checked again on every request.",
+                'item' => "#:number — :kind\nID: :id\nState: :state\nOwner: :owner\nProvider: :provider\nReference: :reference\nAmount: :amount",
+                'not_available' => 'Not available',
+                'masked_suffix' => ' (masked)',
+                'amount' => ':amount IRR',
+                'kinds' => [
+                    'user' => 'User',
+                    'order' => 'Order',
+                    'payment_intent' => 'Payment Intent',
+                    'purchase_settlement' => 'Purchase Settlement',
+                    'provider_transaction' => 'Provider Transaction',
+                    'card_receipt' => 'Card-to-card Receipt',
+                    'gift_submission' => 'Gift-card Submission',
+                    'service' => 'Service',
+                ],
             ],
             'customer_search' => [
                 'prompt' => "Customer Search\n\nSend one exact Telegram ID, Telegram username, or public account ID. The search is exact and permission-gated; broad or fuzzy listing is not available.",

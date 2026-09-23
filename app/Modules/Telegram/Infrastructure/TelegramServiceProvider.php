@@ -165,6 +165,7 @@ final class TelegramServiceProvider extends ServiceProvider
             ),
         );
         $this->app->singleton(TelegramNavigationHandler::class);
+        $this->app->singleton(TelegramAdministratorSearchNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);
         $this->app->singleton(TelegramClientGuideNavigationHandler::class);
