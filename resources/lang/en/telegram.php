@@ -69,7 +69,6 @@ return [
                     'role_revoke' => 'Revoke Role',
                     'permission_override' => 'Permission Override',
                     'owner_transfer' => 'Transfer Ownership',
-                    'custom_role_command' => 'Manage Custom Role',
                     'confirm' => 'Confirm sensitive action',
                     'retry_approval' => 'Execute after approval',
                     'cancel_approval' => 'Cancel approval request',
@@ -97,16 +96,12 @@ return [
                     'invalid' => "Invalid permission override command.\n\nUse exactly: allow|deny|inherit followed by one existing permission code.",
                 ],
                 'roles' => [
-                    'list' => "Role Catalog\n\n:items\n\nSystem-role definitions are code-owned. Custom roles use the custom.* namespace and can be managed below.",
+                    'list' => "Role Catalog\n\n:items\n\nRole definitions are code-owned in this scope. Assign or revoke existing roles from an administrator target.",
                     'item' => ':code — :type / :active — :permissions permission(s)',
                 ],
                 'permissions' => [
                     'list' => "Permission Catalog\n\nShowing :shown of :total matching permission(s):\n:items\n\nSend a permission-code or module fragment to filter this catalog.",
                     'item' => ':code — module=:module, risk=:risk, mode=:approval',
-                ],
-                'custom_role' => [
-                    'prompt' => "Manage Custom Role\n\nSend one exact command:\ncreate custom.code\nenable custom.code\ndisable custom.code\ngrant custom.code permission.code\nrevoke custom.code permission.code\n\nSystem roles cannot be edited here.",
-                    'invalid' => 'Invalid or unavailable custom-role command. Use one exact supported command and an existing permission for grant/revoke.',
                 ],
                 'confirm' => "Sensitive Access-Control Confirmation\n\n:summary\n\nNo mutation has been applied yet. Confirming creates/uses the canonical sensitive-approval flow; non-Owner administrators require an independent approver.",
                 'confirm_failed' => 'The operation could not be accepted. Authorization, target state, recent-authentication or approval policy may have changed. No unconfirmed mutation was applied.',

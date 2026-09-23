@@ -69,7 +69,6 @@ return [
                     'role_revoke' => 'حذف نقش',
                     'permission_override' => 'Override مجوز',
                     'owner_transfer' => 'انتقال مالکیت',
-                    'custom_role_command' => 'مدیریت نقش سفارشی',
                     'confirm' => 'تأیید عملیات حساس',
                     'retry_approval' => 'اجرا پس از تأیید',
                     'cancel_approval' => 'لغو درخواست تأیید',
@@ -97,16 +96,12 @@ return [
                     'invalid' => 'فرمان Override معتبر نیست. دقیقاً allow|deny|inherit و سپس یک کد مجوز موجود را ارسال کنید.',
                 ],
                 'roles' => [
-                    'list' => "فهرست نقش‌ها\n\n:items\n\nتعریف نقش‌های سیستمی توسط کد کنترل می‌شود. نقش‌های سفارشی با namespace مربوط به custom.* از بخش زیر مدیریت می‌شوند.",
+                    'list' => "فهرست نقش‌ها\n\n:items\n\nتعریف نقش‌ها در این محدوده توسط کد کنترل می‌شود. افزودن یا حذف نقش موجود از صفحه مدیر هدف انجام می‌شود.",
                     'item' => ':code — :type / :active — :permissions مجوز',
                 ],
                 'permissions' => [
                     'list' => "فهرست مجوزها\n\nنمایش :shown از :total مورد مطابق:\n:items\n\nبرای فیلترکردن، بخشی از کد مجوز یا module را ارسال کنید.",
                     'item' => ':code — module=:module، risk=:risk، mode=:approval',
-                ],
-                'custom_role' => [
-                    'prompt' => "مدیریت نقش سفارشی\n\nیکی از فرمان‌های دقیق زیر را ارسال کنید:\ncreate custom.code\nenable custom.code\ndisable custom.code\ngrant custom.code permission.code\nrevoke custom.code permission.code\n\nنقش‌های سیستمی از اینجا قابل ویرایش نیستند.",
-                    'invalid' => 'فرمان نقش سفارشی معتبر یا در دسترس نیست. از قالب دقیق و برای grant/revoke از یک مجوز موجود استفاده کنید.',
                 ],
                 'confirm' => "تأیید حساس Access Control\n\n:summary\n\nهنوز تغییری اعمال نشده است. تأیید این مرحله از جریان canonical تأیید حساس استفاده می‌کند و مدیر غیرمالک به تأیید یک مدیر مستقل نیاز دارد.",
                 'confirm_failed' => 'عملیات پذیرفته نشد. ممکن است مجوز، وضعیت هدف، احراز هویت اخیر یا سیاست تأیید تغییر کرده باشد. هیچ تغییر تأییدنشده‌ای اعمال نشد.',

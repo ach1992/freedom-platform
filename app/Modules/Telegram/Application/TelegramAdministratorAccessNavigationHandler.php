@@ -45,8 +45,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
 
     private const STATE_PERMISSIONS = 'admin_access_permissions';
 
-    private const STATE_CUSTOM_COMMAND = 'admin_access_custom_command';
-
     private const STATE_CONFIRM = 'admin_access_confirm';
 
     private const STATE_SUBMITTING = 'admin_access_submitting';
@@ -82,8 +80,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
     private const ACTION_TARGET_PERMISSION = 'navigation.admin.access.target.permission';
 
     private const ACTION_TARGET_OWNER_TRANSFER = 'navigation.admin.access.target.owner_transfer';
-
-    private const ACTION_CUSTOM_COMMAND = 'navigation.admin.access.custom_command';
 
     private const ACTION_CONFIRM = 'navigation.admin.access.confirm';
 
@@ -136,7 +132,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             self::STATE_PERMISSION_INPUT,
             self::STATE_ROLES,
             self::STATE_PERMISSIONS,
-            self::STATE_CUSTOM_COMMAND,
             self::STATE_CONFIRM,
             self::STATE_PENDING,
             self::STATE_APPROVALS,
@@ -167,7 +162,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             self::STATE_PERMISSION_INPUT => $this->handlePermissionInput($action),
             self::STATE_ROLES => $this->handleRoles($action),
             self::STATE_PERMISSIONS => $this->handlePermissions($action),
-            self::STATE_CUSTOM_COMMAND => $this->handleCustomCommand($action),
             self::STATE_CONFIRM => $this->handleConfirmation($action),
             self::STATE_PENDING => $this->handlePending($action),
             self::STATE_APPROVALS => $this->handleApprovals($action),
@@ -445,11 +439,11 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                 throw new RuntimeException('Telegram administrator role catalog payload is unsupported.');
             }
 
-            match ($action->callbackAction) {
-                self::ACTION_CUSTOM_COMMAND => $this->showCustomCommand($action),
-                self::ACTION_BACK => $this->showMenu($action),
-                default => throw new RuntimeException('Telegram administrator role catalog action is unsupported.'),
-            };
+            if ($action->callbackAction !== self::ACTION_BACK) {
+                throw new RuntimeException('Telegram administrator role catalog action is unsupported.');
+            }
+
+            $this->showMenu($action);
 
             return;
         }
@@ -492,37 +486,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         if ($action->messageText !== null) {
             $this->renderPermissions($action, $action->sessionVersion, trim($action->messageText));
         }
-    }
-
-    private function handleCustomCommand(TelegramInteractionAction $action): void
-    {
-        if ($action->kind === TelegramInteractionActionKind::Callback) {
-            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
-                throw new RuntimeException('Telegram custom role command callback is unsupported.');
-            }
-
-            $this->showRoles($action);
-
-            return;
-        }
-
-        if ($action->kind === TelegramInteractionActionKind::Back) {
-            $this->showRoles($action);
-
-            return;
-        }
-
-        if ($this->isEntryCommand($action->messageText)) {
-            $this->returnHome($action);
-
-            return;
-        }
-
-        if ($action->messageText === null) {
-            return;
-        }
-
-        $this->prepareCustomCommand($action, strtolower(trim($action->messageText)));
     }
 
     private function handleConfirmation(TelegramInteractionAction $action): void
@@ -812,24 +775,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         $this->renderPermissions($action, $session->version, $filter);
     }
 
-    private function showCustomCommand(TelegramInteractionAction $action): void
-    {
-        try {
-            $session = $this->sessions->transition(
-                $action->sessionPublicId,
-                $action->sessionVersion,
-                self::STATE_CUSTOM_COMMAND,
-                [],
-                'tg-admin-access-custom-command:'.hash('sha256', $action->requestKey),
-            );
-        } catch (DomainException) {
-            return;
-        }
-
-        $this->assertActor($action, $session->userId);
-        $this->renderCustomCommand($action, $session->version, 'prompt');
-    }
-
     private function showApprovals(TelegramInteractionAction $action): void
     {
         try {
@@ -952,60 +897,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             $session->version,
             $this->specialSummary($action, $payload),
         );
-    }
-
-    private function prepareCustomCommand(TelegramInteractionAction $action, string $input): void
-    {
-        $descriptor = null;
-
-        if (preg_match('/\Acreate\s+(custom\.[a-z0-9][a-z0-9_.-]{0,55})\z/', $input, $matches) === 1) {
-            $descriptor = [
-                'operation' => AdministratorSensitiveMutation::CUSTOM_ROLE_CREATE,
-                'role_code' => $matches[1],
-            ];
-        } elseif (preg_match('/\A(enable|disable)\s+(custom\.[a-z0-9][a-z0-9_.-]{0,55})\z/', $input, $matches) === 1) {
-            try {
-                $role = $this->queries->roleSelectionToken($action->userId, $matches[2]);
-            } catch (RuntimeException|AuthorizationException) {
-                $this->renderCustomCommand($action, $action->sessionVersion, 'invalid');
-
-                return;
-            }
-            $descriptor = [
-                'operation' => $matches[1] === 'enable'
-                    ? AdministratorSensitiveMutation::CUSTOM_ROLE_ENABLE
-                    : AdministratorSensitiveMutation::CUSTOM_ROLE_DISABLE,
-                'role' => $role,
-            ];
-        } elseif (preg_match(
-            '/\A(grant|revoke)\s+(custom\.[a-z0-9][a-z0-9_.-]{0,55})\s+([a-z0-9_.-]{1,128})\z/',
-            $input,
-            $matches,
-        ) === 1) {
-            try {
-                $role = $this->queries->roleSelectionToken($action->userId, $matches[2]);
-                $permission = $this->queries->permissionSelectionToken($action->userId, $matches[3]);
-            } catch (RuntimeException|AuthorizationException) {
-                $this->renderCustomCommand($action, $action->sessionVersion, 'invalid');
-
-                return;
-            }
-            $descriptor = [
-                'operation' => $matches[1] === 'grant'
-                    ? AdministratorSensitiveMutation::CUSTOM_ROLE_PERMISSION_GRANT
-                    : AdministratorSensitiveMutation::CUSTOM_ROLE_PERMISSION_REVOKE,
-                'permission' => $permission,
-                'role' => $role,
-            ];
-        }
-
-        if ($descriptor === null) {
-            $this->renderCustomCommand($action, $action->sessionVersion, 'invalid');
-
-            return;
-        }
-
-        $this->transitionToConfirmation($action, $descriptor);
     }
 
     private function executeMutationConfirmation(TelegramInteractionAction $action): void
@@ -1363,7 +1254,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             return;
         }
 
-        $this->showRoles($action);
+        throw new RuntimeException('Telegram administrator mutation descriptor target is unavailable.');
     }
 
     /** @param array<string, string> $descriptor */
@@ -1806,17 +1697,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         }
 
         $rows = [];
-        if ($this->administratorUsers->allowsUser($action->userId, 'access.roles.manage')) {
-            $rows[] = [$this->callbackButton(
-                $action,
-                $sessionVersion,
-                self::ACTION_CUSTOM_COMMAND,
-                'telegram.navigation.admin.access.buttons.custom_role_command',
-                $locale,
-                'roles-custom',
-                TelegramInlineButtonStyle::Primary,
-            )];
-        }
         $rows[] = [$this->callbackButton(
             $action,
             $sessionVersion,
@@ -1874,24 +1754,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             $sessionVersion,
             $text,
             'permissions',
-        );
-    }
-
-    private function renderCustomCommand(
-        TelegramInteractionAction $action,
-        int $sessionVersion,
-        string $surface,
-    ): void {
-        if (! in_array($surface, ['prompt', 'invalid'], true)) {
-            throw new RuntimeException('Telegram custom role command surface is invalid.');
-        }
-
-        $locale = $this->locale($action->userId);
-        $this->renderSimpleBack(
-            $action,
-            $sessionVersion,
-            $this->translation('telegram.navigation.admin.access.custom_role.'.$surface, $locale),
-            'custom-role-'.$surface,
         );
     }
 
@@ -2208,7 +2070,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
      */
     private function mutationDescriptor(array $payload): array
     {
-        $allowed = ['operation', 'permission', 'role', 'role_code', 'target'];
+        $allowed = ['operation', 'permission', 'role', 'target'];
         if (array_diff(array_keys($payload), $allowed) !== []) {
             throw new RuntimeException('Telegram administrator mutation descriptor has unknown fields.');
         }
@@ -2316,8 +2178,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                 $action->userId,
                 $descriptor['role'],
             );
-        } elseif (isset($descriptor['role_code'])) {
-            $roleCode = $descriptor['role_code'];
         }
         if (isset($descriptor['permission'])) {
             $permissionCode = $this->queries->resolvePermissionSelectionToken(
@@ -2436,7 +2296,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             return;
         }
 
-        $this->renderCustomCommand($action, $action->sessionVersion, 'invalid');
+        throw new RuntimeException('Telegram administrator mutation descriptor target is unavailable.');
     }
 
     private function mutationReason(AdministratorSensitiveMutation $mutation): string

@@ -20,7 +20,6 @@ final readonly class AdministratorSensitiveMutationService
         private AdministratorAccessService $access,
         private AdministratorLifecycleService $lifecycle,
         private AdministratorProvisioningService $provisioning,
-        private AdministratorRoleCatalogService $roles,
     ) {}
 
     /** @requirement ADM-002 ACL-001 ACL-002 ACL-003 SEC-002 DAT-003 QUA-001 */
@@ -180,32 +179,6 @@ final readonly class AdministratorSensitiveMutationService
                 )->changed,
                 AdministratorSensitiveMutation::ADMINISTRATOR_ENABLE => $this->provisioning->enableUser(
                     $this->requiredTargetPublicId($mutation),
-                    $mutationContext,
-                )->changed,
-                AdministratorSensitiveMutation::CUSTOM_ROLE_CREATE => $this->roles->createCustomRole(
-                    $this->requiredRole($mutation),
-                    $mutationContext,
-                )->changed,
-                AdministratorSensitiveMutation::CUSTOM_ROLE_ENABLE => $this->roles->setCustomRoleActive(
-                    $this->requiredRole($mutation),
-                    true,
-                    $mutationContext,
-                )->changed,
-                AdministratorSensitiveMutation::CUSTOM_ROLE_DISABLE => $this->roles->setCustomRoleActive(
-                    $this->requiredRole($mutation),
-                    false,
-                    $mutationContext,
-                )->changed,
-                AdministratorSensitiveMutation::CUSTOM_ROLE_PERMISSION_GRANT => $this->roles->setCustomRolePermission(
-                    $this->requiredRole($mutation),
-                    $this->requiredPermissionCode($mutation),
-                    true,
-                    $mutationContext,
-                )->changed,
-                AdministratorSensitiveMutation::CUSTOM_ROLE_PERMISSION_REVOKE => $this->roles->setCustomRolePermission(
-                    $this->requiredRole($mutation),
-                    $this->requiredPermissionCode($mutation),
-                    false,
                     $mutationContext,
                 )->changed,
                 default => throw new InvalidArgumentException('Administrator sensitive mutation operation is unsupported.'),

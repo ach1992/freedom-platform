@@ -27,16 +27,6 @@ final readonly class AdministratorSensitiveMutation
 
     public const ADMINISTRATOR_ENABLE = 'administrator_enable';
 
-    public const CUSTOM_ROLE_CREATE = 'custom_role_create';
-
-    public const CUSTOM_ROLE_ENABLE = 'custom_role_enable';
-
-    public const CUSTOM_ROLE_DISABLE = 'custom_role_disable';
-
-    public const CUSTOM_ROLE_PERMISSION_GRANT = 'custom_role_permission_grant';
-
-    public const CUSTOM_ROLE_PERMISSION_REVOKE = 'custom_role_permission_revoke';
-
     private const OPERATIONS = [
         self::ROLE_GRANT,
         self::ROLE_REVOKE,
@@ -47,11 +37,6 @@ final readonly class AdministratorSensitiveMutation
         self::ADMINISTRATOR_REACTIVATE,
         self::ADMINISTRATOR_REVOKE,
         self::ADMINISTRATOR_ENABLE,
-        self::CUSTOM_ROLE_CREATE,
-        self::CUSTOM_ROLE_ENABLE,
-        self::CUSTOM_ROLE_DISABLE,
-        self::CUSTOM_ROLE_PERMISSION_GRANT,
-        self::CUSTOM_ROLE_PERMISSION_REVOKE,
     ];
 
     public function __construct(
@@ -64,54 +49,24 @@ final readonly class AdministratorSensitiveMutation
             throw new InvalidArgumentException('Administrator sensitive mutation operation is invalid.');
         }
 
-        $targetsAdministrator = in_array($operation, [
-            self::ROLE_GRANT,
-            self::ROLE_REVOKE,
-            self::PERMISSION_ALLOW,
-            self::PERMISSION_DENY,
-            self::PERMISSION_INHERIT,
-            self::ADMINISTRATOR_SUSPEND,
-            self::ADMINISTRATOR_REACTIVATE,
-            self::ADMINISTRATOR_REVOKE,
-            self::ADMINISTRATOR_ENABLE,
-        ], true);
-        if ($targetsAdministrator !== ($targetUserPublicId !== null)) {
-            throw new InvalidArgumentException('Administrator sensitive mutation target is invalid.');
-        }
-        if ($targetUserPublicId !== null
-            && preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $targetUserPublicId) !== 1) {
+        if ($targetUserPublicId === null
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $targetUserPublicId) !== 1) {
             throw new InvalidArgumentException('Administrator sensitive mutation target public ID is invalid.');
         }
 
         $needsRole = in_array($operation, [
             self::ROLE_GRANT,
             self::ROLE_REVOKE,
-            self::CUSTOM_ROLE_CREATE,
-            self::CUSTOM_ROLE_ENABLE,
-            self::CUSTOM_ROLE_DISABLE,
-            self::CUSTOM_ROLE_PERMISSION_GRANT,
-            self::CUSTOM_ROLE_PERMISSION_REVOKE,
         ], true);
         if ($needsRole !== ($roleCode !== null)
             || ($roleCode !== null && preg_match('/\A[a-z0-9_.-]{1,64}\z/', $roleCode) !== 1)) {
             throw new InvalidArgumentException('Administrator sensitive mutation role is invalid.');
-        }
-        if (in_array($operation, [
-            self::CUSTOM_ROLE_CREATE,
-            self::CUSTOM_ROLE_ENABLE,
-            self::CUSTOM_ROLE_DISABLE,
-            self::CUSTOM_ROLE_PERMISSION_GRANT,
-            self::CUSTOM_ROLE_PERMISSION_REVOKE,
-        ], true) && ! str_starts_with((string) $roleCode, 'custom.')) {
-            throw new InvalidArgumentException('Administrator sensitive mutation custom role is invalid.');
         }
 
         $needsPermission = in_array($operation, [
             self::PERMISSION_ALLOW,
             self::PERMISSION_DENY,
             self::PERMISSION_INHERIT,
-            self::CUSTOM_ROLE_PERMISSION_GRANT,
-            self::CUSTOM_ROLE_PERMISSION_REVOKE,
         ], true);
         if ($needsPermission !== ($permissionCode !== null)
             || ($permissionCode !== null && preg_match('/\A[a-z0-9_.-]{1,128}\z/', $permissionCode) !== 1)) {
@@ -123,12 +78,7 @@ final readonly class AdministratorSensitiveMutation
     {
         return match ($this->operation) {
             self::ROLE_GRANT,
-            self::ROLE_REVOKE,
-            self::CUSTOM_ROLE_CREATE,
-            self::CUSTOM_ROLE_ENABLE,
-            self::CUSTOM_ROLE_DISABLE,
-            self::CUSTOM_ROLE_PERMISSION_GRANT,
-            self::CUSTOM_ROLE_PERMISSION_REVOKE => 'access.roles.manage',
+            self::ROLE_REVOKE => 'access.roles.manage',
             self::PERMISSION_ALLOW,
             self::PERMISSION_DENY,
             self::PERMISSION_INHERIT => 'access.permissions.override',
@@ -154,7 +104,7 @@ final readonly class AdministratorSensitiveMutation
     {
         return implode(' ', array_values(array_filter([
             'operation='.$this->operation,
-            $this->targetUserPublicId === null ? null : 'target='.$this->targetUserPublicId,
+            'target='.$this->targetUserPublicId,
             $this->roleCode === null ? null : 'role='.$this->roleCode,
             $this->permissionCode === null ? null : 'permission='.$this->permissionCode,
         ], static fn (?string $value): bool => $value !== null)));
@@ -170,7 +120,7 @@ final readonly class AdministratorSensitiveMutation
         };
     }
 
-    /** @return array{operation:string,target_user_public_id:?string,role_code:?string,permission_code:?string} */
+    /** @return array{operation:string,target_user_public_id:string,role_code:?string,permission_code:?string} */
     public function toPayload(): array
     {
         return [
@@ -186,7 +136,7 @@ final readonly class AdministratorSensitiveMutation
     {
         if (array_keys($payload) !== ['operation', 'target_user_public_id', 'role_code', 'permission_code']
             || ! is_string($payload['operation'] ?? null)
-            || (($payload['target_user_public_id'] ?? null) !== null && ! is_string($payload['target_user_public_id']))
+            || ! is_string($payload['target_user_public_id'] ?? null)
             || (($payload['role_code'] ?? null) !== null && ! is_string($payload['role_code']))
             || (($payload['permission_code'] ?? null) !== null && ! is_string($payload['permission_code']))) {
             throw new InvalidArgumentException('Administrator sensitive mutation payload is invalid.');
