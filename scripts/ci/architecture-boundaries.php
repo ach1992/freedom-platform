@@ -52,6 +52,7 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramAdministratorAccessNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',

@@ -99,6 +99,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
     public function test_reviewed_production_source_set_contains_only_bounded_private_journeys(): void
     {
         self::assertSame([
+            'app/Modules/Telegram/Application/TelegramAdministratorAccessNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
