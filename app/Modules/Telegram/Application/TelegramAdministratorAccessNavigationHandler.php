@@ -1469,10 +1469,14 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         if ($target->hasAdministrator()) {
             try {
                 $snapshot = $this->queries->forUserPublicId($action->userId, $target->userPublicId);
-                $roles = $snapshot->roleCodes === [] ? $notAvailable : implode(', ', $snapshot->roleCodes);
-                $overrides = $snapshot->permissionOverrides === []
-                    ? $notAvailable
-                    : implode("\n", $snapshot->permissionOverrides);
+                $roles = ! $snapshot->rolesVisible
+                    ? $this->translation('telegram.navigation.admin.access.not_permitted', $locale)
+                    : ($snapshot->roleCodes === [] ? $notAvailable : implode(', ', $snapshot->roleCodes));
+                $overrides = ! $snapshot->permissionOverridesVisible
+                    ? $this->translation('telegram.navigation.admin.access.not_permitted', $locale)
+                    : ($snapshot->permissionOverrides === []
+                        ? $notAvailable
+                        : implode("\n", $snapshot->permissionOverrides));
                 $audit = $snapshot->recentAuditActions === []
                     ? $notAvailable
                     : implode("\n", $snapshot->recentAuditActions);

@@ -53,6 +53,7 @@ return [
             'access' => [
                 'menu' => "Access Control\n\nManage administrator identities, roles, permission overrides, sensitive approvals and ownership transfers through the canonical AccessControl authorities. Every write is re-authorized at execution time.",
                 'not_available' => 'None',
+                'not_permitted' => 'Hidden by current permission',
                 'yes' => 'Yes',
                 'no' => 'No',
                 'buttons' => [

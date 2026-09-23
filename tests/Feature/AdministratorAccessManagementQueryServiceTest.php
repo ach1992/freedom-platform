@@ -124,6 +124,61 @@ final class AdministratorAccessManagementQueryServiceTest extends TestCase
         }
     }
 
+    public function test_target_snapshot_redacts_role_and_override_details_by_current_permission(): void
+    {
+        [, $ownerAdministratorId] = $this->administrator(true);
+        [$accountManagerUserId, $accountManagerAdministratorId] = $this->administrator();
+        [, $targetAdministratorId, $targetPublicId] = $this->administrator();
+
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $accountManagerAdministratorId,
+            'admins.accounts.manage',
+        );
+
+        $supportRoleId = (int) DB::table('roles')->where('code', 'support')->value('id');
+        DB::table('administrator_role_assignments')->insert([
+            'administrator_id' => $targetAdministratorId,
+            'role_id' => $supportRoleId,
+            'granted_by_administrator_id' => $ownerAdministratorId,
+            'granted_at' => now('UTC'),
+            'revoked_at' => null,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+        $permissionId = (int) DB::table('permissions')->where('code', 'identity.customers.view')->value('id');
+        DB::table('administrator_permission_overrides')->insert([
+            'administrator_id' => $targetAdministratorId,
+            'permission_id' => $permissionId,
+            'effect' => 'deny',
+            'changed_by_administrator_id' => $ownerAdministratorId,
+            'reason_code' => 'test',
+            'reason' => 'Test override.',
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+
+        $service = $this->app->make(AdministratorAccessManagementQueryService::class);
+        $restricted = $service->forUserPublicId($accountManagerUserId, $targetPublicId);
+
+        self::assertFalse($restricted->rolesVisible);
+        self::assertSame([], $restricted->roleCodes);
+        self::assertFalse($restricted->permissionOverridesVisible);
+        self::assertSame([], $restricted->permissionOverrides);
+
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $accountManagerAdministratorId,
+            'access.permissions.override',
+        );
+        $permitted = $service->forUserPublicId($accountManagerUserId, $targetPublicId);
+
+        self::assertTrue($permitted->rolesVisible);
+        self::assertSame(['support'], $permitted->roleCodes);
+        self::assertTrue($permitted->permissionOverridesVisible);
+        self::assertSame(['identity.customers.view=deny'], $permitted->permissionOverrides);
+    }
+
     public function test_target_detail_authority_is_rechecked_after_management_permission_is_lost(): void
     {
         [$ownerUserId, $ownerAdministratorId] = $this->administrator(true);

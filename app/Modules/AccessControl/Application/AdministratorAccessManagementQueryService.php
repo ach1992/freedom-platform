@@ -177,27 +177,40 @@ final readonly class AdministratorAccessManagementQueryService
         }
 
         $administratorId = $this->positiveInt($row->id ?? null, 'Administrator target ID');
-        $roles = $connection->table('administrator_role_assignments as assignment')
-            ->join('roles as role', 'role.id', '=', 'assignment.role_id')
-            ->where('assignment.administrator_id', $administratorId)
-            ->whereNull('assignment.revoked_at')
-            ->orderBy('role.code')
-            ->pluck('role.code')
-            ->map(fn (mixed $value): string => $this->token($value, 64, 'Administrator role code'))
-            ->values()
-            ->all();
+        $rolesVisible = $this->administrators->allowsUser($actorUserId, 'access.roles.manage')
+            || $this->administrators->allowsUser($actorUserId, 'access.permissions.override');
+        $permissionOverridesVisible = $this->administrators->allowsUser(
+            $actorUserId,
+            'access.permissions.override',
+        );
 
-        $overrides = $connection->table('administrator_permission_overrides as override_row')
-            ->join('permissions as permission', 'permission.id', '=', 'override_row.permission_id')
-            ->where('override_row.administrator_id', $administratorId)
-            ->orderBy('permission.code')
-            ->get(['permission.code', 'override_row.effect'])
-            ->map(function (object $override): string {
-                return $this->token($override->code ?? null, 128, 'Administrator override permission')
-                    .'='.$this->token($override->effect ?? null, 16, 'Administrator override effect');
-            })
-            ->values()
-            ->all();
+        $roles = [];
+        if ($rolesVisible) {
+            $roles = $connection->table('administrator_role_assignments as assignment')
+                ->join('roles as role', 'role.id', '=', 'assignment.role_id')
+                ->where('assignment.administrator_id', $administratorId)
+                ->whereNull('assignment.revoked_at')
+                ->orderBy('role.code')
+                ->pluck('role.code')
+                ->map(fn (mixed $value): string => $this->token($value, 64, 'Administrator role code'))
+                ->values()
+                ->all();
+        }
+
+        $overrides = [];
+        if ($permissionOverridesVisible) {
+            $overrides = $connection->table('administrator_permission_overrides as override_row')
+                ->join('permissions as permission', 'permission.id', '=', 'override_row.permission_id')
+                ->where('override_row.administrator_id', $administratorId)
+                ->orderBy('permission.code')
+                ->get(['permission.code', 'override_row.effect'])
+                ->map(function (object $override): string {
+                    return $this->token($override->code ?? null, 128, 'Administrator override permission')
+                        .'='.$this->token($override->effect ?? null, 16, 'Administrator override effect');
+                })
+                ->values()
+                ->all();
+        }
 
         $audit = $connection->table('audit_logs')
             ->where('target_type', 'administrator')
@@ -222,7 +235,9 @@ final readonly class AdministratorAccessManagementQueryService
             $this->positiveInt($row->permission_version ?? null, 'Administrator permission version'),
             $lastAuthenticatedAt,
             array_values($roles),
+            $rolesVisible,
             array_values($overrides),
+            $permissionOverridesVisible,
             array_values($audit),
         );
     }

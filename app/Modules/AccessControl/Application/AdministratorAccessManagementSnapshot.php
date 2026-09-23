@@ -21,7 +21,9 @@ final readonly class AdministratorAccessManagementSnapshot
         public int $permissionVersion,
         public ?string $lastAuthenticatedAt,
         public array $roleCodes,
+        public bool $rolesVisible,
         public array $permissionOverrides,
+        public bool $permissionOverridesVisible,
         public array $recentAuditActions,
     ) {
         if ($administratorId < 1
