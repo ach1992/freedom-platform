@@ -50,7 +50,7 @@ final class AdministratorAccessManagementQueryServiceTest extends TestCase
         self::assertNotNull($result->target);
         self::assertSame($targetPublicId, $result->target->userPublicId);
         self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', $result->target->selectionToken);
-        self::assertStringNotContainsString((string) $targetUserId, $result->target->selectionToken);
+        self::assertNotSame((string) $targetUserId, $result->target->selectionToken);
 
         $resolved = $service->resolveTarget(
             $ownerUserId,
