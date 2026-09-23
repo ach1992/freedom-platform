@@ -7,7 +7,10 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryService;
 use App\Modules\AccessControl\Application\AdministratorAccessTarget;
 use App\Modules\AccessControl\Application\AdministratorAccessTargetSearchDisposition;
+use App\Modules\AccessControl\Application\AdministratorOwnerTransferSummary;
 use App\Modules\AccessControl\Application\AdministratorOwnerTransferTelegramService;
+use App\Modules\AccessControl\Application\AdministratorRoleCatalogItem;
+use App\Modules\AccessControl\Application\AdministratorSensitiveApprovalSummary;
 use App\Modules\AccessControl\Application\AdministratorSensitiveMutation;
 use App\Modules\AccessControl\Application\AdministratorSensitiveMutationService;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
@@ -918,7 +921,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
     }
 
     /**
-     * @param array<string, string> $extra
+     * @param  array<string, string>  $extra
      */
     private function prepareSpecialConfirmation(
         TelegramInteractionAction $action,
@@ -1427,18 +1430,20 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         $locale = $this->locale($action->userId);
         $rows = [];
 
-        $search = $this->callbacks->issue(
-            $action->sessionPublicId,
-            $sessionVersion,
-            self::ACTION_TARGET_SEARCH,
-            [],
-            'tg-admin-access-menu-search:'.$action->requestKey,
-        );
-        $rows[] = [new TelegramInlineCallbackButton(
-            $this->translation('telegram.navigation.admin.access.buttons.target_search', $locale),
-            $search->publicId,
-            TelegramInlineButtonStyle::Primary,
-        )];
+        if ($this->targetManagementAvailableForUser($action->userId)) {
+            $search = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_TARGET_SEARCH,
+                [],
+                'tg-admin-access-menu-search:'.$action->requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.access.buttons.target_search', $locale),
+                $search->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
 
         if ($this->administratorUsers->allowsUser($action->userId, 'access.roles.manage')) {
             $roles = $this->callbacks->issue(
@@ -1779,7 +1784,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         );
     }
 
-    /** @param list<\App\Modules\AccessControl\Application\AdministratorRoleCatalogItem> $roles */
+    /** @param list<AdministratorRoleCatalogItem> $roles */
     private function renderRoles(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -1988,7 +1993,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
     }
 
     /**
-     * @param list<\App\Modules\AccessControl\Application\AdministratorSensitiveApprovalSummary> $approvals
+     * @param  list<AdministratorSensitiveApprovalSummary>  $approvals
      */
     private function renderApprovals(
         TelegramInteractionAction $action,
@@ -2067,7 +2072,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
     }
 
     /**
-     * @param list<\App\Modules\AccessControl\Application\AdministratorOwnerTransferSummary> $transfers
+     * @param  list<AdministratorOwnerTransferSummary>  $transfers
      */
     private function renderTransfers(
         TelegramInteractionAction $action,
@@ -2439,6 +2444,14 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         }
 
         return 'telegram-admin-access:'.$action->callbackPublicId;
+    }
+
+    private function targetManagementAvailableForUser(int $userId): bool
+    {
+        return $this->administratorUsers->allowsUser($userId, 'admins.accounts.manage')
+            || $this->administratorUsers->allowsUser($userId, 'access.roles.manage')
+            || $this->administratorUsers->allowsUser($userId, 'access.permissions.override')
+            || $this->administratorUsers->allowsUser($userId, 'admins.transfer_ownership');
     }
 
     private function returnToAdminControlFailClosed(TelegramInteractionAction $action): void

@@ -106,13 +106,13 @@ return [
                 ],
                 'custom_role' => [
                     'prompt' => "Manage Custom Role\n\nSend one exact command:\ncreate custom.code\nenable custom.code\ndisable custom.code\ngrant custom.code permission.code\nrevoke custom.code permission.code\n\nSystem roles cannot be edited here.",
-                    'invalid' => "Invalid or unavailable custom-role command. Use one exact supported command and an existing permission for grant/revoke.",
+                    'invalid' => 'Invalid or unavailable custom-role command. Use one exact supported command and an existing permission for grant/revoke.',
                 ],
                 'confirm' => "Sensitive Access-Control Confirmation\n\n:summary\n\nNo mutation has been applied yet. Confirming creates/uses the canonical sensitive-approval flow; non-Owner administrators require an independent approver.",
                 'confirm_failed' => 'The operation could not be accepted. Authorization, target state, recent-authentication or approval policy may have changed. No unconfirmed mutation was applied.',
                 'pending' => [
                     'pending' => "Sensitive approval is pending.\n\nAn independent authorized administrator must approve it. This interaction remains bound to the exact requested mutation. After approval, press “Execute after approval”.",
-                    'not_ready' => "The exact mutation is not executable yet. The approval may still be pending, rejected, cancelled, expired, or authorization may have changed.",
+                    'not_ready' => 'The exact mutation is not executable yet. The approval may still be pending, rejected, cancelled, expired, or authorization may have changed.',
                 ],
                 'approvals' => [
                     'list' => "Pending Sensitive Approvals\n\n:items\n\nApproval does not execute the mutation. The original requester must execute the exact bound action after approval.",
