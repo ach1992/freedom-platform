@@ -22,7 +22,7 @@ final readonly class TelegramAdministratorPaymentSearchSource implements Telegra
     {
         return $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::PAYMENT_PERMISSION,
+            AdministratorSearchPermissions::PAYMENT_PERMISSION,
         );
     }
 
@@ -31,11 +31,11 @@ final readonly class TelegramAdministratorPaymentSearchSource implements Telegra
     {
         $this->administrators->authorizeUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::PAYMENT_PERMISSION,
+            AdministratorSearchPermissions::PAYMENT_PERMISSION,
         );
         $mayViewEvidence = $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::PAYMENT_EVIDENCE_PERMISSION,
+            AdministratorSearchPermissions::PAYMENT_EVIDENCE_PERMISSION,
         );
 
         $connection = $this->database->connection();

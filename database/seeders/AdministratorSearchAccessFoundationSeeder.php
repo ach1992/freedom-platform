@@ -10,24 +10,16 @@ use RuntimeException;
 
 final class AdministratorSearchAccessFoundationSeeder extends Seeder
 {
-    public const ORDER_PERMISSION = 'administration.search.orders';
-
-    public const PAYMENT_PERMISSION = 'administration.search.payments';
-
-    public const PAYMENT_EVIDENCE_PERMISSION = 'administration.search.payment_evidence';
-
-    public const SERVICE_PERMISSION = 'administration.search.services';
-
     /** @requirement ADM-001 ACL-001 ACL-002 SEC-002 SEC-003 */
     public function run(): void
     {
         $now = now('UTC');
 
         $definitions = [
-            [self::ORDER_PERMISSION, 'standard'],
-            [self::PAYMENT_PERMISSION, 'standard'],
-            [self::PAYMENT_EVIDENCE_PERMISSION, 'high'],
-            [self::SERVICE_PERMISSION, 'standard'],
+            [AdministratorSearchPermissions::ORDER, 'standard'],
+            [AdministratorSearchPermissions::PAYMENT, 'standard'],
+            [AdministratorSearchPermissions::PAYMENT_EVIDENCE, 'high'],
+            [AdministratorSearchPermissions::SERVICE, 'standard'],
         ];
 
         foreach ($definitions as [$code, $risk]) {
@@ -43,21 +35,21 @@ final class AdministratorSearchAccessFoundationSeeder extends Seeder
 
         $grants = [
             'finance' => [
-                self::ORDER_PERMISSION,
-                self::PAYMENT_PERMISSION,
-                self::PAYMENT_EVIDENCE_PERMISSION,
+                AdministratorSearchPermissions::ORDER,
+                AdministratorSearchPermissions::PAYMENT,
+                AdministratorSearchPermissions::PAYMENT_EVIDENCE,
             ],
             'support' => [
-                self::ORDER_PERMISSION,
-                self::PAYMENT_PERMISSION,
-                self::SERVICE_PERMISSION,
+                AdministratorSearchPermissions::ORDER,
+                AdministratorSearchPermissions::PAYMENT,
+                AdministratorSearchPermissions::SERVICE,
             ],
             'technical' => [
-                self::ORDER_PERMISSION,
-                self::SERVICE_PERMISSION,
+                AdministratorSearchPermissions::ORDER,
+                AdministratorSearchPermissions::SERVICE,
             ],
             'sales_content' => [
-                self::ORDER_PERMISSION,
+                AdministratorSearchPermissions::ORDER,
             ],
         ];
 

@@ -22,7 +22,7 @@ final readonly class TelegramAdministratorOrderSearchSource implements TelegramA
     {
         return $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::ORDER_PERMISSION,
+            AdministratorSearchPermissions::ORDER_PERMISSION,
         );
     }
 
@@ -31,7 +31,7 @@ final readonly class TelegramAdministratorOrderSearchSource implements TelegramA
     {
         $this->administrators->authorizeUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::ORDER_PERMISSION,
+            AdministratorSearchPermissions::ORDER_PERMISSION,
         );
 
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $query) !== 1) {

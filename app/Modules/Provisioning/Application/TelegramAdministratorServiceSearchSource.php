@@ -22,7 +22,7 @@ final readonly class TelegramAdministratorServiceSearchSource implements Telegra
     {
         return $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::SERVICE_PERMISSION,
+            AdministratorSearchPermissions::SERVICE_PERMISSION,
         );
     }
 
@@ -31,7 +31,7 @@ final readonly class TelegramAdministratorServiceSearchSource implements Telegra
     {
         $this->administrators->authorizeUser(
             $actorUserId,
-            AdministratorSearchAccessFoundationSeeder::SERVICE_PERMISSION,
+            AdministratorSearchPermissions::SERVICE_PERMISSION,
         );
 
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $query) !== 1) {

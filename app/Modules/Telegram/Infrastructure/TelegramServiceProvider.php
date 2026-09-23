@@ -158,6 +158,12 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramNavigationEntryGateway::class),
             ),
         );
+        $this->app->singleton(
+            TelegramAdministratorSearchService::class,
+            fn (Application $application): TelegramAdministratorSearchService => new TelegramAdministratorSearchService(
+                $application->tagged(TelegramAdministratorSearchSource::class),
+            ),
+        );
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);

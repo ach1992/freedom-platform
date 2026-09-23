@@ -91,6 +91,12 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramAgentReport::class, AgentReportService::class);
         $this->app->bind(TelegramAgentBulkPurchase::class, TelegramAgentBulkPurchaseService::class);
         $this->app->bind(TelegramAdministratorCustomerTargetDiscovery::class, TelegramAdministratorCustomerTargetDiscoveryService::class);
+        $this->app->tag([
+            TelegramAdministratorIdentitySearchSource::class,
+            TelegramAdministratorOrderSearchSource::class,
+            TelegramAdministratorPaymentSearchSource::class,
+            TelegramAdministratorServiceSearchSource::class,
+        ], TelegramAdministratorSearchSource::class);
         $this->app->bind(TelegramClientGuideCatalog::class, TelegramClientGuideCatalogService::class);
         $this->app->bind(TelegramCustomerPurchaseCatalog::class, TelegramCustomerPurchaseCatalogService::class);
         $this->app->bind(TelegramCustomerTrialCatalog::class, TelegramCustomerTrialCatalogService::class);
