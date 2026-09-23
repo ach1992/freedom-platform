@@ -377,9 +377,8 @@ return new class extends Migration
     }
 
     /**
-     * Compose the persistent marker table before staged triggers are installed.
-     * The row itself remains absent until every trigger is ready, so an interrupted
-     * initial composition changes no runtime behavior and performs no legacy read.
+     * Compose the persistent marker table and inactive singleton before staged
+     * triggers are installed. Re-entry never deactivates an already-active cut.
      */
     private function prepareUpgradeFence(): void
     {
@@ -387,9 +386,13 @@ return new class extends Migration
 CREATE TABLE IF NOT EXISTS nowpayments_terminal_conflict_upgrade_fence (
     id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
     active TINYINT UNSIGNED NOT NULL,
-    activated_at DATETIME(6) NOT NULL,
+    activated_at DATETIME(6) NULL,
     CONSTRAINT nowpayments_terminal_conflict_upgrade_fence_id_chk CHECK (id = 1),
-    CONSTRAINT nowpayments_terminal_conflict_upgrade_fence_active_chk CHECK (active = 1)
+    CONSTRAINT nowpayments_terminal_conflict_upgrade_fence_active_chk CHECK (active IN (0, 1)),
+    CONSTRAINT nowpayments_terminal_conflict_upgrade_fence_state_chk CHECK (
+        (active = 0 AND activated_at IS NULL)
+        OR (active = 1 AND activated_at IS NOT NULL)
+    )
 ) ENGINE=InnoDB
 SQL);
 
@@ -407,18 +410,41 @@ SQL);
         if (! DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts')) {
             throw new RuntimeException('Purchase provider mutation attempt authority is required before conflict migration.');
         }
+
+        DB::statement(<<<'SQL'
+INSERT IGNORE INTO nowpayments_terminal_conflict_upgrade_fence (id, active, activated_at)
+VALUES (1, 0, NULL)
+SQL);
+        $fence = DB::table('nowpayments_terminal_conflict_upgrade_fence')
+            ->where('id', 1)
+            ->first(['active', 'activated_at']);
+        if ($fence === null
+            || ! in_array((int) $fence->active, [0, 1], true)
+            || ((int) $fence->active === 0 && $fence->activated_at !== null)
+            || ((int) $fence->active === 1 && $fence->activated_at === null)) {
+            throw new RuntimeException('NOWPayments terminal-conflict upgrade fence singleton is unavailable or invalid.');
+        }
     }
 
     /**
-     * Single-DML financial cut after every staged trigger is composed.
+     * Single-row financial cut after every staged trigger is composed. Every staged
+     * writer locks this same row, so this UPDATE is the DB linearization point.
      */
     private function activateUpgradeFence(): void
     {
         DB::statement(<<<'SQL'
-INSERT INTO nowpayments_terminal_conflict_upgrade_fence (id, active, activated_at)
-VALUES (1, 1, UTC_TIMESTAMP(6))
-ON DUPLICATE KEY UPDATE active = 1, activated_at = VALUES(activated_at)
+UPDATE nowpayments_terminal_conflict_upgrade_fence
+SET activated_at = COALESCE(activated_at, UTC_TIMESTAMP(6)),
+    active = 1
+WHERE id = 1
 SQL);
+        if (! DB::table('nowpayments_terminal_conflict_upgrade_fence')
+            ->where('id', 1)
+            ->where('active', 1)
+            ->whereNotNull('activated_at')
+            ->exists()) {
+            throw new RuntimeException('NOWPayments terminal-conflict upgrade fence activation did not persist.');
+        }
     }
 
     private function retirePreparedProviderMutationAttempts(): void
@@ -508,11 +534,15 @@ CREATE OR REPLACE TRIGGER payment_intents_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON payment_intents
 FOR EACH ROW
 BEGIN
-    IF NEW.purpose = 'purchase'
-       AND EXISTS (
-           SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-           WHERE fence_row.id = 1 AND fence_row.active = 1
-       ) THEN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF NEW.purpose = 'purchase' AND upgrade_fence_active = 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase payment creation is fenced while NOWPayments conflict authority migration converges.';
     END IF;
 END
@@ -523,13 +553,18 @@ CREATE OR REPLACE TRIGGER payment_intents_np_conflict_upgrade_update_fence
 BEFORE UPDATE ON payment_intents
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE exact_reopen_count INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
-    IF EXISTS (
-        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        WHERE fence_row.id = 1 AND fence_row.active = 1
-    ) AND OLD.purpose = 'purchase' THEN
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+
+    IF upgrade_fence_active = 1 AND OLD.purpose = 'purchase' THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
         FROM purchase_provider_mutation_attempts attempt_row
         WHERE attempt_row.id = @purchase_provider_mutation_attempt_id
@@ -576,10 +611,15 @@ CREATE OR REPLACE TRIGGER nowpayments_authority_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON nowpayments_payment_authorities
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
-        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        WHERE fence_row.id = 1 AND fence_row.active = 1
-    ) THEN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'NOWPayments authority creation is fenced while conflict authority migration converges.';
     END IF;
 END
@@ -590,13 +630,18 @@ CREATE OR REPLACE TRIGGER nowpayments_authority_np_conflict_upgrade_update_fence
 BEFORE UPDATE ON nowpayments_payment_authorities
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE exact_reopen_count INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
-    IF EXISTS (
-        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        WHERE fence_row.id = 1 AND fence_row.active = 1
-    ) THEN
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+
+    IF upgrade_fence_active = 1 THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
         FROM purchase_provider_mutation_attempts attempt_row
         INNER JOIN payment_intents intent_row ON intent_row.id = OLD.payment_intent_id
@@ -640,12 +685,17 @@ CREATE OR REPLACE TRIGGER nowpayments_observation_np_conflict_upgrade_insert_fen
 BEFORE INSERT ON nowpayments_payment_observations
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
-    IF EXISTS (
-        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        WHERE fence_row.id = 1 AND fence_row.active = 1
-    ) THEN
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+
+    IF upgrade_fence_active = 1 THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
         FROM purchase_provider_mutation_attempts attempt_row
         INNER JOIN nowpayments_payment_authorities authority_row
@@ -670,11 +720,18 @@ CREATE OR REPLACE TRIGGER zarinpal_request_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON zarinpal_payment_requests
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        FROM payment_intents intent_row
+        WHERE intent_row.id = NEW.payment_intent_id
           AND intent_row.purpose = 'purchase'
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zarinpal purchase authority creation is fenced during NOWPayments conflict migration.';
@@ -687,11 +744,18 @@ CREATE OR REPLACE TRIGGER usdt_authority_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON usdt_payment_authorities
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        FROM payment_intents intent_row
+        WHERE intent_row.id = NEW.payment_intent_id
           AND intent_row.purpose = 'purchase'
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'USDT purchase authority creation is fenced during NOWPayments conflict migration.';
@@ -704,11 +768,18 @@ CREATE OR REPLACE TRIGGER c2c_reservation_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON c2c_amount_reservations
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        FROM payment_intents intent_row
+        WHERE intent_row.id = NEW.payment_intent_id
           AND intent_row.purpose = 'purchase'
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Card-to-card purchase authority creation is fenced during NOWPayments conflict migration.';
@@ -721,11 +792,18 @@ CREATE OR REPLACE TRIGGER gift_card_submission_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON gift_card_submissions
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        FROM payment_intents intent_row
+        WHERE intent_row.id = NEW.payment_intent_id
           AND intent_row.purpose = 'purchase'
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Gift-card purchase authority creation is fenced during NOWPayments conflict migration.';
@@ -738,12 +816,20 @@ CREATE OR REPLACE TRIGGER wallet_hold_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON wallet_holds
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
     IF NEW.source_type = 'payment_intent'
+       AND upgrade_fence_active = 1
        AND EXISTS (
            SELECT 1
-           FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-           INNER JOIN payment_intents intent_row ON intent_row.public_id = NEW.source_id
-           WHERE fence_row.id = 1 AND fence_row.active = 1
+           FROM payment_intents intent_row
+           WHERE intent_row.public_id = NEW.source_id
              AND intent_row.purpose = 'purchase'
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet purchase hold creation is fenced during NOWPayments conflict migration.';
@@ -756,10 +842,15 @@ CREATE OR REPLACE TRIGGER purchase_wallet_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON purchase_wallet_reservations
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
-        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        WHERE fence_row.id = 1 AND fence_row.active = 1
-    ) THEN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet purchase reservation creation is fenced during NOWPayments conflict migration.';
     END IF;
 END
@@ -770,11 +861,18 @@ CREATE OR REPLACE TRIGGER promotion_reservation_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON promotion_usage_reservations
 FOR EACH ROW
 BEGIN
-    IF EXISTS (
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN quotes quote_row ON quote_row.id = NEW.quote_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        FROM quotes quote_row
+        WHERE quote_row.id = NEW.quote_id
           AND quote_row.action_snapshot = 'purchase'
     ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Purchase promotion reservation creation is fenced during NOWPayments conflict migration.';
@@ -787,15 +885,21 @@ CREATE OR REPLACE TRIGGER promotion_release_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON promotion_usage_releases
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
-    IF EXISTS (
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN promotion_usage_reservations reservation_row
-            ON reservation_row.id = NEW.promotion_usage_reservation_id
+        FROM promotion_usage_reservations reservation_row
         INNER JOIN quotes quote_row ON quote_row.id = reservation_row.quote_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        WHERE reservation_row.id = NEW.promotion_usage_reservation_id
           AND quote_row.action_snapshot = 'purchase'
     ) THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
@@ -823,12 +927,20 @@ CREATE OR REPLACE TRIGGER wallet_hold_np_conflict_upgrade_update_fence
 BEFORE UPDATE ON wallet_holds
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
     IF OLD.source_type = 'payment_intent'
+       AND upgrade_fence_active = 1
        AND EXISTS (
            SELECT 1
-           FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-           INNER JOIN payment_intents intent_row ON intent_row.public_id = OLD.source_id
-           WHERE fence_row.id = 1 AND fence_row.active = 1
+           FROM payment_intents intent_row
+           WHERE intent_row.public_id = OLD.source_id
              AND intent_row.purpose = 'purchase'
        ) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Wallet purchase hold mutation is fenced during NOWPayments conflict migration.';
@@ -841,12 +953,17 @@ CREATE OR REPLACE TRIGGER promotion_redemption_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON promotion_usage_redemptions
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
-    IF EXISTS (
-        SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        WHERE fence_row.id = 1 AND fence_row.active = 1
-    ) THEN
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+
+    IF upgrade_fence_active = 1 THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
         FROM purchase_provider_mutation_attempts attempt_row
         INNER JOIN purchase_settlements settlement_row
@@ -872,14 +989,19 @@ CREATE OR REPLACE TRIGGER orders_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON orders
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
 
     IF NEW.source_type = 'purchase'
        AND (NEW.state = 'paid' OR NEW.purchase_settlement_id IS NOT NULL OR NEW.payment_intent_id IS NOT NULL)
-       AND EXISTS (
-           SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-           WHERE fence_row.id = 1 AND fence_row.active = 1
-       ) THEN
+       AND upgrade_fence_active = 1 THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
         FROM purchase_provider_mutation_attempts attempt_row
         INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
@@ -901,14 +1023,19 @@ CREATE OR REPLACE TRIGGER orders_np_conflict_upgrade_update_fence
 BEFORE UPDATE ON orders
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
+
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
 
     IF OLD.source_type = 'purchase'
        AND (NEW.state = 'paid' OR NEW.purchase_settlement_id IS NOT NULL OR NEW.payment_intent_id IS NOT NULL)
-       AND EXISTS (
-           SELECT 1 FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-           WHERE fence_row.id = 1 AND fence_row.active = 1
-       ) THEN
+       AND upgrade_fence_active = 1 THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
         FROM purchase_provider_mutation_attempts attempt_row
         INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
@@ -930,13 +1057,20 @@ CREATE OR REPLACE TRIGGER purchase_settlement_np_conflict_upgrade_insert_fence
 BEFORE INSERT ON purchase_settlements
 FOR EACH ROW
 BEGIN
+    DECLARE upgrade_fence_active INT DEFAULT 0;
     DECLARE provider_mutation_capability_count INT DEFAULT 0;
 
-    IF EXISTS (
+    SELECT active INTO upgrade_fence_active
+    FROM nowpayments_terminal_conflict_upgrade_fence
+    WHERE id = 1
+    LIMIT 1
+    FOR UPDATE;
+
+
+    IF upgrade_fence_active = 1 AND EXISTS (
         SELECT 1
-        FROM nowpayments_terminal_conflict_upgrade_fence fence_row
-        INNER JOIN payment_intents intent_row ON intent_row.id = NEW.payment_intent_id
-        WHERE fence_row.id = 1 AND fence_row.active = 1
+        FROM payment_intents intent_row
+        WHERE intent_row.id = NEW.payment_intent_id
           AND intent_row.purpose = 'purchase'
     ) THEN
         SELECT COUNT(*) INTO provider_mutation_capability_count
@@ -960,7 +1094,12 @@ SQL);
     private function releaseUpgradeFence(): void
     {
         if (DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence')) {
-            DB::table('nowpayments_terminal_conflict_upgrade_fence')->where('id', 1)->delete();
+            // Reopen on the same serialization row only after canonical successor (up)
+            // or predecessor (down) guards are composed. Keeping the row present until
+            // trigger teardown avoids recreating an absent-row authorization window.
+            DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                ->where('id', 1)
+                ->update(['active' => 0, 'activated_at' => null]);
         }
 
         foreach ([

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -176,15 +177,23 @@ SQL,
             return;
         }
 
-        if (DB::table('purchase_provider_mutation_attempts')
-            ->whereIn('state', ['prepared', 'external_started', 'reconciliation_required'])
-            ->exists()) {
-            throw new RuntimeException('Cannot roll back provider mutation attempt authority while unresolved attempts exist.');
-        }
+        app(PurchaseProviderMutationBarrier::class)->blockAll(function (): void {
+            // Re-check only after the entire provider pool is exclusively owned. A
+            // current-revision caller that has not entered yet cannot create/start an
+            // attempt until this destructive rollback either completes or refuses.
+            if (! Schema::hasTable('purchase_provider_mutation_attempts')) {
+                return;
+            }
+            if (DB::table('purchase_provider_mutation_attempts')
+                ->whereIn('state', ['prepared', 'external_started', 'reconciliation_required'])
+                ->exists()) {
+                throw new RuntimeException('Cannot roll back provider mutation attempt authority while unresolved attempts exist.');
+            }
 
-        DB::unprepared('DROP TRIGGER IF EXISTS purchase_provider_mutation_attempts_delete_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS purchase_provider_mutation_attempts_update_guard');
-        DB::unprepared('DROP TRIGGER IF EXISTS purchase_provider_mutation_attempts_insert_guard');
-        Schema::drop('purchase_provider_mutation_attempts');
+            DB::unprepared('DROP TRIGGER IF EXISTS purchase_provider_mutation_attempts_delete_guard');
+            DB::unprepared('DROP TRIGGER IF EXISTS purchase_provider_mutation_attempts_update_guard');
+            DB::unprepared('DROP TRIGGER IF EXISTS purchase_provider_mutation_attempts_insert_guard');
+            Schema::drop('purchase_provider_mutation_attempts');
+        });
     }
 };
