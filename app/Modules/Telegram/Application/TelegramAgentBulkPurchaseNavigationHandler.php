@@ -294,6 +294,8 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
                     'previous_bulk_order_public_id' => null,
                     'previous_succeeded' => 0,
                     'previous_failed' => 0,
+                    'cancel_locked' => true,
+                    'expiry_locked' => true,
                 ],
                 'tg-agent-bulk-confirm-claim:'.$operationKey,
             );
@@ -329,6 +331,8 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
                     'previous_bulk_order_public_id' => $bulkOrderPublicId,
                     'previous_succeeded' => $succeeded,
                     'previous_failed' => $failed,
+                    'cancel_locked' => true,
+                    'expiry_locked' => true,
                 ],
                 'tg-agent-bulk-retry-claim:'.$operationKey,
             );
@@ -739,11 +743,11 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
 
     /**
      * @param  array<string,mixed>  $payload
-     * @return array{page:int,selected:list<string>,batch_key:string,operation_key:string,mode:string,previous_bulk_order_public_id:?string,previous_succeeded:int,previous_failed:int}
+     * @return array{page:int,selected:list<string>,batch_key:string,operation_key:string,mode:string,previous_bulk_order_public_id:?string,previous_succeeded:int,previous_failed:int,cancel_locked:true,expiry_locked:true}
      */
     private function submittingState(array $payload): array
     {
-        $expected = ['page', 'selected', 'batch_key', 'operation_key', 'mode', 'previous_bulk_order_public_id', 'previous_succeeded', 'previous_failed'];
+        $expected = ['page', 'selected', 'batch_key', 'operation_key', 'mode', 'previous_bulk_order_public_id', 'previous_succeeded', 'previous_failed', 'cancel_locked', 'expiry_locked'];
         if (! $this->hasExactKeys($payload, $expected)
             || ! is_string($payload['operation_key'])
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['operation_key']) !== 1
@@ -752,7 +756,9 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
             || ! is_int($payload['previous_succeeded'])
             || ! is_int($payload['previous_failed'])
             || $payload['previous_succeeded'] < 0
-            || $payload['previous_failed'] < 0) {
+            || $payload['previous_failed'] < 0
+            || $payload['cancel_locked'] !== true
+            || $payload['expiry_locked'] !== true) {
             throw new RuntimeException('Telegram Agent bulk purchase submitting state is invalid.');
         }
         [$page, $selected, $batchKey] = $this->reviewState([
@@ -781,6 +787,8 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
             'previous_bulk_order_public_id' => $previousBulkOrderPublicId,
             'previous_succeeded' => $payload['previous_succeeded'],
             'previous_failed' => $payload['previous_failed'],
+            'cancel_locked' => true,
+            'expiry_locked' => true,
         ];
     }
 
