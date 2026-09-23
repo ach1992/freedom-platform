@@ -8,6 +8,7 @@ use App\Modules\AccessControl\Application\AccessMutationAudit;
 use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryService;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorLifecycleService;
+use App\Modules\AccessControl\Application\AdministratorOwnerTransferTelegramService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\AccessControl\Application\AdministratorProvisioningService;
 use App\Modules\AccessControl\Application\AdministratorRoleCatalogService;
@@ -131,6 +132,16 @@ final class AccessControlServiceProvider extends ServiceProvider
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(SensitiveApprovalAudit::class),
                 $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorOwnerTransferTelegramService::class,
+            fn (Application $application): AdministratorOwnerTransferTelegramService => new AdministratorOwnerTransferTelegramService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorUserPermissionAuthorizer::class),
+                $application->make(AdministratorAccessManagementQueryService::class),
+                $application->make(OwnerTransferService::class),
             ),
         );
 
