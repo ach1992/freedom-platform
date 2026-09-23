@@ -568,7 +568,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
 
         try {
             $this->database->connection()->transaction(function () use ($action, $descriptor): void {
-                $mutation = $this->mutationFromDescriptor($action, $descriptor);
                 $approvalSelection = $descriptor['approval'] ?? null;
 
                 if (! is_string($approvalSelection)) {
@@ -584,7 +583,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                     $approvalId,
                     $mutation,
                     $this->mutationReason($mutation),
-                    $this->effectKey($action).':execute',
+                    $operationKey.':execute',
                 );
 
                 $this->transitionAfterMutation(
@@ -1060,7 +1059,9 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         try {
             [$session, $pending, $changed] = $this->database->connection()->transaction(
                 function () use ($action, $descriptor): array {
+                    $operationKey = $this->effectKey($action);
                     $claimPayload = $descriptor + [
+                        'operation_key' => $operationKey,
                         'cancel_locked' => true,
                         'expiry_locked' => true,
                     ];
@@ -1078,7 +1079,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                         $action->userId,
                         $mutation,
                         $this->mutationReason($mutation),
-                        $this->effectKey($action).':request',
+                        $operationKey.':request',
                     );
                     $approvalSelection = $this->queries->approvalSelectionTokenForUser(
                         $action->userId,
@@ -1106,14 +1107,14 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                         $action->userId,
                         $approval->approvalId,
                         $this->translation('telegram.navigation.admin.access.audit.owner_approval', $this->locale($action->userId)),
-                        $this->effectKey($action).':approve',
+                        $operationKey.':approve',
                     );
                     $result = $this->mutations->execute(
                         $action->userId,
                         $approval->approvalId,
                         $mutation,
                         $this->mutationReason($mutation),
-                        $this->effectKey($action).':execute',
+                        $operationKey.':execute',
                     );
                     $session = $this->transitionAfterMutation(
                         $action,
@@ -1170,6 +1171,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                         self::STATE_SUBMITTING,
                         $descriptor + [
                             'approval' => $approvalSelection,
+                            'operation_key' => $this->effectKey($action),
                             'cancel_locked' => true,
                             'expiry_locked' => true,
                         ],
@@ -1187,7 +1189,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                         $approvalId,
                         $mutation,
                         $this->mutationReason($mutation),
-                        $this->effectKey($action).':execute',
+                        $operationKey.':execute',
                     );
                     $session = $this->transitionAfterMutation(
                         $action,
@@ -2309,6 +2311,13 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             return $this->specialDescriptor($descriptor);
         }
 
+        $operationKey = $descriptor['operation_key'] ?? null;
+        if (! is_string($operationKey)
+            || ! str_starts_with($operationKey, 'telegram-admin-access:')) {
+            throw new RuntimeException('Telegram administrator submitting operation key is invalid.');
+        }
+        unset($descriptor['operation_key']);
+
         if (isset($descriptor['approval'])) {
             if (! is_string($descriptor['approval'])
                 || preg_match('/\A[0-9a-f]{40}\z/', $descriptor['approval']) !== 1) {
@@ -2317,10 +2326,13 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             $approval = $descriptor['approval'];
             unset($descriptor['approval']);
 
-            return $this->mutationDescriptor($descriptor) + ['approval' => $approval];
+            return $this->mutationDescriptor($descriptor) + [
+                'approval' => $approval,
+                'operation_key' => $operationKey,
+            ];
         }
 
-        return $this->mutationDescriptor($descriptor);
+        return $this->mutationDescriptor($descriptor) + ['operation_key' => $operationKey];
     }
 
     /** @param array<string, mixed> $payload @return array<string, mixed> */

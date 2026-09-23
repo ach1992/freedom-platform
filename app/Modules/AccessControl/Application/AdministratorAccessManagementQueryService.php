@@ -22,6 +22,13 @@ final readonly class AdministratorAccessManagementQueryService
 
     private const APPROVE_PERMISSION = 'access.sensitive_actions.approve';
 
+    private const TARGET_MANAGEMENT_PERMISSIONS = [
+        'admins.accounts.manage',
+        'access.roles.manage',
+        'access.permissions.override',
+        'admins.transfer_ownership',
+    ];
+
     public function __construct(
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
@@ -55,7 +62,7 @@ final readonly class AdministratorAccessManagementQueryService
         string $botId,
         string $query,
     ): AdministratorAccessTargetSearchResult {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizeTargetViewer($actorUserId);
         $this->assertBotId($botId);
 
         $normalized = trim($query);
@@ -487,6 +494,17 @@ final readonly class AdministratorAccessManagementQueryService
         if (! $this->availableForUser($actorUserId)) {
             throw new AuthorizationException('Administrator access-management visibility denied.');
         }
+    }
+
+    private function authorizeTargetViewer(int $actorUserId): void
+    {
+        foreach (self::TARGET_MANAGEMENT_PERMISSIONS as $permission) {
+            if ($this->administrators->allowsUser($actorUserId, $permission)) {
+                return;
+            }
+        }
+
+        throw new AuthorizationException('Administrator target-management visibility denied.');
     }
 
     private function activeAdministratorIdForUser(int $actorUserId): int
