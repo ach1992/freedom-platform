@@ -53,6 +53,7 @@ final class AccessControlServiceProvider extends ServiceProvider
             fn (Application $application): AdministratorAccessManagementQueryService => new AdministratorAccessManagementQueryService(
                 $application->make(DatabaseManager::class),
                 $application->make(AdministratorUserPermissionAuthorizer::class),
+                $application->make(Clock::class),
             ),
         );
 
