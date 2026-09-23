@@ -132,7 +132,7 @@ final readonly class AdministratorAccessManagementQueryService
         string $botId,
         string $selectionToken,
     ): AdministratorAccessTarget {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizeTargetViewer($actorUserId);
         $this->assertBotId($botId);
         if (preg_match('/\A[0-9a-f]{40}\z/', $selectionToken) !== 1) {
             throw new AuthorizationException('Administrator access target is unavailable.');
@@ -154,7 +154,7 @@ final readonly class AdministratorAccessManagementQueryService
     /** @requirement ADM-002 ACL-001 ACL-002 ACL-003 SEC-002 DAT-003 */
     public function forUserPublicId(int $actorUserId, string $userPublicId): AdministratorAccessManagementSnapshot
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizeTargetViewer($actorUserId);
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $userPublicId) !== 1) {
             throw new RuntimeException('Administrator target public ID is invalid.');
         }

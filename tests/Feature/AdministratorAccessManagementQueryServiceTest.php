@@ -124,6 +124,61 @@ final class AdministratorAccessManagementQueryServiceTest extends TestCase
         }
     }
 
+    public function test_target_detail_authority_is_rechecked_after_management_permission_is_lost(): void
+    {
+        [$ownerUserId, $ownerAdministratorId] = $this->administrator(true);
+        [$managerUserId, $managerAdministratorId] = $this->administrator();
+        [, , $targetPublicId] = $this->administrator();
+
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $managerAdministratorId,
+            'admins.accounts.manage',
+        );
+
+        $service = $this->app->make(AdministratorAccessManagementQueryService::class);
+        $selection = $service->searchTarget(
+            $managerUserId,
+            '123456789',
+            $targetPublicId,
+        )->target;
+        self::assertNotNull($selection);
+
+        DB::table('administrator_role_assignments')
+            ->where('administrator_id', $managerAdministratorId)
+            ->whereNull('revoked_at')
+            ->update([
+                'revoked_at' => now('UTC'),
+                'updated_at' => now('UTC'),
+            ]);
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $managerAdministratorId,
+            'access.sensitive_actions.approve',
+        );
+
+        try {
+            $service->resolveTarget(
+                $managerUserId,
+                '123456789',
+                $selection->selectionToken,
+            );
+            self::fail('Expected target resolution to re-check current management permission.');
+        } catch (AuthorizationException) {
+            self::assertTrue(true);
+        }
+
+        try {
+            $service->forUserPublicId($managerUserId, $targetPublicId);
+            self::fail('Expected target snapshot to re-check current management permission.');
+        } catch (AuthorizationException) {
+            self::assertTrue(true);
+        }
+
+        self::assertTrue($service->availableForUser($managerUserId));
+        self::assertTrue($service->actorIsOwner($ownerUserId));
+    }
+
     public function test_catalog_queries_enforce_method_level_permissions_independent_of_menu_visibility(): void
     {
         [, $ownerAdministratorId] = $this->administrator(true);
