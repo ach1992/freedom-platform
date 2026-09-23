@@ -98,7 +98,10 @@ final readonly class AdministratorRoleCatalogService
                 }
 
                 return [
-                    ['active' => $before],
+                    [
+                        'active' => $before,
+                        'invalidated_administrators' => 0,
+                    ],
                     [
                         'active' => $active,
                         'invalidated_administrators' => $invalidatedAdministrators,
@@ -165,7 +168,11 @@ final readonly class AdministratorRoleCatalogService
                 }
 
                 return [
-                    ['permission_code' => $permissionCode, 'granted' => $exists],
+                    [
+                        'permission_code' => $permissionCode,
+                        'granted' => $exists,
+                        'invalidated_administrators' => 0,
+                    ],
                     [
                         'permission_code' => $permissionCode,
                         'granted' => $granted,
