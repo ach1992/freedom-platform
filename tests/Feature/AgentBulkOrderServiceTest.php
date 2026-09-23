@@ -408,7 +408,8 @@ final class AgentBulkOrderServiceTest extends TestCase
                 $this->purchaseOrderCorrelation('bulk-exclusive-second'),
             );
             self::fail('A settlement already claimed by another bulk parent must fail closed.');
-        } catch (QueryException) {
+        } catch (DomainException $exception) {
+            self::assertSame('Agent bulk Order settlement is already claimed by another parent.', $exception->getMessage());
             self::assertSame(1, DB::table('agent_bulk_orders')->count());
         }
 

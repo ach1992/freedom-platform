@@ -196,15 +196,33 @@ SQL);
                 return [$created, false];
             }, 3);
         } catch (QueryException $exception) {
-            $existing = $this->parentByBatchKey($this->database->connection(), $batchKey, false);
+            $connection = $this->database->connection();
+            $existing = $this->parentByBatchKey($connection, $batchKey, false);
             if ($existing !== null) {
                 $this->assertReplay($existing, $agentUserId, count($items), $requestHash);
 
                 return [$existing, true];
             }
+            if ($this->settlementClaimedByAnotherBulkParent($connection, $items)) {
+                throw new DomainException('Agent bulk Order settlement is already claimed by another parent.');
+            }
 
             throw $exception;
         }
+    }
+
+    /** @param list<BulkItemInput> $items */
+    private function settlementClaimedByAnotherBulkParent(Connection $connection, array $items): bool
+    {
+        $publicIds = array_map(
+            static fn (array $item): string => $item['purchase_settlement_public_id'],
+            $items,
+        );
+
+        return $connection->table('agent_bulk_order_items as child_row')
+            ->join('purchase_settlements as settlement_row', 'settlement_row.id', '=', 'child_row.purchase_settlement_id')
+            ->whereIn('settlement_row.public_id', $publicIds)
+            ->exists();
     }
 
     private function assertActiveAgent(Connection $connection, int $userId): void
