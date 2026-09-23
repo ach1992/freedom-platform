@@ -1198,10 +1198,15 @@ SQL);
 
                     $blocked = 0;
                     $pdo = $this->independentPdo();
+                    $pdo->exec('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+                    self::assertSame(
+                        'READ-COMMITTED',
+                        (string) $pdo->query('SELECT @@session.tx_isolation')->fetchColumn(),
+                    );
                     $pdo->beginTransaction();
-                    // Establish a REPEATABLE READ snapshot before marker activation.
-                    // The staged trigger must still observe the later cut as a current
-                    // read rather than trusting this transaction's older snapshot.
+                    // Keep this provider-drain regression on the repository-normal
+                    // READ COMMITTED isolation. A separate regression below isolates
+                    // stale REPEATABLE READ snapshot versus locking-current-read behavior.
                     $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
                     file_put_contents($localWriterReady, 'ready');
 
@@ -1341,6 +1346,93 @@ SQL);
             @unlink($localWriterReady);
             @unlink($localWriterDone);
         }
+    }
+
+    public function test_repeatable_read_snapshot_stays_stale_while_staged_locking_read_observes_active_cut(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        $fixture = $this->legacyTerminalConflictFixture('repeatable-read-current-cut', 'failed');
+        // Finish staged trigger DDL before opening the stale snapshot. Starting the
+        // snapshot before CREATE OR REPLACE TRIGGER would make MariaDB reject later
+        // DML with error 1412, which would fail closed without exercising the guard.
+        $this->stageInactiveUpgradeFence();
+
+        $snapshot = $this->independentPdo();
+        $activation = $this->independentPdo();
+
+        try {
+            $snapshot->exec('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+            self::assertSame(
+                'REPEATABLE-READ',
+                (string) $snapshot->query('SELECT @@session.tx_isolation')->fetchColumn(),
+            );
+            $snapshot->beginTransaction();
+
+            self::assertSame(
+                0,
+                (int) $snapshot->query(
+                    'SELECT active FROM nowpayments_terminal_conflict_upgrade_fence WHERE id = 1',
+                )->fetchColumn(),
+                'The pre-activation consistent read must establish the inactive snapshot.',
+            );
+
+            self::assertSame(
+                1,
+                $activation->exec(<<<'SQL'
+UPDATE nowpayments_terminal_conflict_upgrade_fence
+SET activated_at = COALESCE(activated_at, UTC_TIMESTAMP(6)),
+    active = 1
+WHERE id = 1
+SQL),
+            );
+            self::assertSame(
+                1,
+                (int) $activation->query(
+                    'SELECT active FROM nowpayments_terminal_conflict_upgrade_fence WHERE id = 1',
+                )->fetchColumn(),
+            );
+
+            self::assertSame(
+                0,
+                (int) $snapshot->query(
+                    'SELECT active FROM nowpayments_terminal_conflict_upgrade_fence WHERE id = 1',
+                )->fetchColumn(),
+                'The ordinary REPEATABLE READ view must remain stale after independent activation.',
+            );
+            $this->assertPdoRejected(
+                fn () => $this->clonePaymentIntentViaPdo(
+                    $snapshot,
+                    $fixture['payment_intent_id'],
+                    'repeatable-read-current-cut',
+                ),
+                'Purchase payment creation is fenced',
+            );
+            $this->assertPdoRejected(
+                fn () => $this->insertNowPaymentsObservationViaPdo(
+                    $snapshot,
+                    $fixture['authority_id'],
+                    $fixture['provider_payment_id'],
+                    'expired',
+                    'repeatable-read-current-cut',
+                ),
+                'NOWPayments status evidence is fenced',
+            );
+            self::assertSame(
+                1,
+                (int) $snapshot->query(
+                    'SELECT active FROM nowpayments_terminal_conflict_upgrade_fence WHERE id = 1 FOR UPDATE',
+                )->fetchColumn(),
+                'A locking current read must observe the active cut despite the stale consistent snapshot.',
+            );
+        } finally {
+            if ($snapshot->inTransaction()) {
+                $snapshot->rollBack();
+            }
+            $migration->down();
+        }
+
+        $this->assertUpgradeFencesAbsent();
     }
 
     public function test_pre_cut_payment_intent_creation_drains_before_fence_activation(): void
