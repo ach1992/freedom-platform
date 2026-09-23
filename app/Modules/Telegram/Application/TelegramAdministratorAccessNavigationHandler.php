@@ -135,7 +135,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             self::STATE_PERMISSIONS,
             self::STATE_CUSTOM_COMMAND,
             self::STATE_CONFIRM,
-            self::STATE_SUBMITTING,
             self::STATE_PENDING,
             self::STATE_APPROVALS,
             self::STATE_TRANSFERS,
@@ -167,7 +166,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             self::STATE_PERMISSIONS => $this->handlePermissions($action),
             self::STATE_CUSTOM_COMMAND => $this->handleCustomCommand($action),
             self::STATE_CONFIRM => $this->handleConfirmation($action),
-            self::STATE_SUBMITTING => $this->handleSubmittingRecovery($action),
             self::STATE_PENDING => $this->handlePending($action),
             self::STATE_APPROVALS => $this->handleApprovals($action),
             self::STATE_TRANSFERS => $this->handleTransfers($action),
@@ -560,50 +558,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         }
 
         $this->executeMutationConfirmation($action);
-    }
-
-    private function handleSubmittingRecovery(TelegramInteractionAction $action): void
-    {
-        $descriptor = $this->submittingDescriptor($action->sessionPayload);
-
-        try {
-            $this->database->connection()->transaction(function () use ($action, $descriptor): void {
-                $approvalSelection = $descriptor['approval'] ?? null;
-
-                if (! is_string($approvalSelection)) {
-                    throw new RuntimeException('Telegram administrator submitting approval is unavailable.');
-                }
-
-                $approvalId = $this->queries->resolveApprovalSelectionToken(
-                    $action->userId,
-                    $approvalSelection,
-                );
-                $this->mutations->execute(
-                    $action->userId,
-                    $approvalId,
-                    $mutation,
-                    $this->mutationReason($mutation),
-                    $operationKey.':execute',
-                );
-
-                $this->transitionAfterMutation(
-                    $action,
-                    $action->sessionVersion,
-                    $descriptor,
-                    'recovery',
-                );
-            }, 3);
-        } catch (AuthorizationException) {
-            $this->returnToAdminControlFailClosed($action);
-
-            return;
-        } catch (RuntimeException|DomainException) {
-            $this->renderSubmittingRecovery($action, $action->sessionVersion);
-
-            return;
-        }
-
-        $this->renderPostMutation($action, $descriptor);
     }
 
     private function handlePending(TelegramInteractionAction $action): void
@@ -1060,16 +1014,11 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             [$session, $pending, $changed] = $this->database->connection()->transaction(
                 function () use ($action, $descriptor): array {
                     $operationKey = $this->effectKey($action);
-                    $claimPayload = $descriptor + [
-                        'operation_key' => $operationKey,
-                        'cancel_locked' => true,
-                        'expiry_locked' => true,
-                    ];
                     $claim = $this->sessions->transition(
                         $action->sessionPublicId,
                         $action->sessionVersion,
                         self::STATE_SUBMITTING,
-                        $claimPayload,
+                        $descriptor,
                         'tg-admin-access-claim:'.hash('sha256', $action->requestKey),
                     );
                     $this->assertActor($action, $claim->userId);
@@ -1165,16 +1114,12 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         try {
             [$session, $changed] = $this->database->connection()->transaction(
                 function () use ($action, $descriptor, $approvalSelection): array {
+                    $operationKey = $this->effectKey($action);
                     $claim = $this->sessions->transition(
                         $action->sessionPublicId,
                         $action->sessionVersion,
                         self::STATE_SUBMITTING,
-                        $descriptor + [
-                            'approval' => $approvalSelection,
-                            'operation_key' => $this->effectKey($action),
-                            'cancel_locked' => true,
-                            'expiry_locked' => true,
-                        ],
+                        $descriptor + ['approval' => $approvalSelection],
                         'tg-admin-access-retry-claim:'.hash('sha256', $action->requestKey),
                     );
                     $this->assertActor($action, $claim->userId);
@@ -1326,10 +1271,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                         $action->sessionPublicId,
                         $action->sessionVersion,
                         self::STATE_SUBMITTING,
-                        $payload + [
-                            'cancel_locked' => true,
-                            'expiry_locked' => true,
-                        ],
+                        $payload,
                         'tg-admin-access-special-claim:'.hash('sha256', $action->requestKey),
                     );
                     $this->assertActor($action, $claim->userId);
@@ -2205,19 +2147,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         );
     }
 
-    private function renderSubmittingRecovery(
-        TelegramInteractionAction $action,
-        int $sessionVersion,
-    ): void {
-        $locale = $this->locale($action->userId);
-        $this->queueConfidential(
-            $action,
-            $this->translation('telegram.navigation.admin.access.submitting_recovery', $locale),
-            'tg-admin-access-submitting-recovery:'.$action->requestKey,
-            'submitting-recovery',
-        );
-    }
-
     private function renderSimpleBack(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -2294,45 +2223,6 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         }
 
         return $descriptor;
-    }
-
-    /** @param array<string, mixed> $payload @return array<string, string> */
-    private function submittingDescriptor(array $payload): array
-    {
-        if (($payload['cancel_locked'] ?? null) !== true
-            || ($payload['expiry_locked'] ?? null) !== true) {
-            throw new RuntimeException('Telegram administrator submitting fence is invalid.');
-        }
-
-        $descriptor = $payload;
-        unset($descriptor['cancel_locked'], $descriptor['expiry_locked']);
-
-        if (isset($descriptor['special'])) {
-            return $this->specialDescriptor($descriptor);
-        }
-
-        $operationKey = $descriptor['operation_key'] ?? null;
-        if (! is_string($operationKey)
-            || ! str_starts_with($operationKey, 'telegram-admin-access:')) {
-            throw new RuntimeException('Telegram administrator submitting operation key is invalid.');
-        }
-        unset($descriptor['operation_key']);
-
-        if (isset($descriptor['approval'])) {
-            if (! is_string($descriptor['approval'])
-                || preg_match('/\A[0-9a-f]{40}\z/', $descriptor['approval']) !== 1) {
-                throw new RuntimeException('Telegram administrator submitting approval token is invalid.');
-            }
-            $approval = $descriptor['approval'];
-            unset($descriptor['approval']);
-
-            return $this->mutationDescriptor($descriptor) + [
-                'approval' => $approval,
-                'operation_key' => $operationKey,
-            ];
-        }
-
-        return $this->mutationDescriptor($descriptor) + ['operation_key' => $operationKey];
     }
 
     /** @param array<string, mixed> $payload @return array<string, mixed> */
