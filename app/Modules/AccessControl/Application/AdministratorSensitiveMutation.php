@@ -25,6 +25,8 @@ final readonly class AdministratorSensitiveMutation
 
     public const ADMINISTRATOR_REVOKE = 'administrator_revoke';
 
+    public const ADMINISTRATOR_ENABLE = 'administrator_enable';
+
     public const CUSTOM_ROLE_CREATE = 'custom_role_create';
 
     public const CUSTOM_ROLE_ENABLE = 'custom_role_enable';
@@ -44,6 +46,7 @@ final readonly class AdministratorSensitiveMutation
         self::ADMINISTRATOR_SUSPEND,
         self::ADMINISTRATOR_REACTIVATE,
         self::ADMINISTRATOR_REVOKE,
+        self::ADMINISTRATOR_ENABLE,
         self::CUSTOM_ROLE_CREATE,
         self::CUSTOM_ROLE_ENABLE,
         self::CUSTOM_ROLE_DISABLE,
@@ -70,6 +73,7 @@ final readonly class AdministratorSensitiveMutation
             self::ADMINISTRATOR_SUSPEND,
             self::ADMINISTRATOR_REACTIVATE,
             self::ADMINISTRATOR_REVOKE,
+            self::ADMINISTRATOR_ENABLE,
         ], true);
         if ($targetsAdministrator !== ($targetUserPublicId !== null)) {
             throw new InvalidArgumentException('Administrator sensitive mutation target is invalid.');
@@ -130,7 +134,8 @@ final readonly class AdministratorSensitiveMutation
             self::PERMISSION_INHERIT => 'access.permissions.override',
             self::ADMINISTRATOR_SUSPEND,
             self::ADMINISTRATOR_REACTIVATE,
-            self::ADMINISTRATOR_REVOKE => 'admins.accounts.manage',
+            self::ADMINISTRATOR_REVOKE,
+            self::ADMINISTRATOR_ENABLE => 'admins.accounts.manage',
         };
     }
 

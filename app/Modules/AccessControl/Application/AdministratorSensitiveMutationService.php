@@ -19,6 +19,7 @@ final readonly class AdministratorSensitiveMutationService
         private SensitiveActionApprovalService $approvals,
         private AdministratorAccessService $access,
         private AdministratorLifecycleService $lifecycle,
+        private AdministratorProvisioningService $provisioning,
         private AdministratorRoleCatalogService $roles,
     ) {}
 
@@ -177,6 +178,10 @@ final readonly class AdministratorSensitiveMutationService
                     $this->targetAdministratorId($mutation),
                     $mutationContext,
                 )->changed,
+                AdministratorSensitiveMutation::ADMINISTRATOR_ENABLE => $this->provisioning->enableUser(
+                    $this->requiredTargetPublicId($mutation),
+                    $mutationContext,
+                )->changed,
                 AdministratorSensitiveMutation::CUSTOM_ROLE_CREATE => $this->roles->createCustomRole(
                     $this->requiredRole($mutation),
                     $mutationContext,
@@ -216,14 +221,12 @@ final readonly class AdministratorSensitiveMutationService
 
     private function targetAdministratorId(AdministratorSensitiveMutation $mutation): int
     {
-        if ($mutation->targetUserPublicId === null) {
-            throw new InvalidArgumentException('Administrator sensitive mutation target is unavailable.');
-        }
+        $targetPublicId = $this->requiredTargetPublicId($mutation);
 
         $id = $this->database->connection()
             ->table('administrators as administrator')
             ->join('users as user', 'user.id', '=', 'administrator.user_id')
-            ->where('user.public_id', $mutation->targetUserPublicId)
+            ->where('user.public_id', $targetPublicId)
             ->value('administrator.id');
 
         $normalized = filter_var($id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
@@ -232,6 +235,12 @@ final readonly class AdministratorSensitiveMutationService
         }
 
         return $normalized;
+    }
+
+    private function requiredTargetPublicId(AdministratorSensitiveMutation $mutation): string
+    {
+        return $mutation->targetUserPublicId
+            ?? throw new InvalidArgumentException('Administrator sensitive mutation target is unavailable.');
     }
 
     private function requiredRole(AdministratorSensitiveMutation $mutation): string

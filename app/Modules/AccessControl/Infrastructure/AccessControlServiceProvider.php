@@ -9,6 +9,7 @@ use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryServ
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorLifecycleService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\AccessControl\Application\AdministratorProvisioningService;
 use App\Modules\AccessControl\Application\AdministratorRoleCatalogService;
 use App\Modules\AccessControl\Application\AdministratorSensitiveMutationService;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
@@ -56,6 +57,15 @@ final class AccessControlServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            AdministratorProvisioningService::class,
+            fn (Application $application): AdministratorProvisioningService => new AdministratorProvisioningService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
             AdministratorRoleCatalogService::class,
             fn (Application $application): AdministratorRoleCatalogService => new AdministratorRoleCatalogService(
                 $application->make(DatabaseManager::class),
@@ -72,6 +82,7 @@ final class AccessControlServiceProvider extends ServiceProvider
                 $application->make(SensitiveActionApprovalService::class),
                 $application->make(AdministratorAccessService::class),
                 $application->make(AdministratorLifecycleService::class),
+                $application->make(AdministratorProvisioningService::class),
                 $application->make(AdministratorRoleCatalogService::class),
             ),
         );
