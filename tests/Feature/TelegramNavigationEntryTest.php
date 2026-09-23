@@ -109,6 +109,7 @@ use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -7326,7 +7327,7 @@ SQL);
             'updated_at' => now('UTC'),
         ]);
 
-        $targetPublicId = (string) \Illuminate\Support\Str::ulid();
+        $targetPublicId = (string) Str::ulid();
         $targetUserId = (int) DB::table('users')->insertGetId([
             'public_id' => $targetPublicId,
             'locale' => 'en',
