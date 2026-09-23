@@ -340,6 +340,8 @@ final readonly class AdministratorAccessManagementQueryService
             ->join('administrators as requester', 'requester.id', '=', 'approval.requested_by_administrator_id')
             ->join('users as requester_user', 'requester_user.id', '=', 'requester.user_id')
             ->where('approval.state', 'pending')
+            ->where('approval.target_type', 'administrator_access_mutation')
+            ->where('approval.action', 'like', 'access.telegram.%')
             ->where('approval.expires_at', '>', $this->timestamp())
             ->orderBy('approval.created_at')
             ->limit(10)
@@ -374,6 +376,8 @@ final readonly class AdministratorAccessManagementQueryService
         $this->assertUlid($approvalId, 'Sensitive approval ID');
         $row = $this->database->connection()->table('sensitive_action_approvals')
             ->where('id', $approvalId)
+            ->where('target_type', 'administrator_access_mutation')
+            ->where('action', 'like', 'access.telegram.%')
             ->first(['requested_by_administrator_id']);
         if ($row === null) {
             throw new AuthorizationException('Sensitive approval is unavailable.');
@@ -392,6 +396,8 @@ final readonly class AdministratorAccessManagementQueryService
         $actorAdministratorId = $this->activeAdministratorIdForUser($actorUserId);
         $this->assertSelectionToken($selectionToken);
         $row = $this->database->connection()->table('sensitive_action_approvals')
+            ->where('target_type', 'administrator_access_mutation')
+            ->where('action', 'like', 'access.telegram.%')
             ->whereRaw(
                 "LEFT(SHA2(CONCAT('telegram-admin-access-approval-v1:', ?, ':', id), 256), 40) = ?",
                 [(string) $actorUserId, $selectionToken],

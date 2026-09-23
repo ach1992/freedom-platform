@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\AccessControl\Application\AccessChangeContext;
 use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryService;
 use App\Modules\AccessControl\Application\AdministratorAccessTargetSearchDisposition;
+use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -87,6 +89,39 @@ final class AdministratorAccessManagementQueryServiceTest extends TestCase
 
         self::assertTrue($service->actorIsOwner($ownerUserId));
         self::assertFalse($service->actorIsOwner($approverUserId));
+    }
+
+    public function test_access_control_approval_inbox_excludes_unrelated_sensitive_actions(): void
+    {
+        [$ownerUserId, $ownerAdministratorId] = $this->administrator(true);
+        $genericApproval = $this->app->make(SensitiveActionApprovalService::class)->request(
+            'admins.accounts.manage',
+            'unrelated.sensitive.action',
+            'unrelated_target',
+            'target-1',
+            false,
+            600,
+            new AccessChangeContext(
+                hash('sha256', 'generic-sensitive-request'),
+                'generic-sensitive-correlation-0001',
+                'generic_sensitive_test',
+                'Unrelated sensitive approval test.',
+                $ownerAdministratorId,
+            ),
+        );
+
+        $service = $this->app->make(AdministratorAccessManagementQueryService::class);
+        self::assertSame([], $service->pendingApprovals($ownerUserId));
+
+        try {
+            $service->approvalSelectionTokenForUser(
+                $ownerUserId,
+                $genericApproval->approvalId,
+            );
+            self::fail('Expected unrelated sensitive approval to remain outside Access Control.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Sensitive approval is unavailable.', $exception->getMessage());
+        }
     }
 
     public function test_role_and_permission_selection_tokens_cannot_cross_actor_boundaries(): void
