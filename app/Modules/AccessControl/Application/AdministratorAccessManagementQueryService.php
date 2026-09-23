@@ -39,6 +39,16 @@ final readonly class AdministratorAccessManagementQueryService
         return false;
     }
 
+    public function actorIsOwner(int $actorUserId): bool
+    {
+        $administratorId = $this->activeAdministratorIdForUser($actorUserId);
+        $isOwner = $this->database->connection()->table('administrators')
+            ->where('id', $administratorId)
+            ->value('is_owner');
+
+        return (bool) $isOwner;
+    }
+
     /** @requirement ADM-002 ACL-001 ACL-002 ACL-003 SEC-002 DAT-003 */
     public function searchTarget(
         int $actorUserId,
@@ -265,8 +275,8 @@ final readonly class AdministratorAccessManagementQueryService
         $this->authorizeViewer($actorUserId);
         $normalized = strtolower(trim($roleCode));
         if (preg_match('/\A[a-z0-9_.-]{1,64}\z/', $normalized) !== 1
-            || ! $this->database->connection()->table('roles')->where('code', $normalized)->where('is_active', true)->exists()) {
-            throw new RuntimeException('Active role does not exist.');
+            || ! $this->database->connection()->table('roles')->where('code', $normalized)->exists()) {
+            throw new RuntimeException('Role does not exist.');
         }
 
         return $this->selectionToken('role', $actorUserId, $normalized);
@@ -278,7 +288,6 @@ final readonly class AdministratorAccessManagementQueryService
         $this->assertSelectionToken($selectionToken);
 
         $code = $this->database->connection()->table('roles')
-            ->where('is_active', true)
             ->whereRaw(
                 "LEFT(SHA2(CONCAT('telegram-admin-access-role-v1:', ?, ':', code), 256), 40) = ?",
                 [(string) $actorUserId, $selectionToken],
