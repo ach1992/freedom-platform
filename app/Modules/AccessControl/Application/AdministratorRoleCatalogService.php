@@ -326,17 +326,11 @@ final readonly class AdministratorRoleCatalogService
         Connection $connection,
         int $roleId,
     ): int {
-        /** @var list<int> $administratorIds */
-        $administratorIds = $connection->table('administrator_role_assignments')
-            ->where('role_id', $roleId)
-            ->whereNull('revoked_at')
-            ->orderBy('administrator_id')
-            ->pluck('administrator_id')
-            ->map(static fn (mixed $value): int => (int) $value)
-            ->filter(static fn (int $value): bool => $value > 0)
-            ->unique()
-            ->values()
-            ->all();
+        $administratorIds = $this->assignedAdministratorIds(
+            $connection,
+            $roleId,
+            true,
+        );
 
         if ($administratorIds === []) {
             return 0;
