@@ -31,6 +31,7 @@ final readonly class AdministratorRoleCatalogService
             'access.role_definition.create',
             $roleCode,
             $context,
+            ['exists' => true, 'active' => true],
             function (Connection $connection) use ($roleCode, $context): array {
                 $this->authorizeActor($context->actorAdministratorId);
                 $existing = $connection->table('roles')->where('code', $roleCode)->lockForUpdate()->first([
@@ -79,6 +80,7 @@ final readonly class AdministratorRoleCatalogService
             'access.role_definition.status',
             $roleCode,
             $context,
+            ['active' => $active],
             function (Connection $connection) use ($roleCode, $active, $context): array {
                 $this->authorizeActor($context->actorAdministratorId);
                 $role = $this->customRole($connection, $roleCode, true);
@@ -115,6 +117,7 @@ final readonly class AdministratorRoleCatalogService
             'access.role_definition.permission',
             $roleCode,
             $context,
+            ['permission_code' => $permissionCode, 'granted' => $granted],
             function (Connection $connection) use ($roleCode, $permissionCode, $granted, $context): array {
                 $actorIsOwner = $this->authorizeActor($context->actorAdministratorId);
                 $role = $this->customRole($connection, $roleCode, true);
@@ -157,12 +160,14 @@ final readonly class AdministratorRoleCatalogService
     }
 
     /**
+     * @param array<string,bool|int|string|null> $expectedAfter
      * @param callable(Connection):array{0:array<string,bool|int|string|null>,1:array<string,bool|int|string|null>} $operation
      */
     private function mutate(
         string $action,
         string $roleCode,
         AccessChangeContext $context,
+        array $expectedAfter,
         callable $operation,
     ): AdministratorRoleMutationReceipt {
         try {
@@ -170,10 +175,13 @@ final readonly class AdministratorRoleCatalogService
                 $action,
                 $roleCode,
                 $context,
+                $expectedAfter,
                 $operation,
             ): AdministratorRoleMutationReceipt {
                 $existing = $this->existing($connection, $action, $roleCode, $context->requestFingerprint, true);
                 if ($existing !== null) {
+                    $this->assertExpectedAfter($existing, $expectedAfter);
+
                     return $existing;
                 }
 
@@ -209,10 +217,24 @@ final readonly class AdministratorRoleCatalogService
                 $context->requestFingerprint,
             );
             if ($existing !== null) {
+                $this->assertExpectedAfter($existing, $expectedAfter);
+
                 return $existing;
             }
 
             throw $exception;
+        }
+    }
+
+    /** @param array<string,bool|int|string|null> $expected */
+    private function assertExpectedAfter(
+        AdministratorRoleMutationReceipt $receipt,
+        array $expected,
+    ): void {
+        foreach ($expected as $key => $value) {
+            if (! array_key_exists($key, $receipt->after) || $receipt->after[$key] !== $value) {
+                throw new RuntimeException('Role mutation fingerprint conflict.');
+            }
         }
     }
 
