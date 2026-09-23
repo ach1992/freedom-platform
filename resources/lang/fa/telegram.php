@@ -10,6 +10,7 @@ return [
             'buy_service' => 'خرید سرویس',
             'trial_service' => 'سرویس آزمایشی',
             'my_services' => 'سرویس‌های من',
+            'client_guides' => 'اپلیکیشن‌ها و راهنماها',
             'support' => 'پشتیبانی',
             'external_support' => 'پشتیبانی در تلگرام',
             'request_cooperation' => 'درخواست همکاری',
@@ -45,6 +46,7 @@ return [
             'buttons' => [
                 'customer_search' => 'جستجوی مشتری',
                 'usdt_rate' => 'نرخ USDT / NOWPayments',
+                'client_guides' => 'اپلیکیشن‌ها و راهنماها',
             ],
             'customer_search' => [
                 'prompt' => "جستجوی مشتری\n\nیک شناسه دقیق تلگرام، نام کاربری تلگرام یا شناسه عمومی حساب را ارسال کنید. جستجو فقط به‌صورت دقیق و براساس مجوز فعلی انجام می‌شود و فهرست‌کردن یا جستجوی تقریبی در دسترس نیست.",
@@ -256,6 +258,19 @@ return [
                     'reset_usage' => 'بازنشانی مصرف',
                 ],
             ],
+        ],
+    ],
+    'client_guides' => [
+        'empty' => "اپلیکیشن‌ها و راهنماها\n\nدر حال حاضر راهنمایی متناسب با حساب شما ثبت نشده است.",
+        'list' => "اپلیکیشن‌ها و راهنماها — صفحه :page از :pages\n\n:items\n\nبرای باز کردن مقصد رسمی HTTPS از دکمه مربوط استفاده کنید.",
+        'admin' => [
+            'add_button' => 'افزودن منبع',
+            'none' => 'منبعی ثبت نشده است.',
+            'list' => "مدیریت اپلیکیشن‌ها و راهنماها — صفحه :page از :pages\n\n:items\n\nبرای ویرایش، غیرفعال‌سازی یا تغییر ترتیب یک منبع را انتخاب کنید.",
+            'mode' => ['create' => 'ایجاد', 'edit' => 'ویرایش'],
+            'create_template' => "code=android\nplatform=android\nlanguage=any\naudience=all\ntier=-\ntag=-\nsort=10\nstate=active\nurl=https://example.com/client\nemoji=📱\npremium=-\ntitle_fa=عنوان فارسی\ntitle_en=English title\ndescription_fa=-\ndescription_en=-\ntutorial_fa=-\ntutorial_en=-\nreason=شرح_تغییر",
+            'editor' => "راهنمای اتصال — :mode\n\nتعریف کامل key=value زیر را ارسال کنید. برای مقدار اختیاری خالی از - استفاده کنید. برای مخفی‌سازی بدون حذف تاریخچه state=disabled و برای جابه‌جایی sort را تغییر دهید. نشانی باید HTTPS امن باشد.\n\n:current",
+            'invalid' => 'تعریف نامعتبر یا قدیمی است، مجوز تغییر کرده یا tier/tag در دسترس نیست. همه کلیدها را بررسی و تعریف کامل را دوباره ارسال کنید.',
         ],
     ],
     'broadcast' => [

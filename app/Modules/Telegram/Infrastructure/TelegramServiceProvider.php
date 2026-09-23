@@ -18,6 +18,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
@@ -35,6 +36,7 @@ use App\Modules\Telegram\Application\TelegramBroadcastNavigationHandler;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
+use App\Modules\Telegram\Application\TelegramClientGuideNavigationHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationAudit;
@@ -54,6 +56,7 @@ use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
+use App\Modules\Telegram\Application\TelegramNowPaymentsNavigationHandler;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
 use App\Modules\Telegram\Application\TelegramPrivateMediaReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
@@ -66,6 +69,7 @@ use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
+use App\Modules\Telegram\Application\TelegramWalletTransferNavigationHandler;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
@@ -157,12 +161,19 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);
+        $this->app->singleton(TelegramClientGuideNavigationHandler::class);
         $this->app->singleton(TelegramAgentBulkPurchaseNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);
         $this->app->singleton(TelegramSupportNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
+        $this->app->singleton(TelegramWalletTransferNavigationHandler::class);
+        $this->app->singleton(TelegramNowPaymentsNavigationHandler::class);
+        $this->app->singleton(
+            TelegramNowPaymentsNavigationResolver::class,
+            ContainerTelegramNowPaymentsNavigationResolver::class,
+        );
         $this->app->singleton(
             TelegramBroadcastNavigationResolver::class,
             ContainerTelegramBroadcastNavigationResolver::class,

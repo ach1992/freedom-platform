@@ -9,4 +9,6 @@ enum TelegramInlineHttpsUrlPurpose: string
     case ZarinpalStartPay = 'zarinpal_start_pay';
 
     case SupportContact = 'support_contact';
+
+    case ClientGuideResource = 'client_guide_resource';
 }

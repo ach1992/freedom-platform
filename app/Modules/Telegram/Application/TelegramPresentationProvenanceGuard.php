@@ -22,6 +22,7 @@ final class TelegramPresentationProvenanceGuard
     /** @var list<string> */
     public const REVIEWED_SOURCE_FILES = [
         'app/Modules/Telegram/Application/TelegramBroadcastTextDeliveryGateway.php',
+        'app/Modules/Telegram/Application/TelegramClientGuideNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',

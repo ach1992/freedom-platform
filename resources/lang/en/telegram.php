@@ -10,6 +10,7 @@ return [
             'buy_service' => 'Buy Service',
             'trial_service' => 'Trial Service',
             'my_services' => 'My Services',
+            'client_guides' => 'Apps & Guides',
             'support' => 'Support',
             'external_support' => 'External Support',
             'request_cooperation' => 'Request Cooperation',
@@ -45,6 +46,7 @@ return [
             'buttons' => [
                 'customer_search' => 'Customer Search',
                 'usdt_rate' => 'USDT / NOWPayments rate',
+                'client_guides' => 'Client Guides',
             ],
             'customer_search' => [
                 'prompt' => "Customer Search\n\nSend one exact Telegram ID, Telegram username, or public account ID. The search is exact and permission-gated; broad or fuzzy listing is not available.",
@@ -256,6 +258,19 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                     'reset_usage' => 'Reset usage',
                 ],
             ],
+        ],
+    ],
+    'client_guides' => [
+        'empty' => "Apps & Guides\n\nNo guide is currently available for your account.",
+        'list' => "Apps & Guides — page :page/:pages\n\n:items\n\nUse a button below to open the registered official HTTPS destination.",
+        'admin' => [
+            'add_button' => 'Add resource',
+            'none' => 'No resources.',
+            'list' => "Client Guide Catalogue — page :page/:pages\n\n:items\n\nSelect a resource to edit it, including state or sort order.",
+            'mode' => ['create' => 'Create', 'edit' => 'Edit'],
+            'create_template' => "code=android\nplatform=android\nlanguage=any\naudience=all\ntier=-\ntag=-\nsort=10\nstate=active\nurl=https://example.com/client\nemoji=📱\npremium=-\ntitle_fa=عنوان فارسی\ntitle_en=English title\ndescription_fa=-\ndescription_en=-\ntutorial_fa=-\ntutorial_en=-\nreason=describe_the_change",
+            'editor' => "Client Guide — :mode\n\nSend the complete key=value definition below. Use - for optional empty values. Set state=disabled to hide a resource without deleting history; change sort to reorder. URLs must be safe HTTPS destinations.\n\n:current",
+            'invalid' => 'The definition is invalid, stale, unauthorized, or references an unavailable tier/tag. Review every key and send the complete definition again.',
         ],
     ],
     'broadcast' => [

@@ -4,11 +4,18 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\NowPayments\Application;
 
+use App\Modules\Orders\Application\PurchaseOrderService;
+use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
 use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchasePaymentIntentReceipt;
+use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsCreateRequest;
@@ -42,13 +49,130 @@ final readonly class NowPaymentsPaymentService
         private DatabaseManager $database,
         private NowPaymentsTransport $transport,
         private UsdtRateResolver $rates,
+        private PurchasePaymentIntentService $purchaseIntents,
+        private PurchasePromotionUsageAuthority $promotionUsage,
+        private PurchaseOrderService $purchaseOrders,
         private PurchaseSettlementService $settlements,
+        private PurchaseProviderMutationBarrier $providerMutations,
         private Clock $clock,
     ) {}
+
+    /** @requirement BUY-001 BUY-003 IPG-002 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
+    public function claimPurchase(
+        int $actorUserId,
+        string $quotePublicId,
+        string $eligibilityDecisionPublicId,
+        string $correlationId,
+    ): PurchasePaymentIntentReceipt {
+        if ($actorUserId < 1) {
+            throw new DomainException('NOWPayments purchase actor user ID is invalid.');
+        }
+        $this->assertUlid($quotePublicId, 'NOWPayments purchase Quote public ID');
+        $this->assertUlid($eligibilityDecisionPublicId, 'NOWPayments payment eligibility decision public ID');
+        $this->assertToken($correlationId, 'NOWPayments purchase correlation ID', 8, 64);
+
+        return $this->database->connection()->transaction(function () use (
+            $actorUserId,
+            $quotePublicId,
+            $eligibilityDecisionPublicId,
+            $correlationId,
+        ): PurchasePaymentIntentReceipt {
+            $intent = $this->purchaseIntents->create(
+                $this->purchaseIntentCreationKey($quotePublicId),
+                $actorUserId,
+                $quotePublicId,
+                $eligibilityDecisionPublicId,
+                self::PROVIDER_CODE,
+                $correlationId,
+            );
+            $this->promotionUsage->reserveForQuote(
+                $this->promotionReservationKey($quotePublicId),
+                $actorUserId,
+                $quotePublicId,
+            );
+            if (! $this->purchaseExecutionAvailable($actorUserId, $quotePublicId)) {
+                throw new DomainException('NOWPayments purchase requires a payable pre-payment Order.');
+            }
+
+            return $intent;
+        }, 3);
+    }
+
+    /** @requirement BUY-001 BUY-003 IPG-002 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
+    public function executePurchaseClaim(
+        int $actorUserId,
+        string $intentPublicId,
+        string $quotePublicId,
+        string $eligibilityDecisionPublicId,
+        string $correlationId,
+    ): NowPaymentsPaymentReceipt {
+        if ($actorUserId < 1) {
+            throw new DomainException('NOWPayments purchase actor user ID is invalid.');
+        }
+        $this->assertUlid($intentPublicId, 'NOWPayments purchase PaymentIntent public ID');
+        $this->assertUlid($quotePublicId, 'NOWPayments purchase Quote public ID');
+        $this->assertUlid($eligibilityDecisionPublicId, 'NOWPayments payment eligibility decision public ID');
+        $this->assertToken($correlationId, 'NOWPayments purchase correlation ID', 8, 64);
+
+        $intent = $this->intentByPublicId($this->database->connection(), $intentPublicId);
+        if ($intent === null) {
+            throw new DomainException('NOWPayments purchase PaymentIntent does not exist.');
+        }
+        $this->assertEligibleIntent($intent);
+        $this->assertPurchaseContext($intent, $actorUserId, $quotePublicId);
+        $storedDecisionPublicId = $this->database->connection()->table('payment_intents')
+            ->where('id', $this->positiveInt($intent->id, 'Payment intent ID'))
+            ->value('payment_eligibility_decision_public_id');
+        if (! is_string($storedDecisionPublicId)
+            || ! hash_equals($storedDecisionPublicId, $eligibilityDecisionPublicId)) {
+            throw new DomainException('NOWPayments purchase PaymentIntent decision identity changed.');
+        }
+
+        return $this->createForIntent(
+            $intentPublicId,
+            $this->purchaseRequestKey($quotePublicId),
+            $correlationId,
+            $actorUserId,
+            $quotePublicId,
+        );
+    }
+
+    /** @requirement BUY-001 BUY-003 IPG-002 PAY-002 PAY-003 PRO-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
+    public function initiatePurchase(
+        int $actorUserId,
+        string $quotePublicId,
+        string $eligibilityDecisionPublicId,
+        string $correlationId,
+    ): NowPaymentsPaymentReceipt {
+        $intent = $this->claimPurchase(
+            $actorUserId,
+            $quotePublicId,
+            $eligibilityDecisionPublicId,
+            $correlationId,
+        );
+
+        return $this->executePurchaseClaim(
+            $actorUserId,
+            $intent->intentPublicId,
+            $quotePublicId,
+            $eligibilityDecisionPublicId,
+            $correlationId,
+        );
+    }
 
     /** @requirement IPG-002 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
     public function create(string $intentPublicId, string $requestKey, string $correlationId): NowPaymentsPaymentReceipt
     {
+        return $this->createForIntent($intentPublicId, $requestKey, $correlationId, null, null);
+    }
+
+    private function createForIntent(
+        string $intentPublicId,
+        string $requestKey,
+        string $correlationId,
+        ?int $purchaseUserId,
+        ?string $purchaseQuotePublicId,
+    ): NowPaymentsPaymentReceipt {
         $this->assertUlid($intentPublicId, 'Payment intent public ID');
         $this->assertToken($requestKey, 'NOWPayments request key', 8, 128);
         $this->assertToken($correlationId, 'NOWPayments correlation ID', 8, 64);
@@ -60,15 +184,21 @@ final readonly class NowPaymentsPaymentService
             throw new DomainException('Payment intent does not exist.');
         }
         $this->assertEligibleIntent($intent);
+        $this->assertPurchaseContext($intent, $purchaseUserId, $purchaseQuotePublicId);
         $intentId = $this->positiveInt($intent->id, 'Payment intent ID');
         $existing = $this->authorityByIntentId($connection, $intentId);
         if ($existing !== null) {
             if (! hash_equals((string) $existing->request_key, $requestKey)) {
                 throw new DomainException('NOWPayments payment intent is already bound to another initiation request.');
             }
-            if ($this->authorityState((string) $existing->state) === NowPaymentsAuthorityState::Initiating
+            $existingState = $this->authorityState((string) $existing->state);
+            if ($existingState === NowPaymentsAuthorityState::Initiating
                 && $existing->provider_payment_id === null) {
                 return $this->recoverStaleInitiatingWithoutProviderId($existing, $configuration, $correlationId);
+            }
+            if ($existingState === NowPaymentsAuthorityState::Finished
+                && $this->settlementPublicIdForIntentId($connection, $intentId) === null) {
+                return $this->refresh($intentPublicId, $correlationId);
             }
 
             return $this->receipt($existing, true);
@@ -103,12 +233,15 @@ final readonly class NowPaymentsPaymentService
             $orderId,
             $payloadHash,
             $configuration,
+            $purchaseUserId,
+            $purchaseQuotePublicId,
         ): array {
             $lockedIntent = $this->intentByPublicId($transaction, $intentPublicId, true);
             if ($lockedIntent === null) {
                 throw new DomainException('Payment intent does not exist.');
             }
             $this->assertEligibleIntent($lockedIntent);
+            $this->assertPurchaseContext($lockedIntent, $purchaseUserId, $purchaseQuotePublicId);
             if ($this->positiveInt($lockedIntent->amount_irr, 'Payment intent amount') !== $amountIrr
                 || $this->intentState((string) $lockedIntent->state) !== PaymentIntentState::AwaitingUserAction) {
                 throw new DomainException('Payment intent changed before NOWPayments initiation was claimed.');
@@ -187,21 +320,70 @@ final readonly class NowPaymentsPaymentService
             return $this->receipt($authority, true);
         }
 
-        try {
-            $result = $this->transport->create(new NowPaymentsCreateRequest(
-                (string) $authority->price_amount_usd,
-                (string) $authority->pay_currency,
-                (string) $authority->order_id,
-                'Freedom purchase '.$intentPublicId,
-                (string) $authority->callback_url,
-            ));
-        } catch (NowPaymentsTransportException $exception) {
-            return $this->recordCreateFailure($authority, $exception->uncertain, $correlationId);
-        } catch (Throwable) {
-            return $this->recordCreateFailure($authority, true, $correlationId);
+        if ($purchaseUserId !== null && $purchaseQuotePublicId !== null
+            && ! $this->purchaseExecutionAvailable($purchaseUserId, $purchaseQuotePublicId)) {
+            return $this->abortFreshAuthorityBeforeProvider(
+                $authority,
+                $correlationId,
+                'nowpayments_purchase_order_or_promotion_unavailable',
+            );
         }
 
-        return $this->acceptCreateResult($authority, $result, $correlationId);
+        return $this->providerMutations->runForPaymentIntent(
+            $this->positiveInt($authority->payment_intent_id, 'NOWPayments payment intent ID'),
+            'nowpayments:create:'.$this->positiveInt($authority->id, 'NOWPayments authority ID'),
+            function (PurchaseProviderMutationAttempt $attempt) use (
+                $authority,
+                $intentPublicId,
+                $correlationId,
+                $purchaseUserId,
+                $purchaseQuotePublicId,
+            ): NowPaymentsPaymentReceipt {
+                $current = $this->authorityById(
+                    $this->database->connection(),
+                    $this->positiveInt($authority->id, 'NOWPayments authority ID'),
+                );
+                if ($current === null) {
+                    throw new RuntimeException('NOWPayments authority disappeared before provider mutation.');
+                }
+                if ($this->authorityState((string) $current->state) !== NowPaymentsAuthorityState::Initiating) {
+                    return $this->receipt($current, true);
+                }
+                if ($purchaseUserId !== null && $purchaseQuotePublicId !== null
+                    && ! $this->purchaseExecutionAvailable($purchaseUserId, $purchaseQuotePublicId)) {
+                    return $this->abortFreshAuthorityBeforeProvider(
+                        $current,
+                        $correlationId,
+                        'nowpayments_purchase_order_or_promotion_unavailable',
+                    );
+                }
+
+                try {
+                    $attempt->markExternalEffectStarted();
+                    $result = $this->transport->create(new NowPaymentsCreateRequest(
+                        (string) $current->price_amount_usd,
+                        (string) $current->pay_currency,
+                        (string) $current->order_id,
+                        'Freedom purchase '.$intentPublicId,
+                        (string) $current->callback_url,
+                    ));
+                } catch (NowPaymentsTransportException $exception) {
+                    $receipt = $this->recordCreateFailure($current, $exception->uncertain, $correlationId);
+                    if ($exception->uncertain) {
+                        $attempt->requireReconciliation();
+                    }
+
+                    return $receipt;
+                } catch (Throwable) {
+                    $receipt = $this->recordCreateFailure($current, true, $correlationId);
+                    $attempt->requireReconciliation();
+
+                    return $receipt;
+                }
+
+                return $this->acceptCreateResult($current, $result, $correlationId);
+            },
+        );
     }
 
     /** @requirement IPG-002 PAY-002 PAY-003 DAT-003 DAT-004 INT-001 INT-002 QUA-004 */
@@ -409,6 +591,9 @@ final readonly class NowPaymentsPaymentService
     {
         $capture = false;
         $settlementEvent = null;
+        $purchaseOrderAware = false;
+        $purchaseUserId = null;
+        $purchaseQuotePublicId = null;
 
         $fresh = $this->database->connection()->transaction(function (Connection $connection) use (
             $authority,
@@ -416,10 +601,30 @@ final readonly class NowPaymentsPaymentService
             $correlationId,
             &$capture,
             &$settlementEvent,
+            &$purchaseOrderAware,
+            &$purchaseUserId,
+            &$purchaseQuotePublicId,
         ): stdClass {
             $current = $this->requiredAuthority($connection, (int) $authority->id, true);
             $state = $this->authorityState((string) $current->state);
             $this->observe($connection, $current, 'status_lookup', $result->paymentStatus, $result->responseHash, $correlationId);
+
+            if ($state === NowPaymentsAuthorityState::ManualReview
+                && $this->hasTerminalProviderFinishedConflict($connection, $current)
+                && $result->paymentStatus !== 'finished') {
+                $this->ensureIntentManualReview($connection, (int) $current->payment_intent_id, $correlationId);
+                $this->finding(
+                    $connection,
+                    $current,
+                    'terminal_finished_conflict_status_changed',
+                    'critical',
+                    $result->paymentStatus,
+                    $result->responseHash,
+                    $correlationId,
+                );
+
+                return $current;
+            }
 
             if ($state === NowPaymentsAuthorityState::Finished && $result->paymentStatus !== 'finished') {
                 $this->finding(
@@ -443,6 +648,28 @@ final readonly class NowPaymentsPaymentService
                     'critical',
                     $result->paymentStatus,
                     $result->responseHash,
+                    $correlationId,
+                );
+
+                $terminalState = $state;
+                $updated = $connection->table('nowpayments_payment_authorities')
+                    ->where('id', (int) $current->id)
+                    ->where('state', $terminalState->value)
+                    ->update([
+                        'state' => NowPaymentsAuthorityState::ManualReview->value,
+                        'provider_status' => 'finished',
+                        'provider_actually_paid' => $result->actuallyPaid,
+                        'last_status_at' => $this->databaseDateTime($result->updatedAt ?? $this->clock->now()),
+                        'updated_at' => $this->timestamp(),
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('NOWPayments terminal provider-finished conflict changed concurrently.');
+                }
+
+                $current = $this->requiredAuthority($connection, (int) $current->id, true);
+                $this->reopenIntentForTerminalProviderFinishedConflict(
+                    $connection,
+                    (int) $current->payment_intent_id,
                     $correlationId,
                 );
 
@@ -530,6 +757,81 @@ final readonly class NowPaymentsPaymentService
                 return $current;
             }
 
+            $intent = $this->intentById(
+                $connection,
+                $this->positiveInt($current->payment_intent_id, 'NOWPayments payment intent ID'),
+                true,
+            );
+            if ($intent === null) {
+                throw new RuntimeException('NOWPayments payment intent disappeared before settlement.');
+            }
+            $this->assertEligibleIntent($intent);
+            if ($state === NowPaymentsAuthorityState::ManualReview
+                && $this->terminalProviderFinishedConflictHasStatusChange($connection, $current)) {
+                return $current;
+            }
+            if ($state === NowPaymentsAuthorityState::ManualReview
+                && $this->terminalProviderFinishedConflictHasCompetingPurchaseIntent($connection, $current, $intent)) {
+                $this->finding(
+                    $connection,
+                    $current,
+                    'terminal_provider_finished_conflict_competing_intent',
+                    'critical',
+                    $result->paymentStatus,
+                    $result->responseHash,
+                    $correlationId,
+                );
+
+                return $current;
+            }
+            if (is_string($intent->source_quote_public_id) && (int) $intent->user_id > 0) {
+                $purchaseUserId = (int) $intent->user_id;
+                $purchaseQuotePublicId = $intent->source_quote_public_id;
+                $availability = $this->purchaseOrders->settlementAvailabilityFromQuote(
+                    $purchaseQuotePublicId,
+                    $purchaseUserId,
+                );
+                $existingSettlementPublicId = $this->settlementPublicIdForIntentId(
+                    $connection,
+                    (int) $current->payment_intent_id,
+                );
+                if ($availability === PurchaseOrderSettlementAvailability::Unavailable
+                    && $existingSettlementPublicId === null) {
+                    $current = $this->moveAuthorityToManualReview($connection, $current);
+                    $this->ensureIntentManualReview($connection, (int) $current->payment_intent_id, $correlationId);
+                    $this->finding(
+                        $connection,
+                        $current,
+                        'purchase_order_unavailable',
+                        'critical',
+                        $result->paymentStatus,
+                        $result->responseHash,
+                        $correlationId,
+                    );
+
+                    return $current;
+                }
+                if ($availability === PurchaseOrderSettlementAvailability::AwaitingPayment
+                    && $existingSettlementPublicId === null
+                    && $this->promotionUsage->requiresFinalizationForQuote($purchaseUserId, $purchaseQuotePublicId)
+                    && ! $this->promotionUsage->isFinalizationAuthorityAvailableForQuote($purchaseUserId, $purchaseQuotePublicId)) {
+                    $current = $this->moveAuthorityToManualReview($connection, $current);
+                    $this->ensureIntentManualReview($connection, (int) $current->payment_intent_id, $correlationId);
+                    $this->finding(
+                        $connection,
+                        $current,
+                        'promotion_authority_unavailable',
+                        'critical',
+                        $result->paymentStatus,
+                        $result->responseHash,
+                        $correlationId,
+                    );
+
+                    return $current;
+                }
+                $purchaseOrderAware = $availability !== PurchaseOrderSettlementAvailability::Absent;
+            }
+
             $state = $this->authorityState((string) $current->state);
             if ($state === NowPaymentsAuthorityState::Created || $state === NowPaymentsAuthorityState::ManualReview) {
                 $this->transitionAuthority($connection, $current, NowPaymentsAuthorityState::Finished);
@@ -585,23 +887,43 @@ final readonly class NowPaymentsPaymentService
 
         if ($capture && $settlementEvent instanceof VerifiedPaymentEvent) {
             try {
-                $this->settlements->capture(
-                    $this->intentPublicIdForAuthority($fresh),
-                    self::PROVIDER_CODE,
+                $this->database->connection()->transaction(function () use (
+                    $fresh,
                     $settlementEvent,
                     $correlationId,
-                );
+                    $purchaseOrderAware,
+                    $purchaseUserId,
+                ): void {
+                    $settlement = $this->settlements->capture(
+                        $this->intentPublicIdForAuthority($fresh),
+                        self::PROVIDER_CODE,
+                        $settlementEvent,
+                        $correlationId,
+                    );
+                    if (! $purchaseOrderAware || $purchaseUserId === null) {
+                        return;
+                    }
+                    $this->promotionUsage->finalizeForSettlement(
+                        $this->promotionRedemptionKey($settlement->settlementPublicId),
+                        $purchaseUserId,
+                        $settlement->settlementPublicId,
+                    );
+                    $this->purchaseOrders->createFromSettlement($settlement->settlementPublicId, $correlationId);
+                }, 3);
             } catch (Throwable $exception) {
                 $this->database->connection()->transaction(function (Connection $connection) use (
                     $fresh,
                     $result,
                     $correlationId,
+                    $purchaseOrderAware,
                 ): void {
                     $current = $this->requiredAuthority($connection, (int) $fresh->id, true);
                     $this->finding(
                         $connection,
                         $current,
-                        'finished_provider_payment_not_captured_locally',
+                        $purchaseOrderAware
+                            ? 'finished_provider_purchase_not_materialized'
+                            : 'finished_provider_payment_not_captured_locally',
                         'critical',
                         $result->paymentStatus,
                         $result->responseHash,
@@ -826,6 +1148,101 @@ final readonly class NowPaymentsPaymentService
                 $correlationId,
             );
         }
+    }
+
+    /**
+     * Once a previously terminal NOWPayments authority has contradicted itself with
+     * identity-validated provider-finished evidence, any other purchase intent for the
+     * same Quote means automatic materialization is no longer unambiguously safe.
+     */
+    private function hasTerminalProviderFinishedConflict(
+        Connection $connection,
+        stdClass $authority,
+    ): bool {
+        return $connection->table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
+            ->where('code', 'terminal_local_state_conflicts_with_finished_provider')
+            ->where('severity', 'critical')
+            ->where('provider_status', 'finished')
+            ->exists();
+    }
+
+    private function terminalProviderFinishedConflictHasStatusChange(
+        Connection $connection,
+        stdClass $authority,
+    ): bool {
+        if (! $this->hasTerminalProviderFinishedConflict($connection, $authority)) {
+            return false;
+        }
+
+        return $connection->table('nowpayments_reconciliation_findings')
+            ->where('nowpayments_payment_authority_id', $this->positiveInt($authority->id, 'NOWPayments authority ID'))
+            ->where('code', 'terminal_finished_conflict_status_changed')
+            ->where('severity', 'critical')
+            ->exists();
+    }
+
+    private function terminalProviderFinishedConflictHasCompetingPurchaseIntent(
+        Connection $connection,
+        stdClass $authority,
+        stdClass $intent,
+    ): bool {
+        if (! $this->hasTerminalProviderFinishedConflict($connection, $authority)
+            || ! is_string($intent->source_quote_public_id)) {
+            return false;
+        }
+
+        return $connection->table('payment_intents')
+            ->where('purpose', 'purchase')
+            ->where('source_quote_public_id', $intent->source_quote_public_id)
+            ->where('user_id', $this->positiveInt($intent->user_id, 'NOWPayments purchase user ID'))
+            ->where('id', '<>', $this->positiveInt($intent->id, 'NOWPayments payment intent ID'))
+            ->exists();
+    }
+
+    /**
+     * Reopen only the same purchase intent after an identity-validated provider-finished
+     * result contradicts a previously terminal NOWPayments authority. The database guard
+     * independently requires the matching manual-review NOWPayments authority and no
+     * settlement, so ordinary failed/expired intents remain terminal.
+     */
+    private function reopenIntentForTerminalProviderFinishedConflict(
+        Connection $connection,
+        int $intentId,
+        string $correlationId,
+    ): void {
+        $state = $this->intentStateForId($connection, $intentId);
+        if ($state === PaymentIntentState::PendingManualReview) {
+            return;
+        }
+        if (! in_array($state, [PaymentIntentState::Failed, PaymentIntentState::Expired], true)) {
+            throw new RuntimeException('NOWPayments terminal provider-finished conflict PaymentIntent is not terminal.');
+        }
+
+        $updated = $connection->table('payment_intents')
+            ->where('id', $intentId)
+            ->where('state', $state->value)
+            ->update([
+                'state' => PaymentIntentState::PendingManualReview->value,
+                'updated_at' => $this->timestamp(),
+            ]);
+        if ($updated !== 1) {
+            $actual = $connection->table('payment_intents')->where('id', $intentId)->value('state');
+            if ($actual === PaymentIntentState::PendingManualReview->value) {
+                return;
+            }
+
+            throw new RuntimeException('NOWPayments terminal provider-finished conflict PaymentIntent changed concurrently.');
+        }
+
+        $connection->table('payment_intent_state_histories')->insert([
+            'payment_intent_id' => $intentId,
+            'from_state' => $state->value,
+            'to_state' => PaymentIntentState::PendingManualReview->value,
+            'reason_code' => 'nowpayments_terminal_provider_finished_conflict',
+            'correlation_id' => $correlationId,
+            'created_at' => $this->timestamp(),
+        ]);
     }
 
     private function ensureIntentFailed(Connection $connection, int $intentId, string $correlationId, string $reason): void
@@ -1095,6 +1512,86 @@ final readonly class NowPaymentsPaymentService
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 
+    private function assertPurchaseContext(stdClass $intent, ?int $purchaseUserId, ?string $purchaseQuotePublicId): void
+    {
+        if ($purchaseUserId === null && $purchaseQuotePublicId === null) {
+            return;
+        }
+        if ($purchaseUserId === null || $purchaseQuotePublicId === null
+            || (int) $intent->user_id !== $purchaseUserId
+            || ! is_string($intent->source_quote_public_id)
+            || ! hash_equals($intent->source_quote_public_id, $purchaseQuotePublicId)
+            || $intent->payment_method_code !== self::PROVIDER_CODE) {
+            throw new DomainException('NOWPayments purchase intent identity changed.');
+        }
+    }
+
+    private function purchaseExecutionAvailable(int $actorUserId, string $quotePublicId): bool
+    {
+        if ($this->purchaseOrders->settlementAvailabilityFromQuote($quotePublicId, $actorUserId)
+            !== PurchaseOrderSettlementAvailability::AwaitingPayment) {
+            return false;
+        }
+
+        return ! $this->promotionUsage->requiresFinalizationForQuote($actorUserId, $quotePublicId)
+            || $this->promotionUsage->isFinalizationAuthorityAvailableForQuote($actorUserId, $quotePublicId);
+    }
+
+    private function abortFreshAuthorityBeforeProvider(
+        stdClass $authority,
+        string $correlationId,
+        string $reasonCode,
+    ): NowPaymentsPaymentReceipt {
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $authority,
+            $correlationId,
+            $reasonCode,
+        ): NowPaymentsPaymentReceipt {
+            $current = $this->requiredAuthority($connection, (int) $authority->id, true);
+            if ($this->authorityState((string) $current->state) !== NowPaymentsAuthorityState::Initiating) {
+                return $this->receipt($current, true);
+            }
+            $this->transitionAuthority($connection, $current, NowPaymentsAuthorityState::Failed);
+            $fresh = $this->requiredAuthority($connection, (int) $current->id, true);
+            $this->ensureIntentFailed(
+                $connection,
+                (int) $fresh->payment_intent_id,
+                $correlationId,
+                $reasonCode,
+            );
+            $this->observe(
+                $connection,
+                $fresh,
+                'purchase_pre_provider_unavailable',
+                null,
+                hash('sha256', $reasonCode),
+                $correlationId,
+            );
+
+            return $this->receipt($fresh, false);
+        });
+    }
+
+    private function purchaseIntentCreationKey(string $quotePublicId): string
+    {
+        return 'nowpayments.purchase.intent:'.$quotePublicId;
+    }
+
+    private function purchaseRequestKey(string $quotePublicId): string
+    {
+        return 'nowpayments.purchase.request:'.$quotePublicId;
+    }
+
+    private function promotionReservationKey(string $quotePublicId): string
+    {
+        return 'purchase-promotion-reservation:'.$quotePublicId;
+    }
+
+    private function promotionRedemptionKey(string $settlementPublicId): string
+    {
+        return 'purchase-promotion-redemption:'.$settlementPublicId;
+    }
+
     private function assertEligibleIntent(stdClass $intent): void
     {
         if ($intent->purpose !== 'purchase'
@@ -1151,7 +1648,32 @@ final readonly class NowPaymentsPaymentService
             $query->lockForUpdate();
         }
 
-        return $query->first(['id', 'public_id', 'purpose', 'provider_code', 'amount_irr', 'currency', 'state', 'captured_at']);
+        return $query->first([
+            'id', 'public_id', 'purpose', 'user_id', 'source_quote_public_id', 'payment_method_code',
+            'provider_code', 'amount_irr', 'currency', 'state', 'captured_at',
+        ]);
+    }
+
+    private function intentById(Connection $connection, int $id, bool $lock = false): ?stdClass
+    {
+        $query = $connection->table('payment_intents')->where('id', $id);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        return $query->first([
+            'id', 'public_id', 'purpose', 'user_id', 'source_quote_public_id', 'payment_method_code',
+            'provider_code', 'amount_irr', 'currency', 'state', 'captured_at',
+        ]);
+    }
+
+    private function settlementPublicIdForIntentId(Connection $connection, int $intentId): ?string
+    {
+        $value = $connection->table('purchase_settlements')
+            ->where('payment_intent_id', $intentId)
+            ->value('public_id');
+
+        return is_string($value) ? $value : null;
     }
 
     private function authorityByIntentPublicId(Connection $connection, string $intentPublicId): ?stdClass

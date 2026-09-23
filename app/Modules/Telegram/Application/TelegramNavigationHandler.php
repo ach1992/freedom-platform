@@ -11,6 +11,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
+use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
@@ -149,6 +150,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramInteractionCallbackService $callbacks,
         private CustomerAccountSummaryService $customers,
         private WalletSelfBalanceService $wallets,
+        private TelegramCustomerWalletTransferService $walletTransfers,
         private ReferralSelfSummaryService $referrals,
         private TelegramReferralDeepLink $referralLinks,
         private TelegramCustomerPurchaseQuote $purchaseQuotes,
@@ -828,7 +830,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     {
         if (! $this->managedUsdtRateSettings->availableFor($action->userId)
             && ! $this->administratorCustomerTargets->availableFor($action->userId)
-            && ! $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {
+            && ! $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
+            && ! $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $this->returnHome($action);
 
             return;
@@ -1019,6 +1022,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
+    public function renderCurrentAdminControl(TelegramInteractionAction $action, int $sessionVersion): void
+    {
+        $locale = $this->customers->forSelf($action->userId, $action->userId)->locale === 'en' ? 'en' : 'fa';
+        $this->renderAdminControl($action, $sessionVersion, $locale, $action->requestKey.':client-guides-return');
+    }
+
     private function renderAdminControl(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -1053,6 +1062,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.usdt_rate', $locale),
                 $rate->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
+        if ($this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
+            $guides = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramClientGuideNavigationHandler::ACTION_ADMIN_ENTRY,
+                [],
+                'nav-admin-client-guides:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.client_guides', $locale),
+                $guides->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }
@@ -3148,6 +3172,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )],
         ];
         if ($customer->accountType === 'customer' && $customer->accountStatus === 'active') {
+            if ($this->walletTransfers->availableForSelf($action->userId, $action->userId)) {
+                $transfer = $this->callbacks->issue(
+                    $action->sessionPublicId,
+                    $sessionVersion,
+                    TelegramWalletTransferNavigationHandler::ACTION_ENTRY,
+                    [],
+                    'nav-home-wallet-transfer:'.$requestKey,
+                );
+                $rows[] = [new TelegramInlineCallbackButton(
+                    $this->translation('telegram_wallet_transfer.entry', $locale),
+                    $transfer->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )];
+            }
             $purchase = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
@@ -3176,6 +3214,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $rows[] = [new TelegramInlineCallbackButton(
             $this->translation('telegram.navigation.buttons.my_services', $locale),
             $services->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
+        $guides = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            TelegramClientGuideNavigationHandler::ACTION_ENTRY,
+            [],
+            'nav-home-client-guides:'.$requestKey,
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.client_guides', $locale),
+            $guides->publicId,
             TelegramInlineButtonStyle::Primary,
         )];
         if ($this->supportContact->mode->showsInternal()) {
@@ -3225,7 +3275,8 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         }
         if ($this->managedUsdtRateSettings->availableFor($action->userId)
             || $this->administratorCustomerTargets->availableFor($action->userId)
-            || $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {
+            || $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
+            || $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $admin = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,

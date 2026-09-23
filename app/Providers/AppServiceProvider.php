@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Modules\Catalog\Application\TelegramClientGuideCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerPurchaseCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerTrialCatalogService;
 use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
@@ -28,6 +29,7 @@ use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGen
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
 use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
+use App\Modules\Payments\NowPayments\Application\TelegramCustomerPurchaseNowPaymentsPaymentService;
 use App\Modules\Payments\NowPayments\Infrastructure\HttpNowPaymentsTransport;
 use App\Modules\Payments\Usdt\Application\TelegramCustomerPurchaseUsdtPaymentService;
 use App\Modules\Payments\Usdt\Application\TelegramManagedUsdtRateSettingsService;
@@ -47,11 +49,13 @@ use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTarg
 use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
+use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseGiftCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseNowPaymentsPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
@@ -87,6 +91,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramAgentReport::class, AgentReportService::class);
         $this->app->bind(TelegramAgentBulkPurchase::class, TelegramAgentBulkPurchaseService::class);
         $this->app->bind(TelegramAdministratorCustomerTargetDiscovery::class, TelegramAdministratorCustomerTargetDiscoveryService::class);
+        $this->app->bind(TelegramClientGuideCatalog::class, TelegramClientGuideCatalogService::class);
         $this->app->bind(TelegramCustomerPurchaseCatalog::class, TelegramCustomerPurchaseCatalogService::class);
         $this->app->bind(TelegramCustomerTrialCatalog::class, TelegramCustomerTrialCatalogService::class);
         $this->app->bind(TelegramCustomerTrialClaim::class, TelegramCustomerTrialClaimService::class);
@@ -109,6 +114,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerPurchaseCardToCardPayment::class, TelegramCustomerPurchaseCardToCardPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseGiftCardPayment::class, TelegramCustomerPurchaseGiftCardPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseUsdtPayment::class, TelegramCustomerPurchaseUsdtPaymentService::class);
+        $this->app->bind(TelegramCustomerPurchaseNowPaymentsPayment::class, TelegramCustomerPurchaseNowPaymentsPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseZarinpalPayment::class, TelegramCustomerPurchaseZarinpalPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
         $this->app->bind(TelegramCustomerPurchaseWalletPayment::class, TelegramCustomerPurchaseWalletPaymentService::class);

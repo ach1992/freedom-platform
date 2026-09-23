@@ -6,8 +6,8 @@ namespace Tests\Feature;
 
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentChangeContext;
-use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
+use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
@@ -6774,6 +6774,121 @@ SQL);
             ->where('action', 'navigation.admin.customer.message')
             ->where('state', 'active')
             ->count());
+    }
+
+    public function test_client_guide_catalogue_is_managed_in_telegram_and_customer_links_are_policy_filtered(): void
+    {
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $adminTelegramId = 9780;
+        $customerTelegramId = 9781;
+
+        $this->accept($this->payload(7800, $adminTelegramId, 'guide_admin', 'en', '/start'));
+        $processor->process('123456789', 7800);
+        $adminAccount = DB::table('telegram_accounts')->where('telegram_user_id', $adminTelegramId)->first(['id', 'user_id']);
+        self::assertNotNull($adminAccount);
+        $this->salesContentAdministratorForUser((int) $adminAccount->user_id);
+        $this->accept($this->payload(7801, $adminTelegramId, 'guide_admin', 'en', '/menu'));
+        $processor->process('123456789', 7801);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7802, $adminTelegramId, 'guide_admin', 'en', $adminToken));
+        $processor->process('123456789', 7802);
+
+        $guidesAdminToken = $this->callbackToken('navigation.admin.client_guides', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7803, $adminTelegramId, 'guide_admin', 'en', $guidesAdminToken));
+        $processor->process('123456789', 7803);
+        self::assertSame('admin_client_guide_catalog', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)->value('state'));
+
+        $addToken = $this->callbackToken('navigation.admin.client_guides.add', (int) $adminAccount->id);
+        $this->accept($this->callbackPayload(7804, $adminTelegramId, 'guide_admin', 'en', $addToken));
+        $processor->process('123456789', 7804);
+        self::assertSame('admin_client_guide_edit', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $adminAccount->id)->value('state'));
+
+        $create = implode("\n", [
+            'code=android-official',
+            'platform=android',
+            'language=any',
+            'audience=all',
+            'tier=-',
+            'tag=-',
+            'sort=20',
+            'state=active',
+            'url=https://apps.example.com/client?platform=android',
+            'emoji=📱',
+            'premium=-',
+            'title_fa=کلاینت اندروید',
+            'title_en=Android client',
+            'description_fa=دانلود نسخه رسمی',
+            'description_en=Official client download',
+            'tutorial_fa=پس از نصب، لینک اتصال را وارد کنید.',
+            'tutorial_en=Import your connection link after installation.',
+            'reason=initial official resource',
+        ]);
+        $this->accept($this->payload(7805, $adminTelegramId, 'guide_admin', 'en', $create));
+        $processor->process('123456789', 7805);
+        self::assertSame(1, DB::table('client_guide_resources')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'catalog.client_guide.create')->count());
+        $resource = DB::table('client_guide_resources')->first(['public_id', 'state', 'sort_order', 'version']);
+        self::assertNotNull($resource);
+        self::assertSame('active', (string) $resource->state);
+        self::assertSame(20, (int) $resource->sort_order);
+        self::assertSame(1, (int) $resource->version);
+
+        $processor->process('123456789', 7805);
+        self::assertSame(1, DB::table('client_guide_resources')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'catalog.client_guide.create')->count());
+
+        $this->accept($this->payload(7810, $customerTelegramId, 'guide_customer', 'fa', '/start'));
+        $processor->process('123456789', 7810);
+        $customerAccount = DB::table('telegram_accounts')->where('telegram_user_id', $customerTelegramId)->first(['id', 'user_id']);
+        self::assertNotNull($customerAccount);
+        $this->accept($this->payload(7811, $customerTelegramId, 'guide_customer', 'fa', '/menu'));
+        $processor->process('123456789', 7811);
+        $guidesToken = $this->callbackToken('navigation.client_guides', (int) $customerAccount->id);
+        $this->accept($this->callbackPayload(7812, $customerTelegramId, 'guide_customer', 'fa', $guidesToken));
+        $processor->process('123456789', 7812);
+        self::assertSame('client_guide_catalog', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $customerAccount->id)->value('state'));
+        $operationPublicId = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $customerTelegramId)->orderByDesc('id')->value('public_id');
+        self::assertIsString($operationPublicId);
+        $keyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $operationPublicId)->value('keyboard_snapshot');
+        self::assertIsString($keyboard);
+        self::assertStringContainsString('https://apps.example.com/client?platform=android', $keyboard);
+        self::assertStringContainsString('client_guide_resource', $keyboard);
+
+        $editPayload = json_encode(['resource' => (string) $resource->public_id], JSON_THROW_ON_ERROR);
+        $editToken = $this->callbackToken('navigation.admin.client_guides.edit', (int) $adminAccount->id, $editPayload);
+        $this->accept($this->callbackPayload(7806, $adminTelegramId, 'guide_admin', 'en', $editToken));
+        $processor->process('123456789', 7806);
+        $update = str_replace(
+            ['sort=20', 'state=active', 'reason=initial official resource'],
+            ['sort=5', 'state=disabled', 'reason=disable and reorder resource'],
+            $create,
+        );
+        $this->accept($this->payload(7807, $adminTelegramId, 'guide_admin', 'en', $update));
+        $processor->process('123456789', 7807);
+        $stored = DB::table('client_guide_resources')->where('public_id', (string) $resource->public_id)->first(['state', 'sort_order', 'version']);
+        self::assertNotNull($stored);
+        self::assertSame('disabled', (string) $stored->state);
+        self::assertSame(5, (int) $stored->sort_order);
+        self::assertSame(2, (int) $stored->version);
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'catalog.client_guide.update')->count());
+
+        $this->accept($this->payload(7813, $customerTelegramId, 'guide_customer', 'fa', '/menu'));
+        $processor->process('123456789', 7813);
+        $guidesTokenAfterDisable = $this->callbackToken('navigation.client_guides', (int) $customerAccount->id);
+        $this->accept($this->callbackPayload(7814, $customerTelegramId, 'guide_customer', 'fa', $guidesTokenAfterDisable));
+        $processor->process('123456789', 7814);
+        $operationPublicId = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $customerTelegramId)->orderByDesc('id')->value('public_id');
+        self::assertIsString($operationPublicId);
+        $keyboard = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', $operationPublicId)->value('keyboard_snapshot');
+        self::assertIsString($keyboard);
+        self::assertStringNotContainsString('https://apps.example.com/client?platform=android', $keyboard);
     }
 
     public function test_admin_usdt_rate_journey_is_permission_filtered_confidential_and_crash_replay_idempotent(): void

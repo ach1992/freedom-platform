@@ -6,6 +6,8 @@ namespace App\Modules\Payments\GiftCard\Application;
 
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\PurchaseOrderSettlementAvailability;
+use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderRequest;
@@ -28,6 +30,7 @@ final readonly class GiftCardPaymentService
         private GiftCardRedemptionService $redemptions,
         private GiftCardReleaseService $releases,
         private PurchaseOrderService $orders,
+        private PurchaseProviderMutationBarrier $providerMutations,
         private Clock $clock,
     ) {}
 
@@ -122,6 +125,7 @@ final readonly class GiftCardPaymentService
             return $this->routeMissingRedeemCapability($submissionPublicId, $provider->code(), $correlationId);
         }
 
+        $paymentIntentId = $this->paymentIntentIdForSubmission($submissionPublicId);
         if ($capabilities->reserve) {
             $orderUnavailable = $this->guardProviderValueMutation(
                 $submissionPublicId,
@@ -131,13 +135,29 @@ final readonly class GiftCardPaymentService
             if ($orderUnavailable !== null) {
                 return $orderUnavailable;
             }
-            $reserveRequest = $this->beginProviderMutation($submissionPublicId, 'reserve', ['valid_unreserved'], 'reserving');
-            try {
-                $reserve = $provider->reserve($reserveRequest);
-            } catch (Throwable $exception) {
-                return $this->handleProviderFailure($submissionPublicId, 'reserve_call_uncertain', $provider->code(), $correlationId, true, $exception);
-            }
-            $reserveResult = $this->recordReserve($submissionPublicId, $provider->code(), $reserve, $correlationId);
+            $reserveResult = $this->providerMutations->runForPaymentIntent(
+                $paymentIntentId,
+                'gift-card:reserve:'.$submissionPublicId,
+                function (PurchaseProviderMutationAttempt $attempt) use ($submissionPublicId, $provider, $correlationId): string|GiftCardProcessingReceipt {
+                    $reserveRequest = $this->beginProviderMutation($submissionPublicId, 'reserve', ['valid_unreserved'], 'reserving');
+                    try {
+                        $attempt->markExternalEffectStarted();
+                        $reserve = $provider->reserve($reserveRequest);
+                    } catch (Throwable $exception) {
+                        $receipt = $this->handleProviderFailure($submissionPublicId, 'reserve_call_uncertain', $provider->code(), $correlationId, true, $exception);
+                        $attempt->requireReconciliation();
+
+                        return $receipt;
+                    }
+
+                    $receipt = $this->recordReserve($submissionPublicId, $provider->code(), $reserve, $correlationId);
+                    if (in_array($reserve->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
+                        $attempt->requireReconciliation();
+                    }
+
+                    return $receipt;
+                },
+            );
             if ($reserveResult instanceof GiftCardProcessingReceipt) {
                 return $reserveResult;
             }
@@ -151,22 +171,48 @@ final readonly class GiftCardPaymentService
         if ($orderUnavailable !== null) {
             return $orderUnavailable;
         }
-        $redeemRequest = $this->beginProviderMutation($submissionPublicId, 'redeem', ['valid_unreserved', 'reserved'], 'redeeming');
-        try {
-            $redeem = $provider->redeem($redeemRequest);
-        } catch (Throwable $exception) {
-            $this->recordFinding($submissionPublicId, 'redeem_call_uncertain', 'critical', $provider->code(), null, null, null, $correlationId);
-            throw new RuntimeException('Gift-card redeem outcome is uncertain; reconcile provider status before retry.', 0, $exception);
+
+        return $this->providerMutations->runForPaymentIntent(
+            $paymentIntentId,
+            'gift-card:redeem:'.$submissionPublicId,
+            function (PurchaseProviderMutationAttempt $attempt) use ($submissionPublicId, $provider, $correlationId): GiftCardProcessingReceipt {
+                $redeemRequest = $this->beginProviderMutation($submissionPublicId, 'redeem', ['valid_unreserved', 'reserved'], 'redeeming');
+                try {
+                    $attempt->markExternalEffectStarted();
+                    $redeem = $provider->redeem($redeemRequest);
+                } catch (Throwable $exception) {
+                    $this->recordFinding($submissionPublicId, 'redeem_call_uncertain', 'critical', $provider->code(), null, null, null, $correlationId);
+                    throw new RuntimeException('Gift-card redeem outcome is uncertain; reconcile provider status before retry.', 0, $exception);
+                }
+
+                if ($redeem->operation !== 'redeem') {
+                    throw new RuntimeException('Gift-card provider returned evidence for the wrong operation.');
+                }
+                if ($redeem->outcome !== 'success' || $redeem->status !== 'redeemed') {
+                    $receipt = $this->recordNonSuccessfulRedeem($submissionPublicId, $provider->code(), $redeem, $correlationId);
+                    if (in_array($redeem->outcome, ['pending', 'uncertain', 'unavailable'], true)) {
+                        $attempt->requireReconciliation();
+                    }
+
+                    return $receipt;
+                }
+
+                return $this->redemptions->recordAndSettle($submissionPublicId, $provider->code(), $redeem, $correlationId);
+            },
+        );
+    }
+
+    private function paymentIntentIdForSubmission(string $submissionPublicId): int
+    {
+        $authority = $this->submissionAuthority($this->database->connection(), $submissionPublicId);
+        $paymentIntentId = $authority === null
+            ? false
+            : filter_var($authority->payment_intent_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($paymentIntentId === false) {
+            throw new RuntimeException('Gift-card provider mutation payment intent authority is unavailable.');
         }
 
-        if ($redeem->operation !== 'redeem') {
-            throw new RuntimeException('Gift-card provider returned evidence for the wrong operation.');
-        }
-        if ($redeem->outcome !== 'success' || $redeem->status !== 'redeemed') {
-            return $this->recordNonSuccessfulRedeem($submissionPublicId, $provider->code(), $redeem, $correlationId);
-        }
-
-        return $this->redemptions->recordAndSettle($submissionPublicId, $provider->code(), $redeem, $correlationId);
+        return (int) $paymentIntentId;
     }
 
     private function guardProviderValueMutation(
