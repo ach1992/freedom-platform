@@ -495,13 +495,6 @@ final readonly class AdministratorAccessManagementQueryService
         return $this->ulid($row->id ?? null, 'Owner transfer ID');
     }
 
-    private function authorizeViewer(int $actorUserId): void
-    {
-        if (! $this->availableForUser($actorUserId)) {
-            throw new AuthorizationException('Administrator access-management visibility denied.');
-        }
-    }
-
     private function authorizeTargetViewer(int $actorUserId): void
     {
         foreach (self::TARGET_MANAGEMENT_PERMISSIONS as $permission) {
