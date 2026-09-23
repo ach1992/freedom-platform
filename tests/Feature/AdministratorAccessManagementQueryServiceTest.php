@@ -124,6 +124,50 @@ final class AdministratorAccessManagementQueryServiceTest extends TestCase
         }
     }
 
+    public function test_catalog_queries_enforce_method_level_permissions_independent_of_menu_visibility(): void
+    {
+        [, $ownerAdministratorId] = $this->administrator(true);
+        [$accountManagerUserId, $accountManagerAdministratorId] = $this->administrator();
+        [$roleManagerUserId, $roleManagerAdministratorId] = $this->administrator();
+        [$overrideManagerUserId, $overrideManagerAdministratorId] = $this->administrator();
+
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $accountManagerAdministratorId,
+            'admins.accounts.manage',
+        );
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $roleManagerAdministratorId,
+            'access.roles.manage',
+        );
+        $this->grantPermissionToAdministrator(
+            $ownerAdministratorId,
+            $overrideManagerAdministratorId,
+            'access.permissions.override',
+        );
+
+        $service = $this->app->make(AdministratorAccessManagementQueryService::class);
+
+        try {
+            $service->roles($accountManagerUserId);
+            self::fail('Expected role catalog to require role-management permission.');
+        } catch (AuthorizationException) {
+            self::assertTrue(true);
+        }
+
+        try {
+            $service->permissions($accountManagerUserId);
+            self::fail('Expected permission catalog to require role or override permission.');
+        } catch (AuthorizationException) {
+            self::assertTrue(true);
+        }
+
+        self::assertNotSame([], $service->roles($roleManagerUserId));
+        self::assertNotSame([], $service->permissions($roleManagerUserId));
+        self::assertNotSame([], $service->permissions($overrideManagerUserId));
+    }
+
     public function test_role_and_permission_selection_tokens_cannot_cross_actor_boundaries(): void
     {
         [, $ownerAdministratorId] = $this->administrator(true);

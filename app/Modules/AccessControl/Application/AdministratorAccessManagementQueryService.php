@@ -230,7 +230,7 @@ final readonly class AdministratorAccessManagementQueryService
     /** @return list<AdministratorRoleCatalogItem> */
     public function roles(int $actorUserId): array
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizeRoleViewer($actorUserId);
         $connection = $this->database->connection();
         $rows = $connection->table('roles')->orderBy('code')->get(['id', 'code', 'is_system', 'is_active']);
         $items = [];
@@ -259,7 +259,7 @@ final readonly class AdministratorAccessManagementQueryService
     /** @return list<AdministratorPermissionCatalogItem> */
     public function permissions(int $actorUserId): array
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizePermissionViewer($actorUserId);
         $rows = $this->database->connection()->table('permissions')
             ->orderBy('code')
             ->get(['code', 'module', 'risk_level', 'requires_approval']);
@@ -279,7 +279,7 @@ final readonly class AdministratorAccessManagementQueryService
 
     public function roleSelectionToken(int $actorUserId, string $roleCode): string
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizeRoleViewer($actorUserId);
         $normalized = strtolower(trim($roleCode));
         if (preg_match('/\A[a-z0-9_.-]{1,64}\z/', $normalized) !== 1
             || ! $this->database->connection()->table('roles')->where('code', $normalized)->exists()) {
@@ -291,7 +291,7 @@ final readonly class AdministratorAccessManagementQueryService
 
     public function resolveRoleSelectionToken(int $actorUserId, string $selectionToken): string
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizeRoleViewer($actorUserId);
         $this->assertSelectionToken($selectionToken);
 
         $code = $this->database->connection()->table('roles')
@@ -306,7 +306,7 @@ final readonly class AdministratorAccessManagementQueryService
 
     public function permissionSelectionToken(int $actorUserId, string $permissionCode): string
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizePermissionViewer($actorUserId);
         $normalized = strtolower(trim($permissionCode));
         if (preg_match('/\A[a-z0-9_.-]{1,128}\z/', $normalized) !== 1
             || ! $this->database->connection()->table('permissions')->where('code', $normalized)->exists()) {
@@ -318,7 +318,7 @@ final readonly class AdministratorAccessManagementQueryService
 
     public function resolvePermissionSelectionToken(int $actorUserId, string $selectionToken): string
     {
-        $this->authorizeViewer($actorUserId);
+        $this->authorizePermissionViewer($actorUserId);
         $this->assertSelectionToken($selectionToken);
 
         $code = $this->database->connection()->table('permissions')
@@ -511,6 +511,21 @@ final readonly class AdministratorAccessManagementQueryService
         }
 
         throw new AuthorizationException('Administrator target-management visibility denied.');
+    }
+
+    private function authorizeRoleViewer(int $actorUserId): void
+    {
+        $this->administrators->authorizeUser($actorUserId, 'access.roles.manage');
+    }
+
+    private function authorizePermissionViewer(int $actorUserId): void
+    {
+        if ($this->administrators->allowsUser($actorUserId, 'access.roles.manage')
+            || $this->administrators->allowsUser($actorUserId, 'access.permissions.override')) {
+            return;
+        }
+
+        throw new AuthorizationException('Administrator permission-catalog visibility denied.');
     }
 
     private function activeAdministratorIdForUser(int $actorUserId): int
