@@ -423,6 +423,66 @@ final class AgentBulkOrderServiceTest extends TestCase
         self::assertSame(1, DB::table('purchase_settlements')->count());
     }
 
+    public function test_unrelated_query_exception_is_not_masked_when_selected_settlement_is_already_claimed(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('bulk-unrelated-query');
+        $settlement = $this->agentSettlement('bulk-unrelated-query', $agent, $offering['id']);
+        $service = $this->app->make(AgentBulkOrderService::class);
+
+        $first = $service->execute(
+            'bulk-unrelated-query-parent-0001',
+            $agent,
+            [[
+                'child_key' => 'bulk-unrelated-query-child-a',
+                'purchase_settlement_public_id' => $settlement->settlementPublicId,
+            ]],
+            $this->purchaseOrderCorrelation('bulk-unrelated-query-first'),
+        );
+        self::assertSame(1, $first->succeededCount);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER agent_bulk_order_test_unrelated_parent_failure
+BEFORE INSERT ON agent_bulk_orders
+FOR EACH ROW
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-unrelated-agent-bulk-parent-failure';
+END
+SQL);
+        try {
+            try {
+                $service->execute(
+                    'bulk-unrelated-query-parent-0002',
+                    $agent,
+                    [[
+                        'child_key' => 'bulk-unrelated-query-child-b',
+                        'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                    ]],
+                    $this->purchaseOrderCorrelation('bulk-unrelated-query-second'),
+                );
+                self::fail('An unrelated QueryException must not be translated into a settlement-claim domain conflict.');
+            } catch (QueryException $exception) {
+                self::assertSame('45000', (string) ($exception->errorInfo[0] ?? $exception->getCode()));
+                self::assertStringContainsString(
+                    'simulated-unrelated-agent-bulk-parent-failure',
+                    (string) ($exception->errorInfo[2] ?? $exception->getMessage()),
+                );
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS agent_bulk_order_test_unrelated_parent_failure');
+        }
+
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-unrelated-query-child-a')->count());
+        self::assertSame(0, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-unrelated-query-child-b')->count());
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame(1, DB::table('order_items')->count());
+        self::assertSame(1, DB::table('payment_intents')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+    }
+
     public function test_failed_child_retry_never_recreates_successful_child_or_second_debit(): void
     {
         [$agent, $offering] = $this->agentAuthority('bulk-partial');
