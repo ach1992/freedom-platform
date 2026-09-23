@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace App\Modules\AccessControl\Infrastructure;
 
 use App\Modules\AccessControl\Application\AccessMutationAudit;
+use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryService;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorLifecycleService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\AccessControl\Application\AdministratorRoleCatalogService;
+use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\AccessControl\Application\OwnerTransferService;
 use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
 use App\Modules\AccessControl\Application\SensitiveApprovalAudit;
@@ -32,6 +35,31 @@ final class AccessControlServiceProvider extends ServiceProvider
             fn (Application $application): AdministratorPermissionAuthorizer => new AdministratorPermissionAuthorizer(
                 $application->make(DatabaseManager::class),
                 $application->make(PermissionResolver::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorUserPermissionAuthorizer::class,
+            fn (Application $application): AdministratorUserPermissionAuthorizer => new AdministratorUserPermissionAuthorizer(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorAccessManagementQueryService::class,
+            fn (Application $application): AdministratorAccessManagementQueryService => new AdministratorAccessManagementQueryService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorUserPermissionAuthorizer::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorRoleCatalogService::class,
+            fn (Application $application): AdministratorRoleCatalogService => new AdministratorRoleCatalogService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(Clock::class),
             ),
         );
 
