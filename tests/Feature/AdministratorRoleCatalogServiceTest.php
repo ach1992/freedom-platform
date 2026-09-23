@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\AccessControl\Application\AccessChangeContext;
 use App\Modules\AccessControl\Application\AdministratorRoleCatalogService;
+use App\Modules\AccessControl\Application\OwnerTransferService;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -124,6 +125,60 @@ final class AdministratorRoleCatalogServiceTest extends TestCase
         );
         self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
         self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+    }
+
+    public function test_custom_role_change_invalidates_existing_owner_transfer_intent(): void
+    {
+        $ownerId = $this->administrator(true);
+        $targetId = $this->administrator();
+        $roles = $this->app->make(AdministratorRoleCatalogService::class);
+
+        $roles->createCustomRole(
+            'custom.transfer_guard',
+            $this->context($ownerId, 'custom-role-transfer-create-0001'),
+        );
+        $this->assignRole($targetId, 'custom.transfer_guard');
+
+        $transfer = $this->app->make(OwnerTransferService::class)->request(
+            $targetId,
+            600,
+            $this->context($ownerId, 'custom-role-transfer-request-0001'),
+        );
+        $transferId = $transfer->after['transfer_id'] ?? null;
+        self::assertIsString($transferId);
+        self::assertSame(1, (int) DB::table('administrators')
+            ->where('id', $targetId)
+            ->value('permission_version'));
+
+        $roles->setCustomRolePermission(
+            'custom.transfer_guard',
+            'identity.customers.view',
+            true,
+            $this->context($ownerId, 'custom-role-transfer-permission-0001'),
+        );
+        self::assertSame(2, (int) DB::table('administrators')
+            ->where('id', $targetId)
+            ->value('permission_version'));
+
+        try {
+            $this->app->make(OwnerTransferService::class)->accept(
+                $transferId,
+                $this->context($targetId, 'custom-role-transfer-accept-0001'),
+            );
+            self::fail('Expected the pre-change ownership intent to become stale.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Owner transfer intent is stale.', $exception->getMessage());
+        }
+
+        self::assertSame('pending', DB::table('owner_transfer_requests')
+            ->where('id', $transferId)
+            ->value('state'));
+        self::assertSame(1, (int) DB::table('administrators')
+            ->where('id', $ownerId)
+            ->value('is_owner'));
+        self::assertSame(0, (int) DB::table('administrators')
+            ->where('id', $targetId)
+            ->value('is_owner'));
     }
 
     public function test_reused_fingerprint_cannot_be_rebound_to_another_permission_or_value(): void
