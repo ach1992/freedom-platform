@@ -8065,8 +8065,25 @@ SQL);
     }
 
     /** @requirement AGT-004 BUY-003 DAT-002 DAT-003 SEC-002 SEC-003 QUA-001 QUA-004 */
-    public function test_agent_bulk_purchase_recovers_submitting_fence_after_result_finalize_failure_without_second_effect(): void
+    public function test_agent_bulk_purchase_recovers_locked_submitting_fence_after_cancel_and_expiry_without_second_effect(): void
     {
+        Config::set('telegram.interaction_session_ttl_seconds', 60);
+        $clock = new class(new DateTimeImmutable('now', new \DateTimeZone('UTC'))) implements Clock
+        {
+            public function __construct(private DateTimeImmutable $current) {}
+
+            public function now(): DateTimeImmutable
+            {
+                return $this->current;
+            }
+
+            public function advance(string $modifier): void
+            {
+                $this->current = $this->current->modify($modifier);
+            }
+        };
+        $this->app->instance(Clock::class, $clock);
+
         $telegramUserId = 9780;
         $reviewerTelegramUserId = 9781;
         $bulk = new TelegramNavigationAgentBulkPurchase;
@@ -8158,16 +8175,34 @@ SQL);
 
         self::assertSame(1, $bulk->executeCalls);
         self::assertSame(1, $bulk->effectCount);
-        $submitting = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['state', 'version', 'payload']);
+        $submitting = DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->first(['state', 'status', 'version', 'payload', 'expires_at']);
         self::assertNotNull($submitting);
         self::assertSame('agent_bulk_submitting', (string) $submitting->state);
+        self::assertSame('active', (string) $submitting->status);
         self::assertStringContainsString('"mode":"confirm"', (string) $submitting->payload);
+        $submittingPayload = json_decode((string) $submitting->payload, true, 32, JSON_THROW_ON_ERROR);
+        self::assertTrue($submittingPayload['cancel_locked'] ?? false);
+        self::assertTrue($submittingPayload['expiry_locked'] ?? false);
         $this->assertDatabaseHas('processed_telegram_updates', [
             'bot_id' => '123456789',
             'update_id' => 7656,
             'state' => 'failed',
             'attempt_count' => 1,
         ]);
+
+        $this->accept($this->payload(7661, $telegramUserId, 'agent_bulk_recovery', 'en', '/cancel'));
+        $this->processTelegramUpdateOrFail($processor, 7661);
+        $afterCancel = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $accountId)
+            ->first(['state', 'status', 'version', 'payload']);
+        self::assertNotNull($afterCancel);
+        self::assertSame('agent_bulk_submitting', (string) $afterCancel->state);
+        self::assertSame('active', (string) $afterCancel->status);
+        self::assertSame((int) $submitting->version, (int) $afterCancel->version);
+        self::assertSame((string) $submitting->payload, (string) $afterCancel->payload);
+
+        $clock->advance('+2 minutes');
+        self::assertGreaterThan(new DateTimeImmutable((string) $submitting->expires_at), $clock->now());
 
         $this->processTelegramUpdateOrFail($processor, 7656);
 
@@ -8181,7 +8216,14 @@ SQL);
             'state' => 'processed',
             'attempt_count' => 2,
         ]);
-        self::assertSame('agent_bulk_result', (string) DB::table('telegram_interaction_sessions')->where('telegram_account_id', $accountId)->value('state'));
+        $resultSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', $accountId)
+            ->first(['state', 'payload']);
+        self::assertNotNull($resultSession);
+        self::assertSame('agent_bulk_result', (string) $resultSession->state);
+        $resultPayload = json_decode((string) $resultSession->payload, true, 32, JSON_THROW_ON_ERROR);
+        self::assertArrayNotHasKey('cancel_locked', $resultPayload);
+        self::assertArrayNotHasKey('expiry_locked', $resultPayload);
         self::assertStringContainsString('Replay/recovery: Yes', $this->latestConfidentialPresentation());
     }
 
