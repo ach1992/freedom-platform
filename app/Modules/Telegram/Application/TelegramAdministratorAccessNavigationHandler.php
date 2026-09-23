@@ -1636,9 +1636,12 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         }
 
         $locale = $this->locale($action->userId);
-        $roles = $this->queries->roles($action->userId);
+        $roles = array_values(array_filter(
+            $this->queries->roles($action->userId),
+            static fn ($role): bool => $role->isActive,
+        ));
         $list = implode(', ', array_map(
-            static fn ($role): string => $role->code.($role->isActive ? '' : ' [inactive]'),
+            static fn ($role): string => $role->code,
             array_slice($roles, 0, 30),
         ));
         $text = $this->translation('telegram.navigation.admin.access.role_input.'.$surface, $locale, [

@@ -297,8 +297,11 @@ final readonly class AdministratorAccessManagementQueryService
         $this->authorizeRoleViewer($actorUserId);
         $normalized = strtolower(trim($roleCode));
         if (preg_match('/\A[a-z0-9_.-]{1,64}\z/', $normalized) !== 1
-            || ! $this->database->connection()->table('roles')->where('code', $normalized)->exists()) {
-            throw new RuntimeException('Role does not exist.');
+            || ! $this->database->connection()->table('roles')
+                ->where('code', $normalized)
+                ->where('is_active', true)
+                ->exists()) {
+            throw new RuntimeException('Active role does not exist.');
         }
 
         return $this->selectionToken('role', $actorUserId, $normalized);
@@ -310,6 +313,7 @@ final readonly class AdministratorAccessManagementQueryService
         $this->assertSelectionToken($selectionToken);
 
         $code = $this->database->connection()->table('roles')
+            ->where('is_active', true)
             ->whereRaw(
                 "LEFT(SHA2(CONCAT('telegram-admin-access-role-v1:', ?, ':', code), 256), 40) = ?",
                 [(string) $actorUserId, $selectionToken],
