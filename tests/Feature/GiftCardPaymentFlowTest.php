@@ -111,6 +111,7 @@ final class GiftCardReserveRaceVerificationProvider implements GiftCardVerificat
         private readonly GiftCardProviderEvidence $reservation,
         private readonly GiftCardProviderEvidence $releaseEvidence,
         private readonly \Closure $beforeReserveResponse,
+        private readonly ?\Closure $beforeReleaseResponse = null,
     ) {}
 
     public function code(): string
@@ -156,6 +157,9 @@ final class GiftCardReserveRaceVerificationProvider implements GiftCardVerificat
             throw new RuntimeException('Reserve-race provider release must not be called twice.');
         }
         $this->releaseCalled = true;
+        if ($this->beforeReleaseResponse !== null) {
+            ($this->beforeReleaseResponse)();
+        }
 
         return $this->releaseEvidence;
     }
@@ -414,6 +418,12 @@ final class GiftCardPaymentFlowTest extends TestCase
                     $this->correlation('order-reserve-race-winner-process'),
                 );
                 self::assertSame('captured', $captured->state);
+            },
+            function () use ($racing): void {
+                $this->assertExactExternalProviderMutationAttempt(
+                    'gift_card',
+                    'gift-card:release:'.$racing->publicId,
+                );
             },
         );
 

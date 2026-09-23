@@ -43,6 +43,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\PromotionAccessFoundationSeeder;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Cache\ArrayStore;
@@ -600,6 +601,224 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         $this->assertUpgradeFencesAbsent();
     }
 
+    #[DataProvider('unresolvedRollbackAttemptStates')]
+    public function test_attempt_authority_rollback_refuses_unresolved_attempt_and_preserves_authority(string $state): void
+    {
+        $fixture = $this->legacyTerminalConflictFixture('attempt-rollback-refusal-'.$state, 'failed');
+        $this->migration()->down();
+        $attemptId = $this->insertUnresolvedProviderAttemptViaPdo($fixture, $state);
+
+        try {
+            $this->providerAttemptMigration()->down();
+            self::fail('Provider attempt authority rollback must refuse unresolved '.$state.' authority.');
+        } catch (RuntimeException $exception) {
+            self::assertStringContainsString(
+                'Cannot roll back provider mutation attempt authority while unresolved attempts exist.',
+                $exception->getMessage(),
+            );
+        }
+
+        self::assertTrue(
+            DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts'),
+            'Rollback refusal must leave durable attempt authority installed.',
+        );
+        foreach ([
+            'purchase_provider_mutation_attempts_insert_guard',
+            'purchase_provider_mutation_attempts_update_guard',
+            'purchase_provider_mutation_attempts_delete_guard',
+        ] as $trigger) {
+            self::assertTrue($this->triggerExists($trigger), 'Rollback refusal removed provider attempt guard '.$trigger.'.');
+        }
+        self::assertSame(
+            $state,
+            DB::table('purchase_provider_mutation_attempts')->where('id', $attemptId)->value('state'),
+        );
+
+        // TRUNCATE is test cleanup only: the assertion above proves normal DELETE remains
+        // fail-closed for unresolved authority. Clear the fixture so tearDown can re-enter.
+        DB::statement('TRUNCATE TABLE purchase_provider_mutation_attempts');
+        $this->migration()->up();
+        $this->assertUpgradeFencesAbsent();
+    }
+
+    /** @return array<string,array{string}> */
+    public static function unresolvedRollbackAttemptStates(): array
+    {
+        return [
+            'external-started' => ['external_started'],
+            'reconciliation-required' => ['reconciliation_required'],
+        ];
+    }
+
+    public function test_attempt_authority_rollback_excludes_new_provider_entry_until_after_authority_removal(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for provider-attempt rollback exclusion regression.');
+        }
+
+        $fixture = $this->legacyTerminalConflictFixture('attempt-rollback-exclusion', 'failed');
+        $this->migration()->down();
+
+        $prefix = sys_get_temp_dir().'/provider-attempt-rollback-'.bin2hex(random_bytes(8));
+        $rollbackReady = $prefix.'.rollback-ready';
+        $rollbackRelease = $prefix.'.rollback-release';
+        $rollbackDone = $prefix.'.rollback-done';
+        $providerPreflight = $prefix.'.provider-preflight';
+        $providerDone = $prefix.'.provider-done';
+        $externalEffect = $prefix.'.external-effect';
+        $rollbackPid = null;
+        $providerPid = null;
+
+        try {
+            $rollbackPid = pcntl_fork();
+            self::assertNotSame(-1, $rollbackPid);
+            if ($rollbackPid === 0) {
+                try {
+                    $configuration = config('database.connections.mysql');
+                    if (! is_array($configuration)) {
+                        throw new RuntimeException('Rollback exclusion database configuration is unavailable.');
+                    }
+                    config()->set('database.connections.np_attempt_rollback', $configuration);
+                    DB::purge('np_attempt_rollback');
+                    DB::setDefaultConnection('np_attempt_rollback');
+
+                    $paused = false;
+                    DB::listen(function (QueryExecuted $query) use (&$paused, $rollbackReady, $rollbackRelease): void {
+                        $sql = strtolower(preg_replace('/\\s+/', ' ', $query->sql) ?? $query->sql);
+                        if ($paused
+                            || ! str_contains($sql, 'purchase_provider_mutation_attempts')
+                            || ! str_contains($sql, 'exists')
+                            || ! str_contains($sql, 'state')) {
+                            return;
+                        }
+
+                        $paused = true;
+                        file_put_contents($rollbackReady, 'checked-under-exclusive-provider-pool');
+                        $deadline = microtime(true) + 10.0;
+                        while (! file_exists($rollbackRelease)) {
+                            if (microtime(true) >= $deadline) {
+                                throw new RuntimeException('Timed out holding provider-attempt rollback exclusion.');
+                            }
+                            usleep(1000);
+                        }
+                    });
+
+                    $this->providerAttemptMigration()->down();
+                    file_put_contents($rollbackDone, 'removed');
+                    pcntl_exec('/bin/true');
+                    exit(0);
+                } catch (Throwable $exception) {
+                    file_put_contents($rollbackDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($rollbackReady)) {
+                if (file_exists($rollbackDone)) {
+                    throw new RuntimeException('Attempt rollback failed before exclusion checkpoint: '.trim((string) file_get_contents($rollbackDone)));
+                }
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for provider-attempt rollback exclusion checkpoint.');
+                }
+                usleep(1000);
+            }
+            self::assertSame('checked-under-exclusive-provider-pool', trim((string) file_get_contents($rollbackReady)));
+            self::assertTrue(DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts'));
+
+            $providerPid = pcntl_fork();
+            self::assertNotSame(-1, $providerPid);
+            if ($providerPid === 0) {
+                try {
+                    $configuration = config('database.connections.mysql');
+                    if (! is_array($configuration)) {
+                        throw new RuntimeException('Blocked provider caller database configuration is unavailable.');
+                    }
+                    config()->set('database.connections.np_rollback_provider_caller', $configuration);
+                    DB::purge('np_rollback_provider_caller');
+                    DB::setDefaultConnection('np_rollback_provider_caller');
+
+                    if (! DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts')) {
+                        throw new RuntimeException('Provider caller did not observe attempt authority before slot entry.');
+                    }
+                    file_put_contents($providerPreflight, 'authority-visible-before-slot-entry');
+
+                    try {
+                        $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
+                            $fixture['payment_intent_id'],
+                            'test:rollback-exclusion',
+                            function (PurchaseProviderMutationAttempt $attempt) use ($externalEffect): void {
+                                $attempt->markExternalEffectStarted();
+                                file_put_contents($externalEffect, 'external-effect');
+                            },
+                        );
+                        file_put_contents($providerDone, 'escaped');
+                        pcntl_exec('/bin/false');
+                        exit(1);
+                    } catch (Throwable $exception) {
+                        if (file_exists($externalEffect)) {
+                            file_put_contents($providerDone, 'error|external-effect-reached|'.$exception->getMessage());
+                            pcntl_exec('/bin/false');
+                            exit(1);
+                        }
+                        file_put_contents($providerDone, 'blocked|'.$exception::class.'|'.$exception->getMessage());
+                        pcntl_exec('/bin/true');
+                        exit(0);
+                    }
+                } catch (Throwable $exception) {
+                    file_put_contents($providerDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    pcntl_exec('/bin/false');
+                    exit(1);
+                }
+            }
+
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($providerPreflight)) {
+                if (file_exists($providerDone)) {
+                    throw new RuntimeException('Provider caller completed before rollback handoff: '.trim((string) file_get_contents($providerDone)));
+                }
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for provider caller to observe installed attempt authority.');
+                }
+                usleep(1000);
+            }
+            self::assertSame('authority-visible-before-slot-entry', trim((string) file_get_contents($providerPreflight)));
+            self::assertFileDoesNotExist($providerDone, 'Provider caller must remain blocked while rollback owns the provider pool.');
+            self::assertFileDoesNotExist($externalEffect);
+
+            file_put_contents($rollbackRelease, 'release');
+            self::assertIsInt($rollbackPid);
+            pcntl_waitpid($rollbackPid, $rollbackStatus);
+            $rollbackPid = null;
+            self::assertSame(0, pcntl_wexitstatus($rollbackStatus), trim((string) @file_get_contents($rollbackDone)));
+            self::assertSame('removed', trim((string) file_get_contents($rollbackDone)));
+            self::assertFalse(DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts'));
+
+            self::assertIsInt($providerPid);
+            pcntl_waitpid($providerPid, $providerStatus);
+            $providerPid = null;
+            self::assertSame(0, pcntl_wexitstatus($providerStatus), trim((string) @file_get_contents($providerDone)));
+            self::assertStringStartsWith('blocked|', trim((string) file_get_contents($providerDone)));
+            self::assertFileDoesNotExist($externalEffect);
+
+            $this->providerAttemptMigration()->up();
+            $this->migration()->up();
+            $this->assertUpgradeFencesAbsent();
+        } finally {
+            if (is_int($rollbackPid) && $rollbackPid > 0) {
+                @file_put_contents($rollbackRelease, 'release');
+                pcntl_waitpid($rollbackPid, $rollbackStatus);
+            }
+            if (is_int($providerPid) && $providerPid > 0) {
+                pcntl_waitpid($providerPid, $providerStatus);
+            }
+            foreach ([$rollbackReady, $rollbackRelease, $rollbackDone, $providerPreflight, $providerDone, $externalEffect] as $file) {
+                @unlink($file);
+            }
+        }
+    }
+
     public function test_interrupted_upgrade_fence_installation_never_crosses_legacy_preflight_and_reenters(): void
     {
         $migration = $this->migration();
@@ -634,12 +853,13 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
             DB::connection()->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence'),
         );
         self::assertSame(
-            0,
+            1,
             DB::table('nowpayments_terminal_conflict_upgrade_fence')
                 ->where('id', 1)
-                ->where('active', 1)
+                ->where('active', 0)
+                ->whereNull('activated_at')
                 ->count(),
-            'Partial staged-fence composition must not activate the financial cut before every trigger exists.',
+            'Partial staged-fence composition must retain one inactive serialization row until every trigger exists.',
         );
         self::assertTrue($this->triggerExists('payment_intents_np_conflict_upgrade_insert_fence'));
         self::assertTrue($this->triggerExists('nowpayments_observation_np_conflict_upgrade_insert_fence'));
@@ -680,8 +900,7 @@ final class NowPaymentsTerminalConflictMigrationUpgradeTest extends TestCase
         DB::listen(function (QueryExecuted $query) use (&$injected): void {
             $sql = strtolower($query->sql);
             if ($injected
-                || ! str_contains($sql, 'insert into')
-                || ! str_contains($sql, 'nowpayments_terminal_conflict_upgrade_fence')) {
+                || ! str_contains($sql, 'update nowpayments_terminal_conflict_upgrade_fence')) {
                 return;
             }
 
@@ -780,8 +999,7 @@ SQL);
         DB::listen(function (QueryExecuted $query) use (&$injected): void {
             $sql = strtolower($query->sql);
             if ($injected
-                || ! str_contains($sql, 'insert into')
-                || ! str_contains($sql, 'nowpayments_terminal_conflict_upgrade_fence')) {
+                || ! str_contains($sql, 'update nowpayments_terminal_conflict_upgrade_fence')) {
                 return;
             }
 
@@ -1015,6 +1233,14 @@ SQL);
                             $blocked++;
                         }
                     }
+                    // A rejected staged trigger now takes a locking current read of the
+                    // persistent fence row. End this independent snapshot transaction
+                    // before exercising Wallet through a different DB connection, or the
+                    // test would self-block that second writer on its own retained row lock.
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+
                     try {
                         $this->app->make(PurchaseWalletPaymentService::class)->capture(
                             $walletFixture['intent_public_id'],
@@ -1022,10 +1248,6 @@ SQL);
                         );
                     } catch (Throwable) {
                         $blocked++;
-                    }
-
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
                     }
                     file_put_contents($localWriterDone, 'blocked:'.$blocked);
                     pcntl_exec($blocked === 3 ? '/bin/true' : '/bin/false');
@@ -1050,8 +1272,7 @@ SQL);
             DB::listen(function (QueryExecuted $query) use (&$fenceSignaled, $fenceActive): void {
                 $sql = strtolower($query->sql);
                 if ($fenceSignaled
-                    || ! str_contains($sql, 'insert into')
-                    || ! str_contains($sql, 'nowpayments_terminal_conflict_upgrade_fence')) {
+                    || ! str_contains($sql, 'update nowpayments_terminal_conflict_upgrade_fence')) {
                     return;
                 }
 
@@ -1120,6 +1341,149 @@ SQL);
             @unlink($localWriterReady);
             @unlink($localWriterDone);
         }
+    }
+
+    public function test_pre_cut_payment_intent_creation_drains_before_fence_activation(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        [$userId, $quote] = $this->purchaseContext('linearized-intent-create');
+        $decisionPublicId = $this->zarinpalDecision(
+            $userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            'linearized-intent-create',
+        );
+        $this->stageInactiveUpgradeFence();
+
+        $creationKey = 'np-upgrade-linearized-intent-create';
+        $this->assertPreCutWriterBlocksFenceActivation(
+            'intent-create',
+            function () use ($creationKey, $userId, $quote, $decisionPublicId): void {
+                $this->app->make(PurchasePaymentIntentService::class)->create(
+                    $creationKey,
+                    $userId,
+                    $quote->quotePublicId,
+                    $decisionPublicId,
+                    'zarinpal',
+                    $this->correlation('linearized-intent-create'),
+                );
+            },
+        );
+
+        self::assertSame(
+            'awaiting_user_action',
+            DB::table('payment_intents')->where('creation_key', $creationKey)->value('state'),
+        );
+        try {
+            $this->app->make(PurchasePaymentIntentService::class)->create(
+                'np-upgrade-linearized-intent-create-post-cut',
+                $userId,
+                $quote->quotePublicId,
+                $decisionPublicId,
+                'zarinpal',
+                $this->correlation('linearized-intent-create-post-cut'),
+            );
+            self::fail('Post-cut PaymentIntent creation unexpectedly crossed the active migration fence.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('Purchase payment creation is fenced', $exception->getMessage());
+        }
+
+        $migration->up();
+        $this->assertUpgradeFencesAbsent();
+    }
+
+    public function test_pre_cut_payment_intent_update_drains_before_fence_activation(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        [$userId, $quote] = $this->purchaseContext('linearized-intent-update');
+        $decisionPublicId = $this->zarinpalDecision(
+            $userId,
+            $quote->quotePublicId,
+            $quote->configurationSnapshotHash,
+            'linearized-intent-update',
+        );
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'np-upgrade-linearized-intent-update',
+            $userId,
+            $quote->quotePublicId,
+            $decisionPublicId,
+            'zarinpal',
+            $this->correlation('linearized-intent-update-create'),
+        );
+        $intentId = DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->value('id');
+        self::assertIsInt($intentId);
+        $this->stageInactiveUpgradeFence();
+
+        $this->assertPreCutWriterBlocksFenceActivation(
+            'intent-update',
+            function () use ($intentId): void {
+                $updated = DB::table('payment_intents')
+                    ->where('id', $intentId)
+                    ->where('state', 'awaiting_user_action')
+                    ->update(['state' => 'submitted', 'updated_at' => now('UTC')]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Pre-cut PaymentIntent update did not apply exactly once.');
+                }
+            },
+        );
+
+        self::assertSame('submitted', DB::table('payment_intents')->where('id', $intentId)->value('state'));
+        $pdo = $this->independentPdo();
+        $this->assertPdoRejected(
+            fn () => $pdo->exec("UPDATE payment_intents SET state = 'failed', updated_at = UTC_TIMESTAMP(6) WHERE id = ".$intentId),
+            'Purchase payment updates are fenced',
+        );
+        self::assertSame('submitted', DB::table('payment_intents')->where('id', $intentId)->value('state'));
+
+        $migration->up();
+        $this->assertUpgradeFencesAbsent();
+    }
+
+    public function test_pre_cut_wallet_capture_drains_before_fence_activation_and_post_cut_capture_is_rejected(): void
+    {
+        $migration = $this->migration();
+        $migration->down();
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $preCut = $this->walletCutFixture('linearized-wallet-pre-cut');
+        $postCut = $this->walletCutFixture('linearized-wallet-post-cut');
+        $preCutLedgerCount = DB::table('ledger_transactions')->count();
+        $this->stageInactiveUpgradeFence();
+
+        $this->assertPreCutWriterBlocksFenceActivation(
+            'wallet-capture',
+            function () use ($preCut): void {
+                $this->app->make(PurchaseWalletPaymentService::class)->capture(
+                    $preCut['intent_public_id'],
+                    $this->correlation('linearized-wallet-pre-cut-capture'),
+                );
+            },
+        );
+
+        self::assertSame('captured', DB::table('wallet_holds')->where('source_id', $preCut['intent_public_id'])->value('status'));
+        self::assertSame(1, DB::table('purchase_settlements')->where('payment_intent_id', $preCut['intent_id'])->count());
+        self::assertSame('paid', DB::table('orders')->where('id', $preCut['order_id'])->value('state'));
+        self::assertGreaterThan($preCutLedgerCount, DB::table('ledger_transactions')->count());
+
+        $postCutLedgerCount = DB::table('ledger_transactions')->count();
+        try {
+            $this->app->make(PurchaseWalletPaymentService::class)->capture(
+                $postCut['intent_public_id'],
+                $this->correlation('linearized-wallet-post-cut-capture'),
+            );
+            self::fail('Post-cut wallet capture unexpectedly crossed the active migration fence.');
+        } catch (Throwable) {
+            // The DB fence may reject the wallet-hold transition or a later guarded
+            // settlement/order write; either way the enclosing transaction must roll back.
+        }
+        self::assertSame($postCutLedgerCount, DB::table('ledger_transactions')->count());
+        self::assertSame('active', DB::table('wallet_holds')->where('source_id', $postCut['intent_public_id'])->value('status'));
+        self::assertSame(0, DB::table('purchase_settlements')->where('payment_intent_id', $postCut['intent_id'])->count());
+        self::assertNotSame('paid', DB::table('orders')->where('id', $postCut['order_id'])->value('state'));
+
+        $migration->up();
+        $this->assertUpgradeFencesAbsent();
     }
 
     public function test_database_session_loss_keeps_external_provider_mutation_as_durable_migration_blocker(): void
@@ -2398,6 +2762,164 @@ SQL);
         );
     }
 
+    private function stageInactiveUpgradeFence(): void
+    {
+        $injected = false;
+        DB::listen(function (QueryExecuted $query) use (&$injected): void {
+            if ($injected || ! str_contains(
+                strtolower($query->sql),
+                'create or replace trigger purchase_settlement_np_conflict_upgrade_insert_fence',
+            )) {
+                return;
+            }
+
+            $injected = true;
+            throw new RuntimeException('Injected after complete inactive upgrade-fence composition.');
+        });
+
+        try {
+            $this->migration()->up();
+            self::fail('Inactive staged-fence injection must interrupt before activation.');
+        } catch (RuntimeException $exception) {
+            self::assertTrue($injected);
+            self::assertSame('Injected after complete inactive upgrade-fence composition.', $exception->getMessage());
+        }
+
+        self::assertSame(
+            1,
+            DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                ->where('id', 1)
+                ->where('active', 0)
+                ->whereNull('activated_at')
+                ->count(),
+        );
+        foreach ($this->upgradeFenceTriggers() as $trigger) {
+            self::assertTrue($this->triggerExists($trigger), 'Inactive staged migration fence is incomplete: '.$trigger);
+        }
+    }
+
+    /** @param \Closure():void $writer */
+    private function assertPreCutWriterBlocksFenceActivation(string $suffix, \Closure $writer): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for migration cut linearization regressions.');
+        }
+
+        $ready = sys_get_temp_dir().'/np-cut-linearization-'.$suffix.'-'.bin2hex(random_bytes(8));
+        $release = $ready.'.release';
+        $done = $ready.'.done';
+        $pid = pcntl_fork();
+        self::assertNotSame(-1, $pid);
+        if ($pid === 0) {
+            try {
+                $configuration = config('database.connections.mysql');
+                if (! is_array($configuration)) {
+                    throw new RuntimeException('Migration cut writer database configuration is unavailable.');
+                }
+                config()->set('database.connections.np_cut_linearization_writer', $configuration);
+                DB::purge('np_cut_linearization_writer');
+                DB::setDefaultConnection('np_cut_linearization_writer');
+                $connection = DB::connection();
+                $connection->statement('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+                $connection->beginTransaction();
+
+                $writer();
+                file_put_contents($ready, 'ready');
+                $deadline = microtime(true) + 10.0;
+                while (! file_exists($release)) {
+                    if (microtime(true) >= $deadline) {
+                        throw new RuntimeException('Timed out waiting to release pre-cut financial writer.');
+                    }
+                    usleep(1000);
+                }
+
+                $connection->commit();
+                file_put_contents($done, 'committed');
+                pcntl_exec('/bin/true');
+                exit(0);
+            } catch (Throwable $exception) {
+                try {
+                    if (DB::connection()->transactionLevel() > 0) {
+                        DB::connection()->rollBack();
+                    }
+                } catch (Throwable) {
+                    // Preserve the original child failure below.
+                }
+                file_put_contents($done, 'error|'.$exception::class.'|'.$exception->getMessage());
+                pcntl_exec('/bin/false');
+                exit(1);
+            }
+        }
+
+        try {
+            $deadline = microtime(true) + 10.0;
+            while (! file_exists($ready)) {
+                if (file_exists($done)) {
+                    throw new RuntimeException('Pre-cut writer failed before acquiring the fence row: '.trim((string) file_get_contents($done)));
+                }
+                if (microtime(true) >= $deadline) {
+                    throw new RuntimeException('Timed out waiting for pre-cut writer to acquire the fence row.');
+                }
+                usleep(1000);
+            }
+            self::assertSame('ready', trim((string) file_get_contents($ready)));
+
+            $activation = $this->independentPdo();
+            $activation->exec('SET SESSION innodb_lock_wait_timeout = 1');
+            try {
+                $activation->exec(<<<'SQL'
+UPDATE nowpayments_terminal_conflict_upgrade_fence
+SET activated_at = COALESCE(activated_at, UTC_TIMESTAMP(6)),
+    active = 1
+WHERE id = 1
+SQL);
+                self::fail('Fence activation unexpectedly completed while a pre-cut writer still owned the serialization row.');
+            } catch (PDOException $exception) {
+                self::assertSame(1205, (int) ($exception->errorInfo[1] ?? 0));
+            }
+            self::assertSame(
+                1,
+                DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                    ->where('id', 1)
+                    ->where('active', 0)
+                    ->whereNull('activated_at')
+                    ->count(),
+                'Activation must remain incomplete while the entered pre-cut writer is open.',
+            );
+
+            file_put_contents($release, 'release');
+            self::assertIsInt($pid);
+            pcntl_waitpid($pid, $status);
+            $pid = null;
+            self::assertSame(0, pcntl_wexitstatus($status), trim((string) @file_get_contents($done)));
+            self::assertSame('committed', trim((string) file_get_contents($done)));
+
+            $activation->exec(<<<'SQL'
+UPDATE nowpayments_terminal_conflict_upgrade_fence
+SET activated_at = COALESCE(activated_at, UTC_TIMESTAMP(6)),
+    active = 1
+WHERE id = 1
+SQL);
+            self::assertSame(
+                1,
+                DB::table('nowpayments_terminal_conflict_upgrade_fence')
+                    ->where('id', 1)
+                    ->where('active', 1)
+                    ->whereNotNull('activated_at')
+                    ->count(),
+                'Activation must complete only after the pre-cut writer commits.',
+            );
+        } finally {
+            if (is_int($pid) && $pid > 0) {
+                @file_put_contents($release, 'release');
+                pcntl_waitpid($pid, $status);
+            }
+            @unlink($ready);
+            @unlink($release);
+            @unlink($done);
+        }
+    }
+
     private function assertUpgradeFenceActive(): void
     {
         self::assertTrue(
@@ -2547,6 +3069,70 @@ SQL);
             (string) $database['password'],
             [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
         );
+    }
+
+    /**
+     * @param array{
+     *     payment_intent_id:int,
+     *     payment_intent_public_id:string
+     * } $fixture
+     */
+    private function insertUnresolvedProviderAttemptViaPdo(array $fixture, string $state): int
+    {
+        if (! in_array($state, ['external_started', 'reconciliation_required'], true)) {
+            throw new RuntimeException('Unresolved provider attempt test state is unsupported.');
+        }
+
+        $pdo = $this->independentPdo();
+        $database = config('database.connections.mysql.database');
+        self::assertIsString($database);
+        $slot = $state === 'external_started' ? 91 : 92;
+        $lockName = sprintf(
+            'purchase-provider:%s:%03d',
+            substr(hash('sha256', $database), 0, 16),
+            $slot,
+        );
+        $lock = $pdo->prepare('SELECT GET_LOCK(?, 0)');
+        $lock->execute([$lockName]);
+        self::assertSame(1, (int) $lock->fetchColumn());
+
+        try {
+            $providerSessionId = (int) $pdo->query('SELECT CONNECTION_ID()')->fetchColumn();
+            self::assertGreaterThan(0, $providerSessionId);
+            $insert = $pdo->prepare(<<<'SQL'
+INSERT INTO purchase_provider_mutation_attempts (
+    public_id,
+    payment_intent_id,
+    payment_intent_public_id,
+    provider_code,
+    mutation_key,
+    provider_session_id,
+    slot,
+    state,
+    prepared_at,
+    external_started_at,
+    resolved_at,
+    updated_at
+) VALUES (?, ?, ?, 'nowpayments', ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), NULL, UTC_TIMESTAMP(6))
+SQL);
+            $insert->execute([
+                (string) Str::ulid(),
+                $fixture['payment_intent_id'],
+                $fixture['payment_intent_public_id'],
+                'test:rollback-unresolved:'.$state.':'.$fixture['payment_intent_public_id'],
+                $providerSessionId,
+                $slot,
+                $state,
+            ]);
+            $attemptId = (int) $pdo->lastInsertId();
+            self::assertGreaterThan(0, $attemptId);
+
+            return $attemptId;
+        } finally {
+            $release = $pdo->prepare('SELECT RELEASE_LOCK(?)');
+            $release->execute([$lockName]);
+            self::assertSame(1, (int) $release->fetchColumn());
+        }
     }
 
     private function clonePaymentIntentViaPdo(PDO $pdo, int $sourceIntentId, string $suffix): void
