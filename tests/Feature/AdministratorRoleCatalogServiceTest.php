@@ -63,6 +63,69 @@ final class AdministratorRoleCatalogServiceTest extends TestCase
         self::assertSame(1, DB::table('audit_logs')->where('action', 'access.role_definition.permission')->count());
     }
 
+    public function test_custom_role_definition_changes_invalidate_active_assignee_permission_versions_once(): void
+    {
+        $ownerId = $this->administrator(true);
+        $firstAdministratorId = $this->administrator();
+        $secondAdministratorId = $this->administrator();
+        $revokedAdministratorId = $this->administrator();
+        $service = $this->app->make(AdministratorRoleCatalogService::class);
+
+        $service->createCustomRole(
+            'custom.invalidate_test',
+            $this->context($ownerId, 'custom-role-invalidate-create-0001'),
+        );
+        $this->assignRole($firstAdministratorId, 'custom.invalidate_test');
+        $this->assignRole($secondAdministratorId, 'custom.invalidate_test');
+        $this->assignRole($revokedAdministratorId, 'custom.invalidate_test');
+        DB::table('administrator_role_assignments')
+            ->where('administrator_id', $revokedAdministratorId)
+            ->where('role_id', (int) DB::table('roles')->where('code', 'custom.invalidate_test')->value('id'))
+            ->update([
+                'revoked_at' => now('UTC'),
+                'updated_at' => now('UTC'),
+            ]);
+
+        $permissionContext = $this->context($ownerId, 'custom-role-invalidate-permission-0001');
+        $service->setCustomRolePermission(
+            'custom.invalidate_test',
+            'identity.customers.view',
+            true,
+            $permissionContext,
+        );
+
+        self::assertSame(2, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(2, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+        self::assertSame(1, (int) DB::table('administrators')->where('id', $revokedAdministratorId)->value('permission_version'));
+
+        $service->setCustomRolePermission(
+            'custom.invalidate_test',
+            'identity.customers.view',
+            true,
+            $permissionContext,
+        );
+        self::assertSame(2, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(2, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+
+        $statusContext = $this->context($ownerId, 'custom-role-invalidate-status-0001');
+        $service->setCustomRoleActive(
+            'custom.invalidate_test',
+            false,
+            $statusContext,
+        );
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+        self::assertSame(1, (int) DB::table('administrators')->where('id', $revokedAdministratorId)->value('permission_version'));
+
+        $service->setCustomRoleActive(
+            'custom.invalidate_test',
+            false,
+            $statusContext,
+        );
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+    }
+
     public function test_reused_fingerprint_cannot_be_rebound_to_another_permission_or_value(): void
     {
         $ownerId = $this->administrator(true);

@@ -85,16 +85,24 @@ final readonly class AdministratorRoleCatalogService
                 $this->authorizeActor($context->actorAdministratorId);
                 $role = $this->customRole($connection, $roleCode, true);
                 $before = (bool) $role->is_active;
+                $invalidatedAdministrators = 0;
                 if ($before !== $active) {
                     $connection->table('roles')->where('id', (int) $role->id)->update([
                         'is_active' => $active,
                         'updated_at' => $this->timestamp(),
                     ]);
+                    $invalidatedAdministrators = $this->invalidateAssignedAdministratorPermissions(
+                        $connection,
+                        (int) $role->id,
+                    );
                 }
 
                 return [
                     ['active' => $before],
-                    ['active' => $active],
+                    [
+                        'active' => $active,
+                        'invalidated_administrators' => $invalidatedAdministrators,
+                    ],
                 ];
             },
         );
@@ -134,6 +142,7 @@ final readonly class AdministratorRoleCatalogService
                     ->where('permission_id', (int) $permission->id)
                     ->exists();
 
+                $invalidatedAdministrators = 0;
                 if ($exists !== $granted) {
                     if ($granted) {
                         $now = $this->timestamp();
@@ -149,11 +158,19 @@ final readonly class AdministratorRoleCatalogService
                             ->where('permission_id', (int) $permission->id)
                             ->delete();
                     }
+                    $invalidatedAdministrators = $this->invalidateAssignedAdministratorPermissions(
+                        $connection,
+                        (int) $role->id,
+                    );
                 }
 
                 return [
                     ['permission_code' => $permissionCode, 'granted' => $exists],
-                    ['permission_code' => $permissionCode, 'granted' => $granted],
+                    [
+                        'permission_code' => $permissionCode,
+                        'granted' => $granted,
+                        'invalidated_administrators' => $invalidatedAdministrators,
+                    ],
                 ];
             },
         );
@@ -224,6 +241,61 @@ final readonly class AdministratorRoleCatalogService
 
             throw $exception;
         }
+    }
+
+    private function invalidateAssignedAdministratorPermissions(
+        Connection $connection,
+        int $roleId,
+    ): int {
+        /** @var list<int> $administratorIds */
+        $administratorIds = $connection->table('administrator_role_assignments')
+            ->where('role_id', $roleId)
+            ->whereNull('revoked_at')
+            ->orderBy('administrator_id')
+            ->pluck('administrator_id')
+            ->map(static fn (mixed $value): int => (int) $value)
+            ->filter(static fn (int $value): bool => $value > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($administratorIds === []) {
+            return 0;
+        }
+
+        /** @var list<object{id:int|string,permission_version:int|string}> $administrators */
+        $administrators = $connection->table('administrators')
+            ->whereIn('id', $administratorIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id', 'permission_version'])
+            ->all();
+
+        if (count($administrators) !== count($administratorIds)) {
+            throw new RuntimeException('Custom role assignment references an invalid administrator.');
+        }
+
+        $now = $this->timestamp();
+        foreach ($administrators as $administrator) {
+            $administratorId = (int) $administrator->id;
+            $beforeVersion = (int) $administrator->permission_version;
+            if ($administratorId < 1 || $beforeVersion < 1 || $beforeVersion === PHP_INT_MAX) {
+                throw new RuntimeException('Administrator permission version is invalid.');
+            }
+
+            $updated = $connection->table('administrators')
+                ->where('id', $administratorId)
+                ->where('permission_version', $beforeVersion)
+                ->update([
+                    'permission_version' => $beforeVersion + 1,
+                    'updated_at' => $now,
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Administrator permission version invalidation lost its lock.');
+            }
+        }
+
+        return count($administrators);
     }
 
     /** @param  array<string,bool|int|string|null>  $expected */
