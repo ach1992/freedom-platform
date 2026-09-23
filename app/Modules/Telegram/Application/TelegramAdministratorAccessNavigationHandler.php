@@ -413,8 +413,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         $operation = match ($matches[1]) {
             'allow' => AdministratorSensitiveMutation::PERMISSION_ALLOW,
             'deny' => AdministratorSensitiveMutation::PERMISSION_DENY,
-            'inherit' => AdministratorSensitiveMutation::PERMISSION_INHERIT,
-            default => throw new RuntimeException('Telegram administrator permission effect is invalid.'),
+            default => AdministratorSensitiveMutation::PERMISSION_INHERIT,
         };
 
         try {
@@ -1268,8 +1267,8 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         $special = $payload['special'];
 
         try {
-            [$session, $resultSurface] = $this->database->connection()->transaction(
-                function () use ($action, $payload, $special): array {
+            $session = $this->database->connection()->transaction(
+                function () use ($action, $payload, $special): TelegramInteractionSessionReceipt {
                     $claim = $this->sessions->transition(
                         $action->sessionPublicId,
                         $action->sessionVersion,
@@ -1314,7 +1313,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
                     );
                     $this->assertActor($action, $session->userId);
 
-                    return [$session, 'transfers'];
+                    return $session;
                 },
                 3,
             );
@@ -1333,15 +1332,13 @@ final readonly class TelegramAdministratorAccessNavigationHandler
             return;
         }
 
-        if ($resultSurface === 'transfers') {
-            $this->renderTransfers(
-                $action,
-                $session->version,
-                $this->queries->ownerTransfersForUser($action->userId),
-                false,
-                true,
-            );
-        }
+        $this->renderTransfers(
+            $action,
+            $session->version,
+            $this->queries->ownerTransfersForUser($action->userId),
+            false,
+            true,
+        );
     }
 
     private function returnFromConfirmation(TelegramInteractionAction $action): void
@@ -2205,7 +2202,10 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         );
     }
 
-    /** @param array<string, mixed> $payload @return array<string, string> */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, string>
+     */
     private function mutationDescriptor(array $payload): array
     {
         $allowed = ['operation', 'permission', 'role', 'role_code', 'target'];
@@ -2230,7 +2230,10 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         return $descriptor;
     }
 
-    /** @param array<string, mixed> $payload @return array<string, mixed> */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
     private function pendingPayload(array $payload): array
     {
         if (($payload['cancel_locked'] ?? null) !== true
@@ -2249,7 +2252,10 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         return $payload;
     }
 
-    /** @param array<string, mixed> $payload @return array<string, string> */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, string>
+     */
     private function descriptorFromPending(array $payload): array
     {
         $descriptor = $payload;
@@ -2258,7 +2264,10 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         return $this->mutationDescriptor($descriptor);
     }
 
-    /** @param array<string, mixed> $payload @return array<string, string> */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, string>
+     */
     private function specialDescriptor(array $payload): array
     {
         if (! is_string($payload['special'] ?? null)
@@ -2378,7 +2387,10 @@ final readonly class TelegramAdministratorAccessNavigationHandler
         return $payload['target'];
     }
 
-    /** @param array<string, mixed> $payload @return array{0:string,1:string} */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{0:string,1:string}
+     */
     private function roleInputPayload(array $payload): array
     {
         if (array_keys($payload) !== ['operation', 'target']

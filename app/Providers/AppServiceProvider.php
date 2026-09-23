@@ -44,6 +44,7 @@ use App\Modules\Payments\Zarinpal\Application\TelegramCustomerPurchaseZarinpalPa
 use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Promotions\Application\BenefitCodeDiscountQuoteAuthority;
 use App\Modules\Promotions\Application\PurchasePromotionUsageAuthorityService;
+use App\Modules\Provisioning\Application\TelegramAdministratorServiceSearchSource;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialClaimService;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialProvisioningStatusService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;

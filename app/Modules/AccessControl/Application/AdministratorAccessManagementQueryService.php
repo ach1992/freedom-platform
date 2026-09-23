@@ -221,9 +221,9 @@ final readonly class AdministratorAccessManagementQueryService
             (bool) ($row->is_owner ?? false),
             $this->positiveInt($row->permission_version ?? null, 'Administrator permission version'),
             $lastAuthenticatedAt,
-            $roles,
-            $overrides,
-            $audit,
+            array_values($roles),
+            array_values($overrides),
+            array_values($audit),
         );
     }
 
@@ -249,7 +249,7 @@ final readonly class AdministratorAccessManagementQueryService
                 $this->token($row->code ?? null, 64, 'Role code'),
                 (bool) ($row->is_system ?? false),
                 (bool) ($row->is_active ?? false),
-                $permissions,
+                array_values($permissions),
             );
         }
 

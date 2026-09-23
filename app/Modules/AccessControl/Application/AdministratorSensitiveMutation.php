@@ -136,6 +136,7 @@ final readonly class AdministratorSensitiveMutation
             self::ADMINISTRATOR_REACTIVATE,
             self::ADMINISTRATOR_REVOKE,
             self::ADMINISTRATOR_ENABLE => 'admins.accounts.manage',
+            default => throw new InvalidArgumentException('Administrator sensitive mutation operation is invalid.'),
         };
     }
 

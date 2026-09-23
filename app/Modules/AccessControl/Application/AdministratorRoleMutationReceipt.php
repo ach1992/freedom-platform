@@ -6,7 +6,10 @@ namespace App\Modules\AccessControl\Application;
 
 final readonly class AdministratorRoleMutationReceipt
 {
-    /** @param array<string,bool|int|string|null> $before @param array<string,bool|int|string|null> $after */
+    /**
+     * @param  array<string, bool|int|string|null>  $before
+     * @param  array<string, bool|int|string|null>  $after
+     */
     public function __construct(
         public string $action,
         public string $roleCode,

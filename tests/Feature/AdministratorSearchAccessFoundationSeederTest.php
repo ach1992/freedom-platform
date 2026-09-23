@@ -36,8 +36,8 @@ final class AdministratorSearchAccessFoundationSeederTest extends TestCase
 
         self::assertSame([
             AdministratorSearchPermissions::ORDER,
-            AdministratorSearchPermissions::PAYMENT,
             AdministratorSearchPermissions::PAYMENT_EVIDENCE,
+            AdministratorSearchPermissions::PAYMENT,
         ], $this->rolePermissions('finance'));
 
         self::assertSame([

@@ -274,6 +274,7 @@ final readonly class AdministratorRoleCatalogService
             $query->lockForUpdate();
         }
 
+        /** @var object{id:int|string,is_system:int|bool,is_active:int|bool}|null $role */
         $role = $query->first(['id', 'is_system', 'is_active']);
         if ($role === null) {
             throw new RuntimeException('Custom role does not exist.');
