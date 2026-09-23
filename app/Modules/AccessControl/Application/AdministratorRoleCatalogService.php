@@ -161,10 +161,12 @@ final readonly class AdministratorRoleCatalogService
                             ->where('permission_id', (int) $permission->id)
                             ->delete();
                     }
-                    $invalidatedAdministrators = $this->invalidateAssignedAdministratorPermissions(
-                        $connection,
-                        (int) $role->id,
-                    );
+                    if ((bool) $role->is_active) {
+                        $invalidatedAdministrators = $this->invalidateAssignedAdministratorPermissions(
+                            $connection,
+                            (int) $role->id,
+                        );
+                    }
                 }
 
                 return [

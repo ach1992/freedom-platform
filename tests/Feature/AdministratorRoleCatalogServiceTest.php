@@ -144,6 +144,24 @@ final class AdministratorRoleCatalogServiceTest extends TestCase
         self::assertFalse($statusNoOp->changed);
         self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
         self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+
+        $disabledPermissionChange = $service->setCustomRolePermission(
+            'custom.invalidate_test',
+            'access.roles.manage',
+            true,
+            $this->context($ownerId, 'custom-role-invalidate-disabled-permission-0001'),
+        );
+        self::assertTrue($disabledPermissionChange->changed);
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+
+        $service->setCustomRoleActive(
+            'custom.invalidate_test',
+            true,
+            $this->context($ownerId, 'custom-role-invalidate-reactivate-0001'),
+        );
+        self::assertSame(4, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(4, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
     }
 
     public function test_custom_role_change_invalidates_existing_owner_transfer_intent(): void
