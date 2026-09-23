@@ -82,11 +82,18 @@ final readonly class AdministratorRoleCatalogService
             $context,
             ['active' => $active],
             function (Connection $connection) use ($roleCode, $active, $context): array {
-                $this->authorizeActor($context->actorAdministratorId);
+                $actorIsOwner = $this->authorizeActor($context->actorAdministratorId);
                 $role = $this->lockCustomRoleWithAssignedAdministrators($connection, $roleCode);
                 $before = (bool) $role->is_active;
                 $invalidatedAdministrators = 0;
                 if ($before !== $active) {
+                    if ($active && ! $actorIsOwner) {
+                        $this->assertRoleDelegationCeiling(
+                            $connection,
+                            $context->actorAdministratorId,
+                            (int) $role->id,
+                        );
+                    }
                     $connection->table('roles')->where('id', (int) $role->id)->update([
                         'is_active' => $active,
                         'updated_at' => $this->timestamp(),
@@ -253,6 +260,26 @@ final readonly class AdministratorRoleCatalogService
     }
 
     /** @return object{id:int|string,is_active:int|bool} */
+    private function assertRoleDelegationCeiling(
+        Connection $connection,
+        int $actorAdministratorId,
+        int $roleId,
+    ): void {
+        /** @var list<string> $permissionCodes */
+        $permissionCodes = $connection->table('role_permissions as role_permission')
+            ->join('permissions as permission', 'permission.id', '=', 'role_permission.permission_id')
+            ->where('role_permission.role_id', $roleId)
+            ->orderBy('permission.code')
+            ->pluck('permission.code')
+            ->filter(static fn (mixed $code): bool => is_string($code))
+            ->values()
+            ->all();
+
+        foreach ($permissionCodes as $permissionCode) {
+            $this->authorizer->authorize($actorAdministratorId, $permissionCode);
+        }
+    }
+
     private function lockCustomRoleWithAssignedAdministrators(
         Connection $connection,
         string $roleCode,

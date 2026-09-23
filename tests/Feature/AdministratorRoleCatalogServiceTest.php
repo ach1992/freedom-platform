@@ -265,6 +265,51 @@ final class AdministratorRoleCatalogServiceTest extends TestCase
             ->count());
     }
 
+    public function test_non_owner_cannot_reenable_custom_role_above_delegation_ceiling(): void
+    {
+        $ownerId = $this->administrator(true);
+        $managerId = $this->administrator();
+        $targetId = $this->administrator();
+        $service = $this->app->make(AdministratorRoleCatalogService::class);
+
+        $this->grantRolePermission('support', 'access.roles.manage');
+        $this->assignRole($managerId, 'support');
+
+        $service->createCustomRole(
+            'custom.privileged_restore',
+            $this->context($ownerId, 'custom-role-restore-create-0001'),
+        );
+        $service->setCustomRolePermission(
+            'custom.privileged_restore',
+            'access.sensitive_actions.approve',
+            true,
+            $this->context($ownerId, 'custom-role-restore-permission-0001'),
+        );
+        $this->assignRole($targetId, 'custom.privileged_restore');
+        $service->setCustomRoleActive(
+            'custom.privileged_restore',
+            false,
+            $this->context($ownerId, 'custom-role-restore-disable-0001'),
+        );
+
+        try {
+            $service->setCustomRoleActive(
+                'custom.privileged_restore',
+                true,
+                $this->context($managerId, 'custom-role-restore-enable-0001'),
+            );
+            self::fail('Expected role activation delegation ceiling failure.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, (int) DB::table('roles')
+                ->where('code', 'custom.privileged_restore')
+                ->value('is_active'));
+        }
+
+        self::assertSame(2, (int) DB::table('administrators')
+            ->where('id', $targetId)
+            ->value('permission_version'));
+    }
+
     public function test_system_roles_are_immutable_and_non_owner_delegation_cannot_escalate(): void
     {
         $ownerId = $this->administrator(true);
