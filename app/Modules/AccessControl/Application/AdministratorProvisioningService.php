@@ -43,11 +43,13 @@ final readonly class AdministratorProvisioningService
 
                 $user = $connection->table('users')
                     ->where('public_id', $userPublicId)
-                    ->where('account_status', '<>', 'deleted')
                     ->lockForUpdate()
-                    ->first(['id']);
+                    ->first(['id', 'account_status']);
                 if ($user === null) {
                     throw new RuntimeException('Administrator enable target user does not exist.');
+                }
+                if ($user->account_status !== 'active') {
+                    throw new RuntimeException('Administrator enable requires an active user account.');
                 }
 
                 $userId = $this->positiveInt($user->id ?? null, 'Administrator enable target user ID');

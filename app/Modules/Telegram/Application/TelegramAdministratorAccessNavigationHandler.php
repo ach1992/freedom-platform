@@ -1506,6 +1506,7 @@ final readonly class TelegramAdministratorAccessNavigationHandler
 
         $rows = [];
         if (! $target->hasAdministrator()
+            && $target->accountStatus === 'active'
             && $this->administratorUsers->allowsUser($action->userId, 'admins.accounts.manage')) {
             $rows[] = [$this->callbackButton(
                 $action,

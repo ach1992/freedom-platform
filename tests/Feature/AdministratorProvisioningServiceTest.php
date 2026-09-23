@@ -78,15 +78,20 @@ final class AdministratorProvisioningServiceTest extends TestCase
             self::assertSame('Administrator already exists for this user.', $exception->getMessage());
         }
 
-        $deletedPublicId = $this->user('deleted');
-        try {
-            $service->enableUser(
-                $deletedPublicId,
-                $this->context($ownerId, 'administrator-enable-request-0011'),
-            );
-            self::fail('Expected deleted target failure.');
-        } catch (RuntimeException $exception) {
-            self::assertSame('Administrator enable target user does not exist.', $exception->getMessage());
+        foreach (['limited', 'suspended', 'blocked', 'deleted'] as $offset => $status) {
+            $inactivePublicId = $this->user($status);
+            try {
+                $service->enableUser(
+                    $inactivePublicId,
+                    $this->context($ownerId, 'administrator-enable-request-'.str_pad((string) (11 + $offset), 4, '0', STR_PAD_LEFT)),
+                );
+                self::fail('Expected inactive target failure for '.$status.'.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Administrator enable requires an active user account.',
+                    $exception->getMessage(),
+                );
+            }
         }
     }
 
