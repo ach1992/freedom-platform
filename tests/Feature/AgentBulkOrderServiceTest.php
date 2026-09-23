@@ -13,6 +13,7 @@ use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\TelegramAgentBulkPurchaseService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\Contracts\PaymentEvidence;
 use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
@@ -32,10 +33,12 @@ use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\WalletFinancialFoundationSeeder;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use PDOException;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -212,6 +215,68 @@ final class AgentBulkOrderServiceTest extends TestCase
         }
     }
 
+    public function test_telegram_bulk_projection_exposes_only_unmaterialized_settlements_and_reuses_bulk_authority(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('telegram-bulk-projection');
+        $first = $this->agentSettlement('telegram-bulk-projection-a', $agent, $offering['id']);
+        $second = $this->agentSettlement('telegram-bulk-projection-b', $agent, $offering['id']);
+        $service = $this->app->make(TelegramAgentBulkPurchaseService::class);
+
+        $page = $service->pageForSelf($agent, $agent, 1, 6);
+        self::assertSame(2, $page->totalItems);
+        self::assertCount(2, $page->items);
+        self::assertSame(
+            [$second->settlementPublicId, $first->settlementPublicId],
+            array_map(static fn ($candidate): string => $candidate->purchaseSettlementPublicId, $page->items),
+        );
+
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $first->settlementPublicId,
+            $this->purchaseOrderCorrelation('telegram-bulk-existing-order'),
+        );
+        $remaining = $service->pageForSelf($agent, $agent, 1, 6);
+        self::assertSame(1, $remaining->totalItems);
+        self::assertCount(1, $remaining->items);
+        self::assertSame($second->settlementPublicId, $remaining->items[0]->purchaseSettlementPublicId);
+
+        $created = $service->executeForSelf(
+            $agent,
+            $agent,
+            'tg-bulk:'.hash('sha256', 'telegram-bulk-projection'),
+            [$second->settlementPublicId],
+            $this->purchaseOrderCorrelation('telegram-bulk-projection-create'),
+        );
+        self::assertFalse($created->replayed);
+        self::assertSame(1, $created->succeededCount);
+        self::assertSame(0, $created->failedCount);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->where('state', 'succeeded')->count());
+        self::assertSame(2, DB::table('orders')->count());
+        self::assertSame(2, DB::table('purchase_settlements')->count());
+        self::assertSame(0, $service->pageForSelf($agent, $agent, 1, 6)->totalItems);
+
+        $replay = $service->executeForSelf(
+            $agent,
+            $agent,
+            'tg-bulk:'.hash('sha256', 'telegram-bulk-projection'),
+            [$second->settlementPublicId],
+            $this->purchaseOrderCorrelation('telegram-bulk-projection-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($created->bulkOrderPublicId, $replay->bulkOrderPublicId);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(2, DB::table('orders')->count());
+        self::assertSame(2, DB::table('purchase_settlements')->count());
+
+        try {
+            $service->pageForSelf($agent + 1, $agent, 1, 6);
+            self::fail('Telegram Agent bulk candidates must be self-only.');
+        } catch (AuthorizationException $exception) {
+            self::assertSame('Telegram Agent bulk purchase is self-only.', $exception->getMessage());
+        }
+    }
+
     public function test_empty_bulk_request_fails_before_creating_any_authority(): void
     {
         [$agent] = $this->agentAuthority('bulk-empty');
@@ -311,6 +376,113 @@ final class AgentBulkOrderServiceTest extends TestCase
         self::assertSame(2, DB::table('payment_intents')->count());
         self::assertSame(2, DB::table('purchase_settlements')->count());
         self::assertSame([1, 1], DB::table('agent_bulk_order_items')->orderBy('line_number')->pluck('attempt_count')->map(static fn ($value): int => (int) $value)->all());
+    }
+
+    public function test_settlement_claim_is_exclusive_across_distinct_bulk_parents_without_duplicate_order_effect(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('bulk-exclusive-claim');
+        $settlement = $this->agentSettlement('bulk-exclusive-claim', $agent, $offering['id']);
+        $service = $this->app->make(AgentBulkOrderService::class);
+
+        $first = $service->execute(
+            'bulk-exclusive-parent-0001',
+            $agent,
+            [[
+                'child_key' => 'bulk-exclusive-child-a',
+                'purchase_settlement_public_id' => $settlement->settlementPublicId,
+            ]],
+            $this->purchaseOrderCorrelation('bulk-exclusive-first'),
+        );
+        self::assertSame(1, $first->succeededCount);
+        self::assertSame(0, $first->failedCount);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(1, DB::table('orders')->count());
+
+        try {
+            $service->execute(
+                'bulk-exclusive-parent-0002',
+                $agent,
+                [[
+                    'child_key' => 'bulk-exclusive-child-b',
+                    'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                ]],
+                $this->purchaseOrderCorrelation('bulk-exclusive-second'),
+            );
+            self::fail('A settlement already claimed by another bulk parent must fail closed.');
+        } catch (DomainException $exception) {
+            self::assertSame('Agent bulk Order settlement is already claimed by another parent.', $exception->getMessage());
+            self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        }
+
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-exclusive-child-a')->count());
+        self::assertSame(0, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-exclusive-child-b')->count());
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame(1, DB::table('order_items')->count());
+        self::assertSame(1, DB::table('payment_intents')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+    }
+
+    public function test_unrelated_query_exception_is_not_masked_when_selected_settlement_is_already_claimed(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('bulk-unrelated-query');
+        $settlement = $this->agentSettlement('bulk-unrelated-query', $agent, $offering['id']);
+        $service = $this->app->make(AgentBulkOrderService::class);
+
+        $first = $service->execute(
+            'bulk-unrelated-query-parent-0001',
+            $agent,
+            [[
+                'child_key' => 'bulk-unrelated-query-child-a',
+                'purchase_settlement_public_id' => $settlement->settlementPublicId,
+            ]],
+            $this->purchaseOrderCorrelation('bulk-unrelated-query-first'),
+        );
+        self::assertSame(1, $first->succeededCount);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+
+        DB::listen(static function (QueryExecuted $query): void {
+            if (! str_contains($query->sql, 'insert into `agent_bulk_orders`')) {
+                return;
+            }
+
+            $previous = new PDOException('simulated-unrelated-agent-bulk-parent-failure');
+            $previous->errorInfo = ['HY000', 1105, 'simulated-unrelated-agent-bulk-parent-failure'];
+
+            throw new QueryException('mysql', $query->sql, $query->bindings, $previous);
+        });
+
+        try {
+            $service->execute(
+                'bulk-unrelated-query-parent-0002',
+                $agent,
+                [[
+                    'child_key' => 'bulk-unrelated-query-child-b',
+                    'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                ]],
+                $this->purchaseOrderCorrelation('bulk-unrelated-query-second'),
+            );
+            self::fail('An unrelated QueryException must not be translated into a settlement-claim domain conflict.');
+        } catch (QueryException $exception) {
+            self::assertSame('HY000', (string) ($exception->errorInfo[0] ?? ''));
+            self::assertSame(1105, (int) ($exception->errorInfo[1] ?? 0));
+            self::assertStringContainsString(
+                'simulated-unrelated-agent-bulk-parent-failure',
+                (string) ($exception->errorInfo[2] ?? $exception->getMessage()),
+            );
+        }
+
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-unrelated-query-child-a')->count());
+        self::assertSame(0, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-unrelated-query-child-b')->count());
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame(1, DB::table('order_items')->count());
+        self::assertSame(1, DB::table('payment_intents')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->count());
     }
 
     public function test_failed_child_retry_never_recreates_successful_child_or_second_debit(): void

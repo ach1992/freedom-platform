@@ -28,6 +28,7 @@ use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
+use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
 use App\Modules\Telegram\Application\TelegramBroadcastDeliveryEffectGuard;
@@ -161,6 +162,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);
         $this->app->singleton(TelegramClientGuideNavigationHandler::class);
+        $this->app->singleton(TelegramAgentBulkPurchaseNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);
         $this->app->singleton(TelegramSupportNavigationHandler::class);

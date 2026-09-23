@@ -32,6 +32,8 @@ final readonly class AgentBulkOrderService
 
     private const CHILD_AUTHORITY = 'agent_bulk_child_v1';
 
+    private const SETTLEMENT_CLAIM_UNIQUE_INDEX = 'agent_bulk_order_items_purchase_settlement_id_unique';
+
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
@@ -169,23 +171,35 @@ SQL);
                     if ($authority === null) {
                         throw new RuntimeException('Agent bulk settlement authority mapping disappeared.');
                     }
-                    $connection->table('agent_bulk_order_items')->insert([
-                        'public_id' => (string) Str::ulid(),
-                        'agent_bulk_order_id' => $parentId,
-                        'line_number' => $offset + 1,
-                        'child_key' => $item['child_key'],
-                        'purchase_settlement_id' => (int) $authority->settlement_id,
-                        'purchase_settlement_public_id' => $authority->settlement_public_id,
-                        'source_quote_id' => (int) $authority->source_quote_id,
-                        'source_quote_public_id' => $authority->source_quote_public_id,
-                        'state' => 'pending',
-                        'attempt_count' => 0,
-                        'order_id' => null,
-                        'order_item_id' => null,
-                        'last_error_code' => null,
-                        'created_at' => $timestamp,
-                        'updated_at' => $timestamp,
-                    ]);
+                    try {
+                        $connection->table('agent_bulk_order_items')->insert([
+                            'public_id' => (string) Str::ulid(),
+                            'agent_bulk_order_id' => $parentId,
+                            'line_number' => $offset + 1,
+                            'child_key' => $item['child_key'],
+                            'purchase_settlement_id' => (int) $authority->settlement_id,
+                            'purchase_settlement_public_id' => $authority->settlement_public_id,
+                            'source_quote_id' => (int) $authority->source_quote_id,
+                            'source_quote_public_id' => $authority->source_quote_public_id,
+                            'state' => 'pending',
+                            'attempt_count' => 0,
+                            'order_id' => null,
+                            'order_item_id' => null,
+                            'last_error_code' => null,
+                            'created_at' => $timestamp,
+                            'updated_at' => $timestamp,
+                        ]);
+                    } catch (QueryException $exception) {
+                        if ($this->isSettlementClaimUniqueCollision($exception)) {
+                            throw new DomainException(
+                                'Agent bulk Order settlement is already claimed by another parent.',
+                                0,
+                                $exception,
+                            );
+                        }
+
+                        throw $exception;
+                    }
                 }
 
                 $created = $this->parentById($connection, $parentId);
@@ -205,6 +219,16 @@ SQL);
 
             throw $exception;
         }
+    }
+
+    private function isSettlementClaimUniqueCollision(QueryException $exception): bool
+    {
+        return ($exception->errorInfo[0] ?? null) === '23000'
+            && (int) ($exception->errorInfo[1] ?? 0) === 1062
+            && str_contains(
+                (string) ($exception->errorInfo[2] ?? ''),
+                self::SETTLEMENT_CLAIM_UNIQUE_INDEX,
+            );
     }
 
     private function assertActiveAgent(Connection $connection, int $userId): void
