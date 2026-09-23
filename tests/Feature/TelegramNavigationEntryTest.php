@@ -6,8 +6,8 @@ namespace Tests\Feature;
 
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentChangeContext;
-use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Promotions\Application\ReferralAttributionService;
+use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;

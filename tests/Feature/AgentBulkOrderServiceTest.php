@@ -376,6 +376,52 @@ final class AgentBulkOrderServiceTest extends TestCase
         self::assertSame([1, 1], DB::table('agent_bulk_order_items')->orderBy('line_number')->pluck('attempt_count')->map(static fn ($value): int => (int) $value)->all());
     }
 
+    public function test_settlement_claim_is_exclusive_across_distinct_bulk_parents_without_duplicate_order_effect(): void
+    {
+        [$agent, $offering] = $this->agentAuthority('bulk-exclusive-claim');
+        $settlement = $this->agentSettlement('bulk-exclusive-claim', $agent, $offering['id']);
+        $service = $this->app->make(AgentBulkOrderService::class);
+
+        $first = $service->execute(
+            'bulk-exclusive-parent-0001',
+            $agent,
+            [[
+                'child_key' => 'bulk-exclusive-child-a',
+                'purchase_settlement_public_id' => $settlement->settlementPublicId,
+            ]],
+            $this->purchaseOrderCorrelation('bulk-exclusive-first'),
+        );
+        self::assertSame(1, $first->succeededCount);
+        self::assertSame(0, $first->failedCount);
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(1, DB::table('orders')->count());
+
+        try {
+            $service->execute(
+                'bulk-exclusive-parent-0002',
+                $agent,
+                [[
+                    'child_key' => 'bulk-exclusive-child-b',
+                    'purchase_settlement_public_id' => $settlement->settlementPublicId,
+                ]],
+                $this->purchaseOrderCorrelation('bulk-exclusive-second'),
+            );
+            self::fail('A settlement already claimed by another bulk parent must fail closed.');
+        } catch (QueryException) {
+            self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        }
+
+        self::assertSame(1, DB::table('agent_bulk_orders')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->count());
+        self::assertSame(1, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-exclusive-child-a')->count());
+        self::assertSame(0, DB::table('agent_bulk_order_items')->where('child_key', 'bulk-exclusive-child-b')->count());
+        self::assertSame(1, DB::table('orders')->count());
+        self::assertSame(1, DB::table('order_items')->count());
+        self::assertSame(1, DB::table('payment_intents')->count());
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+    }
+
     public function test_failed_child_retry_never_recreates_successful_child_or_second_debit(): void
     {
         [$agent, $offering] = $this->agentAuthority('bulk-partial');
