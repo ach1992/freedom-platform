@@ -128,7 +128,7 @@ final readonly class AdministratorRoleCatalogService
             ['permission_code' => $permissionCode, 'granted' => $granted],
             function (Connection $connection) use ($roleCode, $permissionCode, $granted, $context): array {
                 $actorIsOwner = $this->authorizeActor($context->actorAdministratorId);
-                $role = $this->customRole($connection, $roleCode, true);
+                $role = $this->lockCustomRoleWithAssignedAdministrators($connection, $roleCode);
                 $permission = $connection->table('permissions')->where('code', $permissionCode)->lockForUpdate()->first(['id']);
                 if ($permission === null) {
                     throw new RuntimeException('Permission does not exist.');
