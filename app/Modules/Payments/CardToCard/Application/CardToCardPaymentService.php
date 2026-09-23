@@ -53,6 +53,22 @@ final readonly class CardToCardPaymentService
             $eligibilityDecisionPublicId,
             $correlationId,
         ): CardToCardPaymentReceipt {
+            // Every C2C writer that can touch a reservation first serializes on its
+            // parent destination. Acquire the allocation authority up front so slot
+            // expiry cannot invert destination -> reservation ordering, including
+            // when this service is called from an outer transaction.
+            /** @var list<stdClass> $destinations */
+            $destinations = $connection->table('c2c_destination_accounts')
+                ->where('state', 'active')
+                ->orderBy('priority')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->all();
+            if ($destinations === []) {
+                throw new DomainException('No active card-to-card destination is available.');
+            }
+
             $this->expireReservations($connection);
 
             $intent = $this->purchaseIntents->create(
@@ -88,18 +104,6 @@ final readonly class CardToCardPaymentService
             $baseAmountIrr = $intent->amount->amount();
             if ($baseAmountIrr < 1) {
                 throw new RuntimeException('Card-to-card base amount must be positive integer IRR.');
-            }
-
-            /** @var list<stdClass> $destinations */
-            $destinations = $connection->table('c2c_destination_accounts')
-                ->where('state', 'active')
-                ->orderBy('priority')
-                ->orderBy('id')
-                ->lockForUpdate()
-                ->get()
-                ->all();
-            if ($destinations === []) {
-                throw new DomainException('No active card-to-card destination is available.');
             }
 
             foreach ($destinations as $destination) {
@@ -326,15 +330,61 @@ final readonly class CardToCardPaymentService
     private function expireReservations(Connection $connection): int
     {
         $now = $this->databaseDateTime($this->clock->now());
+        /** @var list<object{id:int|string,c2c_destination_account_id:int|string}> $candidates */
+        $candidates = $connection->table('c2c_amount_reservations as reservation')
+            ->join('c2c_destination_accounts as destination', 'destination.id', '=', 'reservation.c2c_destination_account_id')
+            ->where('reservation.active_lock', 1)
+            ->where('reservation.expires_at', '<=', $now)
+            ->orderBy('destination.priority')
+            ->orderBy('destination.id')
+            ->orderBy('reservation.id')
+            ->get([
+                'reservation.id',
+                'reservation.c2c_destination_account_id',
+            ])
+            ->all();
 
-        return $connection->table('c2c_amount_reservations')
-            ->where('active_lock', 1)
-            ->where('expires_at', '<=', $now)
-            ->update([
-                'active_lock' => null,
-                'released_at' => $now,
-                'release_reason' => 'expired',
-            ]);
+        $expired = 0;
+        foreach ($candidates as $candidate) {
+            $destinationId = $this->positiveInt($candidate->c2c_destination_account_id, 'Card-to-card expiry destination ID');
+            $destination = $connection->table('c2c_destination_accounts')
+                ->where('id', $destinationId)
+                ->sharedLock()
+                ->first(['id']);
+            if ($destination === null) {
+                throw new RuntimeException('Card-to-card expiry destination authority is unavailable.');
+            }
+
+            $reservation = $connection->table('c2c_amount_reservations')
+                ->where('id', $this->positiveInt($candidate->id, 'Card-to-card expiry reservation ID'))
+                ->lockForUpdate()
+                ->first(['id', 'c2c_destination_account_id', 'active_lock', 'expires_at']);
+            if ($reservation === null) {
+                continue;
+            }
+            if ((int) $reservation->c2c_destination_account_id !== $destinationId) {
+                throw new RuntimeException('Card-to-card expiry reservation destination changed unexpectedly.');
+            }
+            if ((int) ($reservation->active_lock ?? 0) !== 1 || (string) $reservation->expires_at > $now) {
+                continue;
+            }
+
+            $updated = $connection->table('c2c_amount_reservations')
+                ->where('id', $reservation->id)
+                ->where('active_lock', 1)
+                ->where('expires_at', '<=', $now)
+                ->update([
+                    'active_lock' => null,
+                    'released_at' => $now,
+                    'release_reason' => 'expired',
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Card-to-card amount reservation expiry changed concurrently.');
+            }
+            $expired++;
+        }
+
+        return $expired;
     }
 
     private function receipt(Connection $connection, PurchasePaymentIntentReceipt $intent, stdClass $reservation, bool $replayed): CardToCardPaymentReceipt

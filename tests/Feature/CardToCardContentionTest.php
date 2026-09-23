@@ -83,14 +83,14 @@ namespace {
                 $c2cContentionMode === '--c2c-capture-worker' => str_contains($sql, 'c2c_transaction_matches') && str_contains($sql, 'for update'),
                 $c2cContentionMode === '--c2c-maintenance-worker' && $barrier === 'destination_before' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'for update'),
                 in_array($c2cContentionMode, ['--c2c-bank-worker', '--c2c-manual-worker'], true) && $barrier === 'destination_before' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'for update'),
-                $c2cContentionMode === '--c2c-maintenance-worker' && $barrier === 'reservation_expire_before' => str_contains($sql, 'c2c_amount_reservations') && str_starts_with(ltrim($sql), 'update'),
+                $c2cContentionMode === '--c2c-maintenance-worker' && $barrier === 'destination_shared_before' => str_contains($sql, 'c2c_destination_accounts') && str_contains($sql, 'lock in share mode'),
                 default => false,
             };
             if (! $target) {
                 return;
             }
             $barrierReached = true;
-            $requestBarrier = $barrier === 'destination_before' || $barrier === 'reservation_expire_before';
+            $requestBarrier = in_array($barrier, ['destination_before', 'destination_shared_before'], true);
             echo $requestBarrier ? "AT_REQUEST\n" : "AT_LOCK\n";
             flush();
             $continue = fgets(STDIN);
@@ -485,7 +485,7 @@ namespace Tests\Feature {
                 'correlation_id' => $this->correlation('bank-'.$suffix),
             ]);
             $maintenance = $this->startWorker('--c2c-maintenance-worker', [
-                'barrier' => $maintenanceFirst ? 'destination_after' : 'reservation_expire_before',
+                'barrier' => $maintenanceFirst ? 'destination_after' : 'destination_shared_before',
                 'clock_now' => $authority['maintenance_now'],
             ]);
 
@@ -504,7 +504,7 @@ namespace Tests\Feature {
                     $this->sendCommand($bank, 'GO');
                     self::assertSame("AT_LOCK\n", $this->readLine($bank, 'discounted bank destination lock'));
                     $this->sendCommand($maintenance, 'GO');
-                    self::assertSame("AT_REQUEST\n", $this->readLine($maintenance, 'discounted maintenance reservation-expiry request'));
+                    self::assertSame("AT_REQUEST\n", $this->readLine($maintenance, 'discounted maintenance destination shared-lock request'));
                     $this->sendCommand($maintenance, 'CONTINUE');
                     $this->sendCommand($bank, 'CONTINUE');
                 }
@@ -667,7 +667,7 @@ namespace Tests\Feature {
                 'correlation_id' => $this->correlation('bank-'.$suffix),
             ]);
             $maintenance = $this->startWorker('--c2c-maintenance-worker', [
-                'barrier' => $maintenanceFirst ? 'destination_after' : 'reservation_expire_before',
+                'barrier' => $maintenanceFirst ? 'destination_after' : 'destination_shared_before',
                 'clock_now' => $authority['maintenance_now'],
             ]);
 
@@ -734,7 +734,7 @@ namespace Tests\Feature {
                 'correlation_id' => $this->correlation('manual-'.$suffix),
             ]);
             $maintenance = $this->startWorker('--c2c-maintenance-worker', [
-                'barrier' => $maintenanceFirst ? 'destination_after' : 'reservation_expire_before',
+                'barrier' => $maintenanceFirst ? 'destination_after' : 'destination_shared_before',
                 'clock_now' => $authority['maintenance_now'],
             ]);
 

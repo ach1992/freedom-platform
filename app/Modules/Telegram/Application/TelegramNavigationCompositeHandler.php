@@ -6,6 +6,7 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationResolver;
 
 /**
  * Keeps the established navigation handler unchanged while routing bounded
@@ -27,7 +28,9 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramSupportAttachmentNavigationHandler $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
         private TelegramGiftCardNavigationHandler $giftCards,
+        private TelegramWalletTransferNavigationHandler $walletTransfers,
         private TelegramUsdtNavigationHandler $usdt,
+        private TelegramNowPaymentsNavigationResolver $nowPaymentsResolver,
         private TelegramZarinpalNavigationHandler $zarinpal,
     ) {}
 
@@ -98,8 +101,18 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 
             return;
         }
+        if ($this->walletTransfers->supports($action)) {
+            $this->walletTransfers->handle($action);
+
+            return;
+        }
         if ($this->usdt->supports($action)) {
             $this->usdt->handle($action);
+
+            return;
+        }
+        if (TelegramNowPaymentsNavigationHandler::supportsAction($action)) {
+            $this->nowPaymentsResolver->resolve()->handle($action);
 
             return;
         }

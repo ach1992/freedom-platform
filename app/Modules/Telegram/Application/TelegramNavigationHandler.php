@@ -150,6 +150,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramInteractionCallbackService $callbacks,
         private CustomerAccountSummaryService $customers,
         private WalletSelfBalanceService $wallets,
+        private TelegramCustomerWalletTransferService $walletTransfers,
         private ReferralSelfSummaryService $referrals,
         private TelegramReferralDeepLink $referralLinks,
         private TelegramCustomerPurchaseQuote $purchaseQuotes,
@@ -3171,6 +3172,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )],
         ];
         if ($customer->accountType === 'customer' && $customer->accountStatus === 'active') {
+            if ($this->walletTransfers->availableForSelf($action->userId, $action->userId)) {
+                $transfer = $this->callbacks->issue(
+                    $action->sessionPublicId,
+                    $sessionVersion,
+                    TelegramWalletTransferNavigationHandler::ACTION_ENTRY,
+                    [],
+                    'nav-home-wallet-transfer:'.$requestKey,
+                );
+                $rows[] = [new TelegramInlineCallbackButton(
+                    $this->translation('telegram_wallet_transfer.entry', $locale),
+                    $transfer->publicId,
+                    TelegramInlineButtonStyle::Primary,
+                )];
+            }
             $purchase = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,

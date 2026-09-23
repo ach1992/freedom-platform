@@ -30,6 +30,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\AssertsPurchaseProviderMutationAttempt;
 use Tests\TestCase;
 
 final class GiftCardRaceVerificationProvider implements GiftCardVerificationProvider
@@ -110,6 +111,7 @@ final class GiftCardReserveRaceVerificationProvider implements GiftCardVerificat
         private readonly GiftCardProviderEvidence $reservation,
         private readonly GiftCardProviderEvidence $releaseEvidence,
         private readonly \Closure $beforeReserveResponse,
+        private readonly ?\Closure $beforeReleaseResponse = null,
     ) {}
 
     public function code(): string
@@ -155,6 +157,9 @@ final class GiftCardReserveRaceVerificationProvider implements GiftCardVerificat
             throw new RuntimeException('Reserve-race provider release must not be called twice.');
         }
         $this->releaseCalled = true;
+        if ($this->beforeReleaseResponse !== null) {
+            ($this->beforeReleaseResponse)();
+        }
 
         return $this->releaseEvidence;
     }
@@ -195,6 +200,7 @@ final class GiftCardFlowClock implements Clock
 final class GiftCardPaymentFlowTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
+    use AssertsPurchaseProviderMutationAttempt;
     use RefreshDatabase;
 
     private GiftCardFlowClock $clock;
@@ -401,13 +407,23 @@ final class GiftCardPaymentFlowTest extends TestCase
             $this->evidence('validate', 'valid', 'order-reserve-race-first-validate', null, $purchase['amount']),
             $this->evidence('reserve', 'reserved', 'order-reserve-race-first-reserve', 'order-reserve-race-hold', $purchase['amount']),
             $this->evidence('release', 'released', 'order-reserve-race-first-release', 'order-reserve-race-release', $purchase['amount']),
-            function () use ($service, $winner, $winnerProvider): void {
+            function () use ($service, $racing, $winner, $winnerProvider): void {
+                $this->assertExternalProviderMutationAttempt(
+                    'gift_card',
+                    'gift-card:reserve:'.$racing->publicId,
+                );
                 $captured = $service->process(
                     $winner->publicId,
                     $winnerProvider,
                     $this->correlation('order-reserve-race-winner-process'),
                 );
                 self::assertSame('captured', $captured->state);
+            },
+            function () use ($racing): void {
+                $this->assertExactExternalProviderMutationAttempt(
+                    'gift_card',
+                    'gift-card:release:'.$racing->publicId,
+                );
             },
         );
 
@@ -597,7 +613,11 @@ final class GiftCardPaymentFlowTest extends TestCase
         $raceProvider = new GiftCardRaceVerificationProvider(
             $this->evidence('validate', 'valid', 'order-race-first-validate', null, $purchase['amount']),
             $this->evidence('redeem', 'redeemed', 'order-race-first-redeem', 'order-race-first-tx', $purchase['amount']),
-            function () use ($service, $winner, $winnerProvider): void {
+            function () use ($service, $racing, $winner, $winnerProvider): void {
+                $this->assertExternalProviderMutationAttempt(
+                    'gift_card',
+                    'gift-card:redeem:'.$racing->publicId,
+                );
                 $captured = $service->process(
                     $winner->publicId,
                     $winnerProvider,

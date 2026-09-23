@@ -18,6 +18,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
@@ -54,6 +55,7 @@ use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
+use App\Modules\Telegram\Application\TelegramNowPaymentsNavigationHandler;
 use App\Modules\Telegram\Application\TelegramPrivateMediaDeliveryResolver;
 use App\Modules\Telegram\Application\TelegramPrivateMediaReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
@@ -66,6 +68,7 @@ use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
 use App\Modules\Telegram\Application\TelegramUsdtNavigationHandler;
+use App\Modules\Telegram\Application\TelegramWalletTransferNavigationHandler;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxEventHandler;
 use Illuminate\Contracts\Config\Repository;
@@ -163,6 +166,12 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramSupportNavigationHandler::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
+        $this->app->singleton(TelegramWalletTransferNavigationHandler::class);
+        $this->app->singleton(TelegramNowPaymentsNavigationHandler::class);
+        $this->app->singleton(
+            TelegramNowPaymentsNavigationResolver::class,
+            ContainerTelegramNowPaymentsNavigationResolver::class,
+        );
         $this->app->singleton(
             TelegramBroadcastNavigationResolver::class,
             ContainerTelegramBroadcastNavigationResolver::class,
