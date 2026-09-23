@@ -8067,7 +8067,10 @@ SQL);
     /** @requirement AGT-004 BUY-003 DAT-002 DAT-003 SEC-002 SEC-003 QUA-001 QUA-004 */
     public function test_agent_bulk_purchase_recovers_locked_submitting_fence_after_cancel_and_expiry_without_second_effect(): void
     {
-        Config::set('telegram.interaction_session_ttl_seconds', 60);
+        Config::set([
+            'telegram.interaction_session_ttl_seconds' => 60,
+            'telegram.interaction_callback_ttl_seconds' => 60,
+        ]);
         $clock = new class(new DateTimeImmutable('now', new \DateTimeZone('UTC'))) implements Clock
         {
             public function __construct(private DateTimeImmutable $current) {}
