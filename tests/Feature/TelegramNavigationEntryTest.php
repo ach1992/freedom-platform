@@ -1386,6 +1386,7 @@ final class TelegramNavigationEntryTest extends TestCase
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_6903');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_processed_7013');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_admin_rate_finalize');
+                DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_admin_access_finalize');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_agent_bulk_finalize');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_queue');
                 DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_direct_message_link');
@@ -7300,6 +7301,151 @@ SQL);
             ->where('telegram_interaction_session_id', (int) $session->id)
             ->where('to_state', 'admin_usdt_rate_submitting')
             ->count());
+    }
+
+    public function test_admin_access_owner_enable_is_actor_bound_atomic_and_exactly_once(): void
+    {
+        $telegramUserId = 9740;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(7600, $telegramUserId, 'navigation_admin_access_owner', 'en', '/start'));
+        $processor->process('123456789', 7600);
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+
+        DB::table('administrators')->insert([
+            'user_id' => (int) $account->user_id,
+            'status' => 'active',
+            'is_owner' => true,
+            'permission_version' => 1,
+            'last_authenticated_at' => now('UTC'),
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+
+        $targetPublicId = (string) \Illuminate\Support\Str::ulid();
+        $targetUserId = (int) DB::table('users')->insertGetId([
+            'public_id' => $targetPublicId,
+            'locale' => 'en',
+            'account_type' => 'customer',
+            'account_status' => 'active',
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+
+        $this->accept($this->payload(7601, $telegramUserId, 'navigation_admin_access_owner', 'en', '/menu'));
+        $processor->process('123456789', 7601);
+
+        $adminToken = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(7602, $telegramUserId, 'navigation_admin_access_owner', 'en', $adminToken));
+        $processor->process('123456789', 7602);
+
+        $accessToken = $this->callbackToken('navigation.admin.access', (int) $account->id);
+        $this->accept($this->callbackPayload(7603, $telegramUserId, 'navigation_admin_access_owner', 'en', $accessToken));
+        $processor->process('123456789', 7603);
+
+        $searchToken = $this->callbackToken('navigation.admin.access.target_search', (int) $account->id);
+        $this->accept($this->callbackPayload(7604, $telegramUserId, 'navigation_admin_access_owner', 'en', $searchToken));
+        $processor->process('123456789', 7604);
+
+        $this->accept($this->payload(7605, $telegramUserId, 'navigation_admin_access_owner', 'en', $targetPublicId));
+        $processor->process('123456789', 7605);
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'version', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_access_target', (string) $session->state);
+        $targetPayload = json_decode((string) $session->payload, true, 512, JSON_THROW_ON_ERROR);
+        self::assertIsArray($targetPayload);
+        self::assertSame(['target'], array_keys($targetPayload));
+        self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', (string) $targetPayload['target']);
+        self::assertStringNotContainsString($targetPublicId, (string) $session->payload);
+        self::assertSame(0, DB::table('administrators')->where('user_id', $targetUserId)->count());
+
+        $enableToken = $this->callbackToken('navigation.admin.access.target.enable', (int) $account->id);
+        $this->accept($this->callbackPayload(7606, $telegramUserId, 'navigation_admin_access_owner', 'en', $enableToken));
+        $processor->process('123456789', 7606);
+
+        $confirmSession = DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->first(['state', 'version', 'payload']);
+        self::assertNotNull($confirmSession);
+        self::assertSame('admin_access_confirm', (string) $confirmSession->state);
+        self::assertStringNotContainsString($targetPublicId, (string) $confirmSession->payload);
+        self::assertSame(0, DB::table('administrators')->where('user_id', $targetUserId)->count());
+        self::assertSame(0, DB::table('sensitive_action_approvals')->count());
+
+        $confirmToken = $this->callbackToken('navigation.admin.access.confirm', (int) $account->id);
+
+        $otherTelegramUserId = 9741;
+        $this->accept($this->payload(7610, $otherTelegramUserId, 'navigation_admin_access_other', 'en', '/start'));
+        $processor->process('123456789', 7610);
+        $this->accept($this->callbackPayload(7611, $otherTelegramUserId, 'navigation_admin_access_other', 'en', $confirmToken));
+        $processor->process('123456789', 7611);
+        self::assertSame(0, DB::table('administrators')->where('user_id', $targetUserId)->count());
+        self::assertSame('admin_access_confirm', (string) DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->value('state'));
+
+        $this->accept($this->callbackPayload(7607, $telegramUserId, 'navigation_admin_access_owner', 'en', $confirmToken));
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_navigation_test_fail_admin_access_finalize
+BEFORE UPDATE ON telegram_interaction_sessions
+FOR EACH ROW
+BEGIN
+    IF OLD.state = 'admin_access_submitting' AND NEW.state = 'admin_access_target' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-admin-access-finalize-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $processor->process('123456789', 7607);
+                self::fail('The simulated final access-control transition failure must roll back the mutation.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_navigation_test_fail_admin_access_finalize');
+        }
+
+        self::assertSame(0, DB::table('administrators')->where('user_id', $targetUserId)->count());
+        self::assertSame(0, DB::table('sensitive_action_approvals')->count());
+        self::assertSame(0, DB::table('audit_logs')->where('action', 'access.administrator.enabled')->count());
+        self::assertSame('admin_access_confirm', (string) DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->value('state'));
+        self::assertSame(0, DB::table('telegram_interaction_transitions')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('to_state', 'admin_access_submitting')
+            ->count());
+
+        $processor->process('123456789', 7607);
+
+        self::assertSame(1, DB::table('administrators')->where('user_id', $targetUserId)->count());
+        self::assertSame(1, DB::table('sensitive_action_approvals')->count());
+        self::assertSame('approved', (string) DB::table('sensitive_action_approvals')->value('state'));
+        self::assertNotNull(DB::table('sensitive_action_approvals')->value('consumed_at'));
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'access.administrator.enabled')->count());
+        self::assertSame('admin_access_target', (string) DB::table('telegram_interaction_sessions')
+            ->where('id', (int) $session->id)
+            ->value('state'));
+        self::assertSame(1, DB::table('telegram_interaction_transitions')
+            ->where('telegram_interaction_session_id', (int) $session->id)
+            ->where('to_state', 'admin_access_submitting')
+            ->count());
+
+        $processor->process('123456789', 7607);
+        self::assertSame(1, DB::table('administrators')->where('user_id', $targetUserId)->count());
+        self::assertSame(1, DB::table('sensitive_action_approvals')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'access.administrator.enabled')->count());
+
+        $durable = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
+        self::assertStringNotContainsString($targetPublicId, $durable);
+        self::assertStringNotContainsString('admins.accounts.manage', $durable);
     }
 
     public function test_agent_cooperation_submission_is_explicit_confidential_and_replay_safe(): void
