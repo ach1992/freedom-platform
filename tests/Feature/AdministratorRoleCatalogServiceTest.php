@@ -108,6 +108,16 @@ final class AdministratorRoleCatalogServiceTest extends TestCase
         self::assertSame(2, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
         self::assertSame(2, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
 
+        $permissionNoOp = $service->setCustomRolePermission(
+            'custom.invalidate_test',
+            'identity.customers.view',
+            true,
+            $this->context($ownerId, 'custom-role-invalidate-permission-noop-0001'),
+        );
+        self::assertFalse($permissionNoOp->changed);
+        self::assertSame(2, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(2, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+
         $statusContext = $this->context($ownerId, 'custom-role-invalidate-status-0001');
         $service->setCustomRoleActive(
             'custom.invalidate_test',
@@ -123,6 +133,15 @@ final class AdministratorRoleCatalogServiceTest extends TestCase
             false,
             $statusContext,
         );
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
+        self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
+
+        $statusNoOp = $service->setCustomRoleActive(
+            'custom.invalidate_test',
+            false,
+            $this->context($ownerId, 'custom-role-invalidate-status-noop-0001'),
+        );
+        self::assertFalse($statusNoOp->changed);
         self::assertSame(3, (int) DB::table('administrators')->where('id', $firstAdministratorId)->value('permission_version'));
         self::assertSame(3, (int) DB::table('administrators')->where('id', $secondAdministratorId)->value('permission_version'));
     }
