@@ -10,6 +10,7 @@ use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorLifecycleService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\AccessControl\Application\AdministratorRoleCatalogService;
+use App\Modules\AccessControl\Application\AdministratorSensitiveMutationService;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\AccessControl\Application\OwnerTransferService;
 use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
@@ -60,6 +61,18 @@ final class AccessControlServiceProvider extends ServiceProvider
                 $application->make(DatabaseManager::class),
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorSensitiveMutationService::class,
+            fn (Application $application): AdministratorSensitiveMutationService => new AdministratorSensitiveMutationService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorUserPermissionAuthorizer::class),
+                $application->make(SensitiveActionApprovalService::class),
+                $application->make(AdministratorAccessService::class),
+                $application->make(AdministratorLifecycleService::class),
+                $application->make(AdministratorRoleCatalogService::class),
             ),
         );
 
