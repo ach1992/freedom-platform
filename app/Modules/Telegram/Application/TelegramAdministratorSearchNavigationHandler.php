@@ -209,7 +209,28 @@ final readonly class TelegramAdministratorSearchNavigationHandler
         }
 
         $this->assertActor($action, $session->userId);
-        $this->navigation->renderCurrentHome($action, $session->version);
+
+        $this->navigation->handle(new TelegramInteractionAction(
+            TelegramInteractionActionKind::Message,
+            $action->requestKey.':admin-global-search-home',
+            $action->botId,
+            $action->updateId,
+            $action->telegramAccountId,
+            $action->userId,
+            $action->telegramUserId,
+            $session->publicId,
+            $session->flow,
+            $session->state,
+            $session->version,
+            $session->payload,
+            null,
+            null,
+            null,
+            [],
+            $action->replayed,
+            null,
+            $action->messageAcceptedAt,
+        ));
     }
 
     private function locale(int $userId): string
