@@ -124,7 +124,7 @@ final readonly class TelegramAdministratorSearchNavigationHandler
     }
 
     /**
-     * @param list<TelegramAdministratorSearchItem>|null $items
+     * @param  list<TelegramAdministratorSearchItem>|null  $items
      */
     private function renderSearch(
         TelegramInteractionAction $action,
@@ -240,7 +240,7 @@ final readonly class TelegramAdministratorSearchNavigationHandler
         return $locale === 'en' ? 'en' : 'fa';
     }
 
-    /** @param array<string,int|string> $replace */
+    /** @param  array<string,int|string>  $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
         $value = $this->localization->resolve($key, $replace, $locale);

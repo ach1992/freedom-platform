@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Modules\Payments\Application;
 
+use App\Modules\AccessControl\Application\AdministratorSearchPermissions;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
 use App\Modules\Telegram\Application\TelegramAdministratorSearchItem;
-use Database\Seeders\AdministratorSearchAccessFoundationSeeder;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
@@ -22,7 +22,7 @@ final readonly class TelegramAdministratorPaymentSearchSource implements Telegra
     {
         return $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchPermissions::PAYMENT_PERMISSION,
+            AdministratorSearchPermissions::PAYMENT,
         );
     }
 
@@ -31,11 +31,11 @@ final readonly class TelegramAdministratorPaymentSearchSource implements Telegra
     {
         $this->administrators->authorizeUser(
             $actorUserId,
-            AdministratorSearchPermissions::PAYMENT_PERMISSION,
+            AdministratorSearchPermissions::PAYMENT,
         );
         $mayViewEvidence = $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchPermissions::PAYMENT_EVIDENCE_PERMISSION,
+            AdministratorSearchPermissions::PAYMENT_EVIDENCE,
         );
 
         $connection = $this->database->connection();

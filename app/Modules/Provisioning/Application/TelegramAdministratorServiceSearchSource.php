@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\AccessControl\Application\AdministratorSearchPermissions;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
 use App\Modules\Telegram\Application\TelegramAdministratorSearchItem;
-use Database\Seeders\AdministratorSearchAccessFoundationSeeder;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
 
@@ -22,7 +22,7 @@ final readonly class TelegramAdministratorServiceSearchSource implements Telegra
     {
         return $this->administrators->allowsUser(
             $actorUserId,
-            AdministratorSearchPermissions::SERVICE_PERMISSION,
+            AdministratorSearchPermissions::SERVICE,
         );
     }
 
@@ -31,7 +31,7 @@ final readonly class TelegramAdministratorServiceSearchSource implements Telegra
     {
         $this->administrators->authorizeUser(
             $actorUserId,
-            AdministratorSearchPermissions::SERVICE_PERMISSION,
+            AdministratorSearchPermissions::SERVICE,
         );
 
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $query) !== 1) {

@@ -9,9 +9,9 @@ use InvalidArgumentException;
 final readonly class AdministratorAccessManagementSnapshot
 {
     /**
-     * @param list<string> $roleCodes
-     * @param list<string> $permissionOverrides
-     * @param list<string> $recentAuditActions
+     * @param  list<string>  $roleCodes
+     * @param  list<string>  $permissionOverrides
+     * @param  list<string>  $recentAuditActions
      */
     public function __construct(
         public int $administratorId,

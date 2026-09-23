@@ -18,7 +18,7 @@ final readonly class TelegramAdministratorSearchService
     private array $sources;
 
     /**
-     * @param iterable<TelegramAdministratorSearchSource> $sources
+     * @param  iterable<TelegramAdministratorSearchSource>  $sources
      */
     public function __construct(iterable $sources)
     {
@@ -77,7 +77,7 @@ final readonly class TelegramAdministratorSearchService
             return [];
         }
 
-        /** @var array<string,TelegramAdministratorSearchItem> $items */
+        /** @var array<string, TelegramAdministratorSearchItem> $items */
         $items = [];
         foreach ($this->sources as $source) {
             if (! $source->availableFor($actorUserId)) {

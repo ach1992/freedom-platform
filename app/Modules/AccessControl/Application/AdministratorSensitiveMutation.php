@@ -10,17 +10,29 @@ use InvalidArgumentException;
 final readonly class AdministratorSensitiveMutation
 {
     public const ROLE_GRANT = 'role_grant';
+
     public const ROLE_REVOKE = 'role_revoke';
+
     public const PERMISSION_ALLOW = 'permission_allow';
+
     public const PERMISSION_DENY = 'permission_deny';
+
     public const PERMISSION_INHERIT = 'permission_inherit';
+
     public const ADMINISTRATOR_SUSPEND = 'administrator_suspend';
+
     public const ADMINISTRATOR_REACTIVATE = 'administrator_reactivate';
+
     public const ADMINISTRATOR_REVOKE = 'administrator_revoke';
+
     public const CUSTOM_ROLE_CREATE = 'custom_role_create';
+
     public const CUSTOM_ROLE_ENABLE = 'custom_role_enable';
+
     public const CUSTOM_ROLE_DISABLE = 'custom_role_disable';
+
     public const CUSTOM_ROLE_PERMISSION_GRANT = 'custom_role_permission_grant';
+
     public const CUSTOM_ROLE_PERMISSION_REVOKE = 'custom_role_permission_revoke';
 
     private const OPERATIONS = [

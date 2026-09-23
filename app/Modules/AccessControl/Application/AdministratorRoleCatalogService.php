@@ -31,7 +31,7 @@ final readonly class AdministratorRoleCatalogService
             'access.role_definition.create',
             $roleCode,
             $context,
-            ['exists' => true, 'active' => true],
+            ['exists' => true],
             function (Connection $connection) use ($roleCode, $context): array {
                 $this->authorizeActor($context->actorAdministratorId);
                 $existing = $connection->table('roles')->where('code', $roleCode)->lockForUpdate()->first([
@@ -160,8 +160,8 @@ final readonly class AdministratorRoleCatalogService
     }
 
     /**
-     * @param array<string,bool|int|string|null> $expectedAfter
-     * @param callable(Connection):array{0:array<string,bool|int|string|null>,1:array<string,bool|int|string|null>} $operation
+     * @param  array<string,bool|int|string|null>  $expectedAfter
+     * @param  callable(Connection):array{0:array<string,bool|int|string|null>,1:array<string,bool|int|string|null>}  $operation
      */
     private function mutate(
         string $action,
@@ -226,7 +226,7 @@ final readonly class AdministratorRoleCatalogService
         }
     }
 
-    /** @param array<string,bool|int|string|null> $expected */
+    /** @param  array<string,bool|int|string|null>  $expected */
     private function assertExpectedAfter(
         AdministratorRoleMutationReceipt $receipt,
         array $expected,
