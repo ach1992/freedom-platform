@@ -38,7 +38,7 @@ final class TelegramResolvedInlineKeyboardMarkup implements Stringable
         return new self($snapshot, $callbackDataByPublicId);
     }
 
-    /** @return array{inline_keyboard:list<list<array<string,string>>>} */
+    /** @return array{inline_keyboard:list<list<array<string,mixed>>>} */
     public function providerPayload(): array
     {
         $rows = [];

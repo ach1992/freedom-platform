@@ -17,7 +17,21 @@ return [
             'agent_status' => 'Cooperation Status',
             'agent_menu' => 'Agent Menu',
             'admin' => 'Administration',
+            'referral' => 'Invite Friends',
             'back' => 'Back',
+        ],
+        'menu' => [
+            'submenu' => 'Menu: :title
+
+Choose an option below.',
+        ],
+        'referral' => [
+            'view' => 'Invite Friends
+
+Your referral code: :referral_token
+Your referral link: :referral_link
+Inviter set: :has_inviter
+Referral locked: :referral_locked',
         ],
         'account' => [
             'view' => "My Account\n\nAccount ID: :public_id\nType: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\nIdentity items:\n:identity_items\nJoined: :joined_at\nLast seen: :last_seen_at\n\nWallet\nCash available: :cash_available IRR\nCash on hold: :cash_holds IRR\nPromotional available: :promotional_available IRR\n\nReferral\nYour referral code: :referral_token\nYour referral link: :referral_link\nInviter set: :has_inviter\nReferral locked: :referral_locked",
@@ -49,6 +63,42 @@ return [
                 'customer_search' => 'Customer Search',
                 'usdt_rate' => 'USDT / NOWPayments rate',
                 'client_guides' => 'Client Guides',
+                'menus' => 'Menus & Buttons',
+            ],
+            'menus' => [
+                'list' => 'Menu & Button Configuration
+
+Selected menu: :selected
+
+:items
+
+Versions are preview-only until explicitly published.',
+                'item' => ':menu_key — active version :version — publication generation :generation',
+                'none' => 'No menu version has been created yet.',
+                'not_selected' => 'Not selected',
+                'version_button' => 'Preview version :version',
+                'create_button' => 'Create new version',
+                'publish_button' => 'Publish this version',
+                'rollback_button' => 'Roll back to this version',
+                'changed' => 'The selected version is now active.',
+                'stale' => 'The active version changed in the meantime. Fresh state is shown; review the target version again.',
+                'editor' => 'Create Menu Version
+
+Send valid JSON matching the example below. Actions are restricted to the safe allowlist. premium_emoji_id requires normal_emoji. Row 9 is reserved for canonical Back/Publish controls.
+
+:example',
+                'invalid' => 'The submitted definition is invalid or violates a menu-safety constraint. No version was created.',
+                'preview' => 'Menu Preview
+
+Key: :menu_key
+Version: :version
+Current publication generation: :generation
+Items: :items
+Active: :active
+
+Preview buttons intentionally execute no real action.',
+                'yes' => 'Yes',
+                'no' => 'No',
             ],
             'access' => [
                 'menu' => "Access Control\n\nManage administrator identities, roles, permission overrides, sensitive approvals and ownership transfers through the canonical AccessControl authorities. Every write is re-authorized at execution time.",

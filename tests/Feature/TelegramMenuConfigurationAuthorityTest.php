@@ -128,59 +128,6 @@ final class TelegramMenuConfigurationAuthorityTest extends TestCase
         }
     }
 
-    public function test_database_head_rejects_cross_menu_active_version(): void
-    {
-        $ownerId = $this->administrator(true);
-        $service = $this->app->make(TelegramMenuConfigurationService::class);
-
-        $home = $service->createVersion(
-            'home',
-            $this->definition('HOME', TelegramInlineButtonStyle::Primary),
-            $this->context($ownerId, 'menu-home-create-request'),
-        );
-        $submenu = $service->createVersion(
-            'submenu.support',
-            new TelegramMenuConfigurationDefinition([
-                new TelegramMenuItemDefinition(
-                    key: 'copy_support',
-                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
-                    actionType: TelegramMenuItemDefinition::ACTION_COPY_TEXT,
-                    actionKey: null,
-                    labelFa: 'کپی پشتیبانی',
-                    labelEn: 'Copy support',
-                    normalEmoji: '📋',
-                    premiumEmojiId: null,
-                    style: TelegramInlineButtonStyle::Primary,
-                    row: 0,
-                    order: 0,
-                    copyText: 'SUPPORT',
-                ),
-            ]),
-            $this->context($ownerId, 'menu-submenu-create-request'),
-        );
-
-        $service->publish(
-            $home->publicId,
-            0,
-            $this->context($ownerId, 'menu-home-publish-request'),
-        );
-        $head = $service->headSnapshot('home');
-        self::assertNotNull($head);
-
-        try {
-            DB::table('telegram_menu_configuration_heads')
-                ->where('id', $head['id'])
-                ->update([
-                    'active_version_id' => $submenu->id,
-                    'generation' => $head['generation'] + 1,
-                    'updated_by_administrator_id' => $ownerId,
-                ]);
-            self::fail('Telegram menu head must reject an active version belonging to another menu.');
-        } catch (QueryException) {
-            self::assertSame($home->id, $service->active('home')?->id);
-        }
-    }
-
     public function test_permission_and_system_action_boundaries_fail_closed(): void
     {
         $ownerId = $this->administrator(true);
@@ -236,6 +183,130 @@ final class TelegramMenuConfigurationAuthorityTest extends TestCase
         } catch (RuntimeException $exception) {
             self::assertStringContainsString('essential navigation', $exception->getMessage());
         }
+    }
+
+    public function test_publish_requires_published_submenus_and_configuration_cannot_consume_reserved_row_or_condition_essential_navigation(): void
+    {
+        $ownerId = $this->administrator(true);
+        $service = $this->app->make(TelegramMenuConfigurationService::class);
+
+        foreach ([
+            new TelegramMenuConfigurationDefinition([
+                $this->system('my_account', 'my_account', 0),
+                $this->system('my_services', 'my_services', 1),
+                new TelegramMenuItemDefinition(
+                    key: 'reserved',
+                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+                    actionType: TelegramMenuItemDefinition::ACTION_COPY_TEXT,
+                    actionKey: null,
+                    labelFa: 'رزرو',
+                    labelEn: 'Reserved',
+                    normalEmoji: null,
+                    premiumEmojiId: null,
+                    style: null,
+                    row: 9,
+                    order: 0,
+                    copyText: 'reserved',
+                ),
+            ]),
+            new TelegramMenuConfigurationDefinition([
+                new TelegramMenuItemDefinition(
+                    key: 'my_account',
+                    kind: TelegramMenuItemDefinition::KIND_SYSTEM,
+                    actionType: TelegramMenuItemDefinition::ACTION_REGISTERED,
+                    actionKey: 'my_account',
+                    labelFa: null,
+                    labelEn: null,
+                    normalEmoji: null,
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 0,
+                    order: 0,
+                    language: 'fa',
+                ),
+                $this->system('my_services', 'my_services', 1),
+            ]),
+        ] as $definition) {
+            try {
+                $service->createVersion(
+                    'home',
+                    $definition,
+                    $this->context($ownerId, 'menu-invalid-'.$definition->hash()),
+                );
+                self::fail('Reserved-row or conditional essential navigation must fail closed.');
+            } catch (RuntimeException) {
+                self::assertSame(0, DB::table('telegram_menu_configuration_versions')->count());
+            }
+        }
+
+        $submenu = $service->createVersion(
+            'submenu.help',
+            new TelegramMenuConfigurationDefinition([
+                new TelegramMenuItemDefinition(
+                    key: 'copy_help',
+                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+                    actionType: TelegramMenuItemDefinition::ACTION_COPY_TEXT,
+                    actionKey: null,
+                    labelFa: 'کپی راهنما',
+                    labelEn: 'Copy help',
+                    normalEmoji: '📋',
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 0,
+                    order: 0,
+                    copyText: 'HELP',
+                ),
+            ]),
+            $this->context($ownerId, 'menu-submenu-help-create'),
+        );
+        $home = $service->createVersion(
+            'home',
+            new TelegramMenuConfigurationDefinition([
+                $this->system('my_account', 'my_account', 0),
+                $this->system('my_services', 'my_services', 1),
+                new TelegramMenuItemDefinition(
+                    key: 'help',
+                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+                    actionType: TelegramMenuItemDefinition::ACTION_SUBMENU,
+                    actionKey: null,
+                    labelFa: 'راهنما',
+                    labelEn: 'Help',
+                    normalEmoji: 'ℹ️',
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 2,
+                    order: 0,
+                    submenuKey: 'submenu.help',
+                ),
+            ]),
+            $this->context($ownerId, 'menu-home-with-submenu-create'),
+        );
+
+        try {
+            $service->publish(
+                $home->publicId,
+                0,
+                $this->context($ownerId, 'menu-home-with-unpublished-submenu'),
+            );
+            self::fail('A home menu must not publish while a referenced submenu is unpublished.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram menu references an unpublished submenu.', $exception->getMessage());
+        }
+
+        self::assertSame(0, $service->headSnapshot('home')['generation']);
+        $service->publish(
+            $submenu->publicId,
+            0,
+            $this->context($ownerId, 'menu-submenu-help-publish'),
+        );
+        $service->publish(
+            $home->publicId,
+            0,
+            $this->context($ownerId, 'menu-home-with-published-submenu'),
+        );
+
+        self::assertSame($home->id, $service->active('home')?->id);
+        self::assertSame($submenu->id, $service->active('submenu.help')?->id);
     }
 
     public function test_database_rejects_cross_menu_active_version_pointer(): void

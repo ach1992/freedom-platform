@@ -35,7 +35,7 @@ final readonly class TelegramInlineCopyTextButton
         }
     }
 
-    /** @return array{text:string,copy_text:string,style:?string,icon_custom_emoji_id:?string} */
+    /** @return array{text:string,copy_text:string,style:?string,icon_custom_emoji_id?:string} */
     public function snapshot(): array
     {
         $snapshot = [

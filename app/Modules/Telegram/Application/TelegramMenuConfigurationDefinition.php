@@ -61,7 +61,7 @@ final readonly class TelegramMenuConfigurationDefinition
             throw new InvalidArgumentException('Telegram menu configuration exceeds 32 KiB.');
         }
 
-        $this->items = array_values($items);
+        $this->items = $items;
         $this->json = $json;
         $this->hash = hash('sha256', $json);
     }

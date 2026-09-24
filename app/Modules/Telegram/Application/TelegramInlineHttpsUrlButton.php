@@ -30,7 +30,7 @@ final readonly class TelegramInlineHttpsUrlButton
         }
     }
 
-    /** @return array{text:string,https_url:string,https_url_purpose:string,style:?string,icon_custom_emoji_id:?string} */
+    /** @return array{text:string,https_url:string,https_url_purpose:string,style:?string,icon_custom_emoji_id?:string} */
     public function snapshot(): array
     {
         $snapshot = [

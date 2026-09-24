@@ -30,7 +30,7 @@ final readonly class TelegramInlineCallbackButton
         }
     }
 
-    /** @return array{text:string,callback_public_id:string,style:?string,icon_custom_emoji_id:?string} */
+    /** @return array{text:string,callback_public_id:string,style:?string,icon_custom_emoji_id?:string} */
     public function snapshot(): array
     {
         $snapshot = [

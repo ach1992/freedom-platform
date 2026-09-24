@@ -29,6 +29,7 @@ use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
+use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -38,6 +39,10 @@ use RuntimeException;
 final readonly class TelegramNavigationHandler implements TelegramInteractionHandler
 {
     private const STATE_MY_ACCOUNT = 'my_account';
+
+    private const STATE_REFERRAL = 'referral';
+
+    private const STATE_MENU_SUBMENU = 'menu_submenu';
 
     private const STATE_PURCHASE_CATALOG = 'purchase_catalog';
 
@@ -90,6 +95,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private const STATE_ADMIN_USDT_RATE_SUBMITTING = 'admin_usdt_rate_submitting';
 
     private const ACTION_MY_ACCOUNT = 'navigation.my_account';
+
+    private const ACTION_REFERRAL = 'navigation.referral';
+
+    private const ACTION_MENU_SUBMENU = 'navigation.menu.submenu';
 
     private const ACTION_PURCHASE_CATALOG = 'navigation.purchase';
 
@@ -169,6 +178,9 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private AdministratorAccessManagementQueryService $administratorAccess,
         private AdministratorUserPermissionAuthorizer $administratorUsers,
         private TelegramSupportContactConfiguration $supportContact,
+        private TelegramMenuConfigurationService $menuConfigurations,
+        private TelegramMenuPresentationCapabilities $menuCapabilities,
+        private Clock $clock,
         private DatabaseManager $database,
     ) {}
 
@@ -186,6 +198,17 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 }
                 if ($action->callbackAction === self::ACTION_MY_ACCOUNT) {
                     $this->showMyAccount($action);
+
+                    return;
+                }
+                if ($action->callbackAction === self::ACTION_REFERRAL) {
+                    $this->showReferral($action);
+
+                    return;
+                }
+                if ($action->callbackAction === self::ACTION_MENU_SUBMENU) {
+                    [$menuKey, $title] = $this->submenuTargetFromPayload($action->callbackPayload);
+                    $this->showSubmenu($action, $menuKey, $title);
 
                     return;
                 }
@@ -215,6 +238,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
         if ($action->sessionState === self::STATE_MY_ACCOUNT) {
             $this->handleMyAccount($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_REFERRAL) {
+            $this->handleReferral($action);
+
+            return;
+        }
+
+        if ($action->sessionState === self::STATE_MENU_SUBMENU) {
+            $this->handleSubmenu($action);
 
             return;
         }
@@ -627,6 +662,47 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $this->returnHome($action);
 
             return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handleReferral(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction !== self::ACTION_BACK || $action->callbackPayload !== []) {
+                throw new RuntimeException('Telegram referral callback action is unsupported.');
+            }
+
+            $this->returnHome($action);
+
+            return;
+        }
+
+        if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
+            $this->returnHome($action);
+        }
+    }
+
+    private function handleSubmenu(TelegramInteractionAction $action): void
+    {
+        if ($action->kind === TelegramInteractionActionKind::Callback) {
+            if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
+                $this->returnHome($action);
+
+                return;
+            }
+
+            if ($action->callbackAction === self::ACTION_MENU_SUBMENU) {
+                [$menuKey, $title] = $this->submenuTargetFromPayload($action->callbackPayload);
+                $this->showSubmenu($action, $menuKey, $title);
+
+                return;
+            }
+
+            throw new RuntimeException('Telegram submenu callback action is unsupported.');
         }
 
         if ($action->kind === TelegramInteractionActionKind::Back || $this->isEntryCommand($action->messageText)) {
@@ -1112,6 +1188,24 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.client_guides', $locale),
                 $guides->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
+        if ($this->administratorUsers->allowsUser(
+            $action->userId,
+            TelegramMenuConfigurationMutationExecutor::MANAGE_PERMISSION,
+        )) {
+            $menus = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramMenuConfigurationNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-menus:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.menus', $locale),
+                $menus->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }
@@ -2669,6 +2763,72 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
+    private function showReferral(TelegramInteractionAction $action): void
+    {
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_REFERRAL,
+            [],
+            'nav-referral-transition:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+
+        $customer = $this->customers->forSelf($action->userId, $action->userId);
+        $referral = $this->referrals->forSelf($action->userId, $action->userId);
+        $locale = $customer->locale === 'en' ? 'en' : 'fa';
+
+        $back = $this->callbacks->issue(
+            $session->publicId,
+            $session->version,
+            self::ACTION_BACK,
+            [],
+            'nav-referral-back:'.$action->requestKey,
+        );
+
+        $this->queueConfidential(
+            $action,
+            $this->referralText($referral, $locale),
+            'nav-referral-delivery:'.$action->requestKey,
+            'referral',
+            new TelegramInlineKeyboardSnapshot([[
+                new TelegramInlineCallbackButton(
+                    $this->translation('telegram.navigation.buttons.back', $locale),
+                    $back->publicId,
+                ),
+            ]]),
+        );
+    }
+
+    private function showSubmenu(
+        TelegramInteractionAction $action,
+        string $menuKey,
+        string $title,
+    ): void {
+        $active = $this->menuConfigurations->active($menuKey);
+        if ($active === null) {
+            $this->returnHome($action);
+
+            return;
+        }
+
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_MENU_SUBMENU,
+            ['menu_key' => $menuKey, 'title' => $title],
+            'nav-submenu-transition:'.hash('sha256', $action->requestKey.':'.$menuKey),
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderSubmenu(
+            $action,
+            $session->version,
+            $active,
+            $title,
+            $action->requestKey,
+        );
+    }
+
     private function showMyServices(TelegramInteractionAction $action, int $page): void
     {
         $locale = $this->localeForActor($action->userId);
@@ -3185,6 +3345,22 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     ): void {
         $customer = $this->customers->forSelf($action->userId, $action->userId);
         $locale = $customer->locale === 'en' ? 'en' : 'fa';
+
+        $activeMenu = $this->menuConfigurations->active('home');
+        if ($activeMenu !== null) {
+            $rows = $this->configuredMenuRows(
+                $action,
+                $sessionVersion,
+                $requestKey,
+                $activeMenu,
+                $customer,
+                $locale,
+            );
+            $this->queueHomePresentation($action, $requestKey, $locale, $rows);
+
+            return;
+        }
+
         $account = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
@@ -3308,12 +3484,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 TelegramInlineButtonStyle::Primary,
             )];
         }
-        if ($this->managedUsdtRateSettings->availableFor($action->userId)
-            || $this->administratorCustomerTargets->availableFor($action->userId)
-            || $this->administratorSearchAvailableFor($action->userId)
-            || $this->administratorAccess->availableForUser($action->userId)
-            || $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
-            || $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
+        if ($this->administratorControlAvailable($action->userId)) {
             $admin = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
@@ -3327,27 +3498,432 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 TelegramInlineButtonStyle::Primary,
             )];
         }
-        $keyboard = new TelegramInlineKeyboardSnapshot($rows);
-        $text = $this->translation('telegram.navigation.home', $locale);
-        $source = new readonly class($text) implements NonRestrictedTelegramPresentationSource
-        {
-            public function __construct(private string $text) {}
+        $this->queueHomePresentation($action, $requestKey, $locale, $rows);
+    }
 
-            public function nonRestrictedTelegramText(): string
-            {
-                return $this->text;
+    private function renderSubmenu(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        TelegramMenuConfigurationVersion $menu,
+        string $title,
+        string $requestKey,
+    ): void {
+        $customer = $this->customers->forSelf($action->userId, $action->userId);
+        $locale = $customer->locale === 'en' ? 'en' : 'fa';
+        $rows = $this->configuredMenuRows(
+            $action,
+            $sessionVersion,
+            $requestKey,
+            $menu,
+            $customer,
+            $locale,
+        );
+        $back = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            self::ACTION_BACK,
+            [],
+            'nav-submenu-back:'.hash('sha256', $requestKey.':'.$menu->publicId),
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.buttons.back', $locale),
+            $back->publicId,
+        )];
+
+        $this->queueNonRestricted(
+            $action,
+            $this->translation('telegram.navigation.menu.submenu', $locale, ['title' => $title]),
+            'nav-submenu-delivery:'.hash('sha256', $requestKey.':'.$menu->publicId),
+            'submenu',
+            new TelegramInlineKeyboardSnapshot($rows),
+        );
+    }
+
+    /**
+     * @return list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton>>
+     */
+    private function configuredMenuRows(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $requestKey,
+        TelegramMenuConfigurationVersion $menu,
+        CustomerAccountSummary $customer,
+        string $locale,
+    ): array {
+        $rows = [];
+        $adminEntryRendered = false;
+
+        foreach ($menu->definition->items as $item) {
+            if (! $this->menuItemVisible($item, $customer, $locale, $action->userId)) {
+                continue;
             }
-        };
-        $presentation = $this->presentations->fromSource($source);
 
-        $this->delivery->queue(
-            TelegramDeliveryAction::Send,
-            $action->telegramUserId,
-            null,
-            $presentation,
+            $button = $this->configuredMenuButton(
+                $action,
+                $sessionVersion,
+                $requestKey,
+                $menu,
+                $item,
+                $customer,
+                $locale,
+            );
+            if ($button === null) {
+                continue;
+            }
+
+            $rows[$item->row][$item->order] = $button;
+            if ($item->actionType === TelegramMenuItemDefinition::ACTION_REGISTERED
+                && $item->actionKey === TelegramMenuRegisteredAction::Admin->value) {
+                $adminEntryRendered = true;
+            }
+        }
+
+        if ($menu->menuKey === 'home'
+            && ! $adminEntryRendered
+            && $this->administratorControlAvailable($action->userId)) {
+            $admin = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_ADMIN_CONTROL,
+                [],
+                'nav-menu-admin-fallback:'.hash('sha256', $requestKey.':'.$menu->publicId),
+            );
+            $rows[9][0] = new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.admin', $locale),
+                $admin->publicId,
+                $this->menuCapabilities->style(TelegramInlineButtonStyle::Primary),
+            );
+        }
+
+        ksort($rows, SORT_NUMERIC);
+        $normalized = [];
+        foreach ($rows as $row) {
+            ksort($row, SORT_NUMERIC);
+            $normalized[] = array_values($row);
+        }
+
+        return $normalized;
+    }
+
+    private function configuredMenuButton(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $requestKey,
+        TelegramMenuConfigurationVersion $menu,
+        TelegramMenuItemDefinition $item,
+        CustomerAccountSummary $customer,
+        string $locale,
+    ): TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton|null {
+        $style = $this->menuCapabilities->style($item->style);
+        $premiumEmojiId = $this->menuCapabilities->premiumEmojiId($item);
+        $identity = hash('sha256', $requestKey.':'.$menu->publicId.':'.$item->key);
+
+        if ($item->actionType === TelegramMenuItemDefinition::ACTION_REGISTERED) {
+            if ($item->actionKey === null) {
+                throw new RuntimeException('Telegram menu registered action is unavailable.');
+            }
+
+            $registered = TelegramMenuRegisteredAction::tryFrom($item->actionKey);
+            if ($registered === null) {
+                throw new RuntimeException('Telegram menu registered action is unsupported.');
+            }
+            $label = $this->configuredMenuLabel(
+                $item,
+                $locale,
+                $this->registeredMenuDefaultLabel($registered, $customer, $locale),
+            );
+
+            return $this->registeredMenuButton(
+                $action,
+                $sessionVersion,
+                $identity,
+                $registered,
+                $label,
+                $style,
+                $premiumEmojiId,
+                $customer,
+            );
+        }
+
+        $label = $this->configuredMenuLabel($item, $locale, null);
+        if ($item->actionType === TelegramMenuItemDefinition::ACTION_HTTPS_URL) {
+            if ($item->httpsUrl === null || $item->httpsUrlPurpose === null) {
+                throw new RuntimeException('Telegram menu HTTPS action is unavailable.');
+            }
+
+            return new TelegramInlineHttpsUrlButton(
+                $label,
+                $item->httpsUrl,
+                $item->httpsUrlPurpose,
+                $style,
+                $premiumEmojiId,
+            );
+        }
+
+        if ($item->actionType === TelegramMenuItemDefinition::ACTION_COPY_TEXT) {
+            if ($item->copyText === null) {
+                throw new RuntimeException('Telegram menu copy-text action is unavailable.');
+            }
+
+            return new TelegramInlineCopyTextButton(
+                $label,
+                $item->copyText,
+                $style,
+                $premiumEmojiId,
+            );
+        }
+
+        if ($item->actionType === TelegramMenuItemDefinition::ACTION_SUBMENU) {
+            if ($item->submenuKey === null) {
+                throw new RuntimeException('Telegram menu submenu action is unavailable.');
+            }
+            $callback = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_MENU_SUBMENU,
+                ['menu_key' => $item->submenuKey, 'title' => $label],
+                'nav-menu-submenu:'.$identity,
+            );
+
+            return new TelegramInlineCallbackButton(
+                $label,
+                $callback->publicId,
+                $style,
+                $premiumEmojiId,
+            );
+        }
+
+        throw new RuntimeException('Telegram configured menu action type is unsupported.');
+    }
+
+    private function registeredMenuButton(
+        TelegramInteractionAction $action,
+        int $sessionVersion,
+        string $identity,
+        TelegramMenuRegisteredAction $registered,
+        string $label,
+        ?TelegramInlineButtonStyle $style,
+        ?string $premiumEmojiId,
+        CustomerAccountSummary $customer,
+    ): TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|null {
+        if ($registered === TelegramMenuRegisteredAction::ExternalSupport) {
+            if (! $this->supportContact->mode->showsExternal() || $this->supportContact->externalUrl === null) {
+                return null;
+            }
+
+            return new TelegramInlineHttpsUrlButton(
+                $label,
+                $this->supportContact->externalUrl,
+                TelegramInlineHttpsUrlPurpose::SupportContact,
+                $style,
+                $premiumEmojiId,
+            );
+        }
+
+        $callbackAction = match ($registered->value) {
+            'my_account' => self::ACTION_MY_ACCOUNT,
+            'wallet_transfer' => TelegramWalletTransferNavigationHandler::ACTION_ENTRY,
+            'purchase' => self::ACTION_PURCHASE_CATALOG,
+            'trial' => self::ACTION_TRIAL,
+            'my_services' => self::ACTION_MY_SERVICES,
+            'client_guides' => TelegramClientGuideNavigationHandler::ACTION_ENTRY,
+            'support' => self::ACTION_SUPPORT,
+            'agent' => self::ACTION_AGENT,
+            'admin' => self::ACTION_ADMIN_CONTROL,
+            'referral' => self::ACTION_REFERRAL,
+            default => throw new RuntimeException('Telegram registered menu action routing is invalid.'),
+        };
+
+        $available = $this->registeredMenuActionAvailable(
+            $registered,
+            $customer,
+            $action->userId,
+        );
+        if (! $available) {
+            return null;
+        }
+
+        $callback = $this->callbacks->issue(
+            $action->sessionPublicId,
+            $sessionVersion,
+            $callbackAction,
+            [],
+            'nav-menu-registered:'.$identity,
+        );
+
+        return new TelegramInlineCallbackButton(
+            $label,
+            $callback->publicId,
+            $style,
+            $premiumEmojiId,
+        );
+    }
+
+    private function registeredMenuActionAvailable(
+        TelegramMenuRegisteredAction $registered,
+        CustomerAccountSummary $customer,
+        int $userId,
+    ): bool {
+        if (in_array($registered, [
+            TelegramMenuRegisteredAction::MyAccount,
+            TelegramMenuRegisteredAction::MyServices,
+            TelegramMenuRegisteredAction::ClientGuides,
+            TelegramMenuRegisteredAction::Referral,
+        ], true)) {
+            return true;
+        }
+
+        if ($registered === TelegramMenuRegisteredAction::WalletTransfer) {
+            return $customer->accountType === 'customer'
+                && $customer->accountStatus === 'active'
+                && $this->walletTransfers->availableForSelf($userId, $userId);
+        }
+
+        if (in_array($registered, [
+            TelegramMenuRegisteredAction::Purchase,
+            TelegramMenuRegisteredAction::Trial,
+        ], true)) {
+            return $customer->accountType === 'customer'
+                && $customer->accountStatus === 'active';
+        }
+
+        if ($registered === TelegramMenuRegisteredAction::Support) {
+            return $this->supportContact->mode->showsInternal();
+        }
+
+        if ($registered === TelegramMenuRegisteredAction::Agent) {
+            return ($customer->accountType === 'customer' && $customer->accountStatus === 'active')
+                || ($customer->accountType === 'agent' && $customer->agentStatus !== null);
+        }
+
+        if ($registered === TelegramMenuRegisteredAction::Admin) {
+            return $this->administratorControlAvailable($userId);
+        }
+
+        return false;
+    }
+
+    private function registeredMenuDefaultLabel(
+        TelegramMenuRegisteredAction $registered,
+        CustomerAccountSummary $customer,
+        string $locale,
+    ): string {
+        $translationKey = match ($registered) {
+            TelegramMenuRegisteredAction::MyAccount => 'telegram.navigation.buttons.my_account',
+            TelegramMenuRegisteredAction::WalletTransfer => 'telegram_wallet_transfer.entry',
+            TelegramMenuRegisteredAction::Purchase => 'telegram.navigation.buttons.buy_service',
+            TelegramMenuRegisteredAction::Trial => 'telegram.navigation.buttons.trial_service',
+            TelegramMenuRegisteredAction::MyServices => 'telegram.navigation.buttons.my_services',
+            TelegramMenuRegisteredAction::ClientGuides => 'telegram.navigation.buttons.client_guides',
+            TelegramMenuRegisteredAction::Support => 'telegram.navigation.buttons.support',
+            TelegramMenuRegisteredAction::ExternalSupport => 'telegram.navigation.buttons.external_support',
+            TelegramMenuRegisteredAction::Agent => $customer->accountType === 'agent'
+                ? 'telegram.navigation.buttons.agent_menu'
+                : ($customer->agentApplicationState === null
+                    ? 'telegram.navigation.buttons.request_cooperation'
+                    : 'telegram.navigation.buttons.agent_status'),
+            TelegramMenuRegisteredAction::Admin => 'telegram.navigation.buttons.admin',
+            TelegramMenuRegisteredAction::Referral => 'telegram.navigation.buttons.referral',
+        };
+
+        return $this->translation($translationKey, $locale);
+    }
+
+    private function configuredMenuLabel(
+        TelegramMenuItemDefinition $item,
+        string $locale,
+        ?string $default,
+    ): string {
+        $base = $locale === 'en'
+            ? ($item->labelEn ?? $item->labelFa ?? $default)
+            : ($item->labelFa ?? $default);
+        if ($base === null) {
+            throw new RuntimeException('Telegram configured menu label is unavailable.');
+        }
+
+        return $this->menuCapabilities->label($item, $base);
+    }
+
+    private function menuItemVisible(
+        TelegramMenuItemDefinition $item,
+        CustomerAccountSummary $customer,
+        string $locale,
+        int $userId,
+    ): bool {
+        if (! $item->enabled || ($item->language !== 'any' && $item->language !== $locale)) {
+            return false;
+        }
+
+        $now = $this->clock->now();
+        if (($item->activeFrom !== null && $now < $item->activeFrom)
+            || ($item->activeUntil !== null && $now >= $item->activeUntil)) {
+            return false;
+        }
+
+        return match ($item->audience) {
+            'all' => true,
+            'customers' => $customer->accountType === 'customer',
+            'agents' => $customer->accountType === 'agent',
+            'administrators' => $this->isActiveAdministrator($userId),
+            default => false,
+        };
+    }
+
+    private function administratorControlAvailable(int $userId): bool
+    {
+        return $this->managedUsdtRateSettings->availableFor($userId)
+            || $this->administratorCustomerTargets->availableFor($userId)
+            || $this->administratorSearchAvailableFor($userId)
+            || $this->administratorAccess->availableForUser($userId)
+            || $this->administratorUsers->allowsUser($userId, TelegramBroadcastCampaignService::PERMISSION)
+            || $this->administratorUsers->allowsUser($userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)
+            || $this->administratorUsers->allowsUser($userId, TelegramMenuConfigurationMutationExecutor::MANAGE_PERMISSION);
+    }
+
+    private function isActiveAdministrator(int $userId): bool
+    {
+        return $this->database->connection()
+            ->table('administrators')
+            ->where('user_id', $userId)
+            ->where('status', 'active')
+            ->exists();
+    }
+
+    /** @param array<string,mixed> $payload
+     * @return array{string,string}
+     */
+    private function submenuTargetFromPayload(array $payload): array
+    {
+        if (array_keys($payload) !== ['menu_key', 'title']
+            || ! is_string($payload['menu_key'] ?? null)
+            || ! is_string($payload['title'] ?? null)) {
+            throw new RuntimeException('Telegram submenu target payload is invalid.');
+        }
+
+        TelegramMenuItemDefinition::assertMenuKey($payload['menu_key']);
+        $title = $payload['title'];
+        if (trim($title) === '' || mb_strlen($title) > 72 || ! mb_check_encoding($title, 'UTF-8')) {
+            throw new RuntimeException('Telegram submenu title is invalid.');
+        }
+
+        return [$payload['menu_key'], $title];
+    }
+
+    /**
+     * @param  list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton>>  $rows
+     */
+    private function queueHomePresentation(
+        TelegramInteractionAction $action,
+        string $requestKey,
+        string $locale,
+        array $rows,
+    ): void {
+        $this->queueNonRestricted(
+            $action,
+            $this->translation('telegram.navigation.home', $locale),
             'nav-home-delivery:'.$requestKey,
-            $this->correlationId($action, 'home'),
-            $keyboard,
+            'home',
+            new TelegramInlineKeyboardSnapshot($rows),
         );
     }
 
@@ -3697,6 +4273,17 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         ]);
     }
 
+    private function referralText(ReferralSelfSummary $referral, string $locale): string
+    {
+        return $this->translation('telegram.navigation.referral.view', $locale, [
+            'referral_token' => $referral->referralToken,
+            'referral_link' => $this->referralLinks->forReferralToken($referral->referralToken)
+                ?? $this->translation('telegram.navigation.account.referral_link_unavailable', $locale),
+            'has_inviter' => $this->yesNo($referral->hasInviter, $locale),
+            'referral_locked' => $this->yesNo($referral->locked, $locale),
+        ]);
+    }
+
     private function serviceListText(TelegramOwnedServicePage $services, string $locale): string
     {
         if ($services->items === []) {
@@ -3758,6 +4345,35 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'expires_at' => $service->expiresAt ?? $notAvailable,
             'observed_at' => $service->observedAt ?? $notAvailable,
         ]);
+    }
+
+    private function queueNonRestricted(
+        TelegramInteractionAction $action,
+        string $text,
+        string $requestKey,
+        string $surface,
+        TelegramInlineKeyboardSnapshot $keyboard,
+    ): void {
+        $source = new readonly class($text) implements NonRestrictedTelegramPresentationSource
+        {
+            public function __construct(private string $text) {}
+
+            public function nonRestrictedTelegramText(): string
+            {
+                return $this->text;
+            }
+        };
+        $presentation = $this->presentations->fromSource($source);
+
+        $this->delivery->queue(
+            TelegramDeliveryAction::Send,
+            $action->telegramUserId,
+            null,
+            $presentation,
+            $requestKey,
+            $this->correlationId($action, $surface),
+            $keyboard,
+        );
     }
 
     private function queueConfidential(

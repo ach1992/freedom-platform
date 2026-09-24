@@ -8,10 +8,13 @@ use App\Modules\Telegram\Application\TelegramInlineButtonStyle;
 use App\Modules\Telegram\Application\TelegramInlineCopyTextButton;
 use App\Modules\Telegram\Application\TelegramInlineHttpsUrlPurpose;
 use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
+use App\Modules\Telegram\Application\TelegramMenuConfigurationAuthoringParser;
 use App\Modules\Telegram\Application\TelegramMenuConfigurationDefinition;
 use App\Modules\Telegram\Application\TelegramMenuItemDefinition;
+use App\Modules\Telegram\Application\TelegramMenuPresentationCapabilities;
 use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use DateTimeImmutable;
+use Illuminate\Config\Repository;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
@@ -126,6 +129,104 @@ final class TelegramMenuConfigurationDomainTest extends TestCase
                 self::assertTrue(true);
             }
         }
+    }
+
+    public function test_authoring_parser_accepts_safe_defaults_and_rejects_unknown_or_arbitrary_actions(): void
+    {
+        $parser = new TelegramMenuConfigurationAuthoringParser;
+        $draft = $parser->parse(json_encode([
+            'menu_key' => 'home',
+            'reason' => 'Reorder essential navigation.',
+            'items' => [[
+                'key' => 'my_account',
+                'kind' => 'system',
+                'action_type' => 'registered',
+                'action_key' => 'my_account',
+                'row' => 0,
+                'order' => 0,
+            ], [
+                'key' => 'my_services',
+                'kind' => 'system',
+                'action_type' => 'registered',
+                'action_key' => 'my_services',
+                'row' => 1,
+                'order' => 0,
+            ]],
+        ], JSON_THROW_ON_ERROR));
+
+        self::assertSame('home', $draft->menuKey);
+        self::assertSame('Reorder essential navigation.', $draft->reason);
+        self::assertSame(['my_account', 'my_services'], array_map(
+            static fn (TelegramMenuItemDefinition $item): string => $item->key,
+            $draft->definition->items,
+        ));
+
+        foreach ([
+            [
+                'menu_key' => 'home',
+                'reason' => 'Unknown top-level field.',
+                'items' => [],
+                'unexpected' => true,
+            ],
+            [
+                'menu_key' => 'home',
+                'reason' => 'Arbitrary action.',
+                'items' => [[
+                    'key' => 'unsafe',
+                    'kind' => 'custom',
+                    'action_type' => 'registered',
+                    'action_key' => 'arbitrary.callback',
+                    'label_fa' => 'نامعتبر',
+                    'row' => 0,
+                    'order' => 0,
+                ]],
+            ],
+        ] as $payload) {
+            try {
+                $parser->parse(json_encode($payload, JSON_THROW_ON_ERROR));
+                self::fail('Unsafe authoring payload must fail closed.');
+            } catch (InvalidArgumentException) {
+                self::assertTrue(true);
+            }
+        }
+    }
+
+    public function test_presentation_capabilities_degrade_to_normal_emoji_and_plain_style(): void
+    {
+        $item = new TelegramMenuItemDefinition(
+            key: 'copy_support',
+            kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+            actionType: TelegramMenuItemDefinition::ACTION_COPY_TEXT,
+            actionKey: null,
+            labelFa: 'پشتیبانی',
+            labelEn: 'Support',
+            normalEmoji: '📋',
+            premiumEmojiId: '5368324170671202286',
+            style: TelegramInlineButtonStyle::Success,
+            row: 0,
+            order: 0,
+            copyText: 'SUPPORT',
+        );
+
+        $fallback = new TelegramMenuPresentationCapabilities(new Repository([
+            'telegram' => [
+                'inline_button_style_supported' => false,
+                'inline_button_premium_emoji_supported' => false,
+            ],
+        ]));
+        self::assertNull($fallback->style($item->style));
+        self::assertNull($fallback->premiumEmojiId($item));
+        self::assertSame('📋 Support', $fallback->label($item, 'Support'));
+
+        $capable = new TelegramMenuPresentationCapabilities(new Repository([
+            'telegram' => [
+                'inline_button_style_supported' => true,
+                'inline_button_premium_emoji_supported' => true,
+            ],
+        ]));
+        self::assertSame(TelegramInlineButtonStyle::Success, $capable->style($item->style));
+        self::assertSame('5368324170671202286', $capable->premiumEmojiId($item));
+        self::assertSame('Support', $capable->label($item, 'Support'));
     }
 
     public function test_active_range_must_be_forward_only(): void

@@ -34,6 +34,7 @@ use App\Modules\Telegram\Application\TelegramAgentBulkPurchasePage;
 use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseResult;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
+use App\Modules\Telegram\Application\TelegramConfigurationChangeContext;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardReservation;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
@@ -60,6 +61,7 @@ use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDat
 use App\Modules\Telegram\Application\TelegramDeliveryInteractivePresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
+use App\Modules\Telegram\Application\TelegramInlineButtonStyle;
 use App\Modules\Telegram\Application\TelegramInlineHttpsUrlButton;
 use App\Modules\Telegram\Application\TelegramInlineHttpsUrlPurpose;
 use App\Modules\Telegram\Application\TelegramInlineKeyboardSnapshot;
@@ -72,6 +74,9 @@ use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramMenuConfigurationDefinition;
+use App\Modules\Telegram\Application\TelegramMenuConfigurationService;
+use App\Modules\Telegram\Application\TelegramMenuItemDefinition;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
@@ -1465,6 +1470,310 @@ final class TelegramNavigationEntryTest extends TestCase
             'state' => 'processed',
             'attempt_count' => 1,
         ]);
+    }
+
+    /** @requirement CNT-002 CNT-003 ACL-002 SEC-002 LOC-001 QUA-001 QUA-004 */
+    public function test_published_home_menu_controls_order_copy_and_capability_fallback_without_admin_lockout(): void
+    {
+        config([
+            'telegram.inline_button_style_supported' => false,
+            'telegram.inline_button_premium_emoji_supported' => false,
+        ]);
+
+        $telegramUserId = 9609;
+        $this->accept($this->payload(6109, $telegramUserId, 'configured_menu', 'fa', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 6109);
+
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $administratorId = $this->salesContentAdministratorForUser((int) $account->user_id);
+
+        $menus = $this->app->make(TelegramMenuConfigurationService::class);
+        $version = $menus->createVersion(
+            'home',
+            new TelegramMenuConfigurationDefinition([
+                new TelegramMenuItemDefinition(
+                    key: 'my_services',
+                    kind: TelegramMenuItemDefinition::KIND_SYSTEM,
+                    actionType: TelegramMenuItemDefinition::ACTION_REGISTERED,
+                    actionKey: 'my_services',
+                    labelFa: 'سرویس‌های سفارشی',
+                    labelEn: 'Configured Services',
+                    normalEmoji: '🧰',
+                    premiumEmojiId: '5368324170671202286',
+                    style: TelegramInlineButtonStyle::Danger,
+                    row: 0,
+                    order: 0,
+                ),
+                new TelegramMenuItemDefinition(
+                    key: 'my_account',
+                    kind: TelegramMenuItemDefinition::KIND_SYSTEM,
+                    actionType: TelegramMenuItemDefinition::ACTION_REGISTERED,
+                    actionKey: 'my_account',
+                    labelFa: 'حساب سفارشی',
+                    labelEn: 'Configured Account',
+                    normalEmoji: null,
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Success,
+                    row: 1,
+                    order: 0,
+                ),
+                new TelegramMenuItemDefinition(
+                    key: 'copy_support',
+                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+                    actionType: TelegramMenuItemDefinition::ACTION_COPY_TEXT,
+                    actionKey: null,
+                    labelFa: 'کد پشتیبانی',
+                    labelEn: 'Support code',
+                    normalEmoji: '📋',
+                    premiumEmojiId: '5368324170671202286',
+                    style: TelegramInlineButtonStyle::Success,
+                    row: 2,
+                    order: 0,
+                    copyText: 'SUPPORT-42',
+                ),
+            ]),
+            new TelegramConfigurationChangeContext(
+                'configured-menu-create-6109',
+                'configured-menu-6109',
+                'telegram_menu_configuration',
+                'Verify configured Telegram home runtime.',
+                $administratorId,
+            ),
+        );
+        $menus->publish(
+            $version->publicId,
+            0,
+            new TelegramConfigurationChangeContext(
+                'configured-menu-publish-6109',
+                'configured-menu-6109-publish',
+                'telegram_menu_configuration',
+                'Publish configured Telegram home runtime.',
+                $administratorId,
+            ),
+        );
+
+        $this->accept($this->payload(6119, $telegramUserId, 'configured_menu', 'fa', '/menu'));
+        $processor->process('123456789', 6119);
+
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $telegramUserId)
+            ->orderByDesc('id')
+            ->first(['public_id']);
+        self::assertNotNull($operation);
+        $snapshot = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $operation->public_id)
+            ->value('keyboard_snapshot');
+        self::assertIsString($snapshot);
+
+        $keyboard = json_decode($snapshot, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('🧰 سرویس‌های سفارشی', $keyboard['rows'][0][0]['text']);
+        self::assertSame('حساب سفارشی', $keyboard['rows'][1][0]['text']);
+        self::assertSame('📋 کد پشتیبانی', $keyboard['rows'][2][0]['text']);
+        self::assertSame('SUPPORT-42', $keyboard['rows'][2][0]['copy_text']);
+        self::assertSame(trans('telegram.navigation.buttons.admin', locale: 'fa'), $keyboard['rows'][3][0]['text']);
+
+        foreach ($keyboard['rows'] as $row) {
+            foreach ($row as $button) {
+                self::assertArrayNotHasKey('icon_custom_emoji_id', $button);
+                self::assertArrayHasKey('style', $button);
+                self::assertNull($button['style']);
+            }
+        }
+
+        self::assertSame(
+            'navigation.my_services',
+            DB::table('telegram_interaction_callbacks')
+                ->where('public_id', $keyboard['rows'][0][0]['callback_public_id'])
+                ->value('action'),
+        );
+        self::assertSame(
+            'navigation.my_account',
+            DB::table('telegram_interaction_callbacks')
+                ->where('public_id', $keyboard['rows'][1][0]['callback_public_id'])
+                ->value('action'),
+        );
+        self::assertSame(
+            'navigation.admin',
+            DB::table('telegram_interaction_callbacks')
+                ->where('public_id', $keyboard['rows'][3][0]['callback_public_id'])
+                ->value('action'),
+        );
+    }
+
+    /** @requirement CNT-002 CNT-003 ACL-002 SEC-002 DAT-003 QUA-001 QUA-004 */
+    public function test_admin_menu_configuration_create_preview_publish_and_rollback_use_canonical_version_authority(): void
+    {
+        $telegramUserId = 9613;
+        $username = 'menu_admin';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(6131, $telegramUserId, $username, 'en', '/start'));
+        $processor->process('123456789', 6131);
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $this->salesContentAdministratorForUser((int) $account->user_id);
+
+        $this->accept($this->payload(6132, $telegramUserId, $username, 'en', '/menu'));
+        $processor->process('123456789', 6132);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(6133, $telegramUserId, $username, 'en', $adminToken));
+        $processor->process('123456789', 6133);
+
+        $menusToken = $this->callbackToken('navigation.admin.menus', (int) $account->id);
+        $this->accept($this->callbackPayload(6134, $telegramUserId, $username, 'en', $menusToken));
+        $this->processTelegramUpdateOrFail($processor, 6134);
+        self::assertSame('admin_menu_configuration', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+
+        $definition = static function (string $accountLabel, string $servicesLabel): string {
+            return json_encode([
+                'menu_key' => 'home',
+                'reason' => 'Administrator-reviewed menu version.',
+                'items' => [[
+                    'key' => 'my_account',
+                    'kind' => 'system',
+                    'action_type' => 'registered',
+                    'action_key' => 'my_account',
+                    'label_en' => $accountLabel,
+                    'style' => 'primary',
+                    'row' => 0,
+                    'order' => 0,
+                ], [
+                    'key' => 'my_services',
+                    'kind' => 'system',
+                    'action_type' => 'registered',
+                    'action_key' => 'my_services',
+                    'label_en' => $servicesLabel,
+                    'style' => 'primary',
+                    'row' => 1,
+                    'order' => 0,
+                ]],
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        };
+
+        $createToken = $this->callbackToken('navigation.admin.menus.create', (int) $account->id);
+        $this->accept($this->callbackPayload(6135, $telegramUserId, $username, 'en', $createToken));
+        $processor->process('123456789', 6135);
+        self::assertSame('admin_menu_configuration_edit', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+
+        $this->accept($this->payload(6136, $telegramUserId, $username, 'en', $definition('Account V1', 'Services V1')));
+        $processor->process('123456789', 6136);
+        $v1 = DB::table('telegram_menu_configuration_versions')
+            ->where('menu_key', 'home')
+            ->where('version', 1)
+            ->first(['public_id', 'definition_json']);
+        self::assertNotNull($v1);
+        self::assertSame('admin_menu_configuration_preview', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+        $previewPayload = (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('payload');
+        self::assertStringNotContainsString('Account V1', $previewPayload);
+        self::assertStringNotContainsString('Services V1', $previewPayload);
+        self::assertNull(DB::table('telegram_menu_configuration_heads')
+            ->where('menu_key', 'home')
+            ->value('active_version_id'));
+        self::assertSame(1, DB::table('audit_logs')
+            ->where('action', 'telegram.menu.version.create')
+            ->count());
+
+        $noopToken = $this->callbackToken('navigation.admin.menus.preview.noop', (int) $account->id);
+        $this->accept($this->callbackPayload(6137, $telegramUserId, $username, 'en', $noopToken));
+        $processor->process('123456789', 6137);
+        self::assertNull(DB::table('telegram_menu_configuration_heads')
+            ->where('menu_key', 'home')
+            ->value('active_version_id'));
+        self::assertSame(0, DB::table('audit_logs')
+            ->where('action', 'telegram.menu.publish')
+            ->count());
+
+        $publishToken = $this->callbackToken('navigation.admin.menus.publish', (int) $account->id);
+        $this->accept($this->callbackPayload(6138, $telegramUserId, $username, 'en', $publishToken));
+        $processor->process('123456789', 6138);
+        self::assertSame((string) $v1->public_id, (string) DB::table('telegram_menu_configuration_versions')
+            ->join(
+                'telegram_menu_configuration_heads',
+                'telegram_menu_configuration_heads.active_version_id',
+                '=',
+                'telegram_menu_configuration_versions.id',
+            )
+            ->where('telegram_menu_configuration_heads.menu_key', 'home')
+            ->value('telegram_menu_configuration_versions.public_id'));
+        self::assertSame(1, (int) DB::table('telegram_menu_configuration_heads')
+            ->where('menu_key', 'home')
+            ->value('generation'));
+        self::assertSame(1, DB::table('audit_logs')
+            ->where('action', 'telegram.menu.publish')
+            ->count());
+
+        $createV2Token = $this->callbackToken('navigation.admin.menus.create', (int) $account->id);
+        $this->accept($this->callbackPayload(6139, $telegramUserId, $username, 'en', $createV2Token));
+        $processor->process('123456789', 6139);
+        $this->accept($this->payload(6140, $telegramUserId, $username, 'en', $definition('Account V2', 'Services V2')));
+        $processor->process('123456789', 6140);
+        $v2 = DB::table('telegram_menu_configuration_versions')
+            ->where('menu_key', 'home')
+            ->where('version', 2)
+            ->first(['public_id']);
+        self::assertNotNull($v2);
+
+        $publishV2Token = $this->callbackToken('navigation.admin.menus.publish', (int) $account->id);
+        $this->accept($this->callbackPayload(6141, $telegramUserId, $username, 'en', $publishV2Token));
+        $processor->process('123456789', 6141);
+        self::assertSame((string) $v2->public_id, (string) DB::table('telegram_menu_configuration_versions')
+            ->join(
+                'telegram_menu_configuration_heads',
+                'telegram_menu_configuration_heads.active_version_id',
+                '=',
+                'telegram_menu_configuration_versions.id',
+            )
+            ->where('telegram_menu_configuration_heads.menu_key', 'home')
+            ->value('telegram_menu_configuration_versions.public_id'));
+        self::assertSame(2, (int) DB::table('telegram_menu_configuration_heads')
+            ->where('menu_key', 'home')
+            ->value('generation'));
+
+        $previewV1Payload = json_encode(
+            ['version_public_id' => (string) $v1->public_id],
+            JSON_THROW_ON_ERROR,
+        );
+        $previewV1Token = $this->callbackToken(
+            'navigation.admin.menus.preview',
+            (int) $account->id,
+            $previewV1Payload,
+        );
+        $this->accept($this->callbackPayload(6142, $telegramUserId, $username, 'en', $previewV1Token));
+        $processor->process('123456789', 6142);
+
+        $rollbackToken = $this->callbackToken('navigation.admin.menus.rollback', (int) $account->id);
+        $this->accept($this->callbackPayload(6143, $telegramUserId, $username, 'en', $rollbackToken));
+        $processor->process('123456789', 6143);
+
+        self::assertSame((string) $v1->public_id, (string) DB::table('telegram_menu_configuration_versions')
+            ->join(
+                'telegram_menu_configuration_heads',
+                'telegram_menu_configuration_heads.active_version_id',
+                '=',
+                'telegram_menu_configuration_versions.id',
+            )
+            ->where('telegram_menu_configuration_heads.menu_key', 'home')
+            ->value('telegram_menu_configuration_versions.public_id'));
+        self::assertSame(3, (int) DB::table('telegram_menu_configuration_heads')
+            ->where('menu_key', 'home')
+            ->value('generation'));
+        self::assertSame(1, DB::table('audit_logs')
+            ->where('action', 'telegram.menu.rollback')
+            ->count());
     }
 
     /** @requirement SUP-002 CNT-001 CNT-002 SEC-002 QUA-001 QUA-004 */

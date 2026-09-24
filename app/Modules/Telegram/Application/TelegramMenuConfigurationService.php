@@ -199,6 +199,25 @@ final readonly class TelegramMenuConfigurationService
         return $this->versionById((int) $id);
     }
 
+    /** @return list<string> */
+    public function menuKeys(): array
+    {
+        /** @var list<string> $keys */
+        $keys = $this->database->connection()
+            ->table('telegram_menu_configuration_heads')
+            ->orderBy('menu_key')
+            ->pluck('menu_key')
+            ->filter(static fn (mixed $key): bool => is_string($key))
+            ->values()
+            ->all();
+
+        foreach ($keys as $key) {
+            TelegramMenuItemDefinition::assertMenuKey($key);
+        }
+
+        return $keys;
+    }
+
     /** @return list<TelegramMenuConfigurationVersion> */
     public function history(string $menuKey): array
     {
@@ -210,10 +229,10 @@ final readonly class TelegramMenuConfigurationService
             ->get(['id'])
             ->all();
 
-        return array_map(
+        return array_values(array_map(
             fn (object $row): TelegramMenuConfigurationVersion => $this->versionById((int) $row->id),
             $rows,
-        );
+        ));
     }
 
     /** @return array{id:int,menu_key:string,active_version_id:?int,generation:int,next_version:int}|null */
@@ -246,6 +265,7 @@ final readonly class TelegramMenuConfigurationService
         if ((int) $head->generation !== $expectedGeneration) {
             throw new RuntimeException('Telegram menu publication generation conflict.');
         }
+        $this->assertReferencedSubmenusAvailable($connection, $version);
 
         $before = [
             'active_version_id' => $head->active_version_id === null ? null : (int) $head->active_version_id,
@@ -301,6 +321,10 @@ final readonly class TelegramMenuConfigurationService
     ): void {
         $enabledSystem = [];
         foreach ($definition->items as $item) {
+            if ($item->row > 8) {
+                throw new RuntimeException('Telegram menu row 9 is reserved for canonical navigation controls.');
+            }
+
             if ($item->kind === TelegramMenuItemDefinition::KIND_SYSTEM) {
                 if ($menuKey !== 'home'
                     || $item->actionType !== TelegramMenuItemDefinition::ACTION_REGISTERED
@@ -309,9 +333,12 @@ final readonly class TelegramMenuConfigurationService
                     throw new RuntimeException('Telegram system menu item cannot be rebound.');
                 }
                 if ($item->enabled) {
-                    $enabledSystem[$item->key] = true;
+                    $enabledSystem[$item->key] = $item;
                 }
+            } elseif ($menuKey !== 'home' && $item->actionType === TelegramMenuItemDefinition::ACTION_REGISTERED) {
+                throw new RuntimeException('Registered Telegram actions are supported only from the home menu.');
             }
+
             if ($item->actionType === TelegramMenuItemDefinition::ACTION_SUBMENU
                 && $item->submenuKey === $menuKey) {
                 throw new RuntimeException('Telegram menu cannot open itself as a submenu.');
@@ -323,9 +350,32 @@ final readonly class TelegramMenuConfigurationService
                 TelegramMenuRegisteredAction::MyAccount->value,
                 TelegramMenuRegisteredAction::MyServices->value,
             ] as $essential) {
-                if (! isset($enabledSystem[$essential])) {
-                    throw new RuntimeException('Telegram home menu must keep essential navigation enabled.');
+                $item = $enabledSystem[$essential] ?? null;
+                if (! $item instanceof TelegramMenuItemDefinition
+                    || $item->language !== 'any'
+                    || $item->audience !== 'all'
+                    || $item->activeFrom !== null
+                    || $item->activeUntil !== null) {
+                    throw new RuntimeException('Telegram home menu must keep essential navigation universally enabled.');
                 }
+            }
+        }
+    }
+
+    private function assertReferencedSubmenusAvailable(
+        Connection $connection,
+        TelegramMenuConfigurationVersion $version,
+    ): void {
+        foreach ($version->definition->items as $item) {
+            if ($item->actionType !== TelegramMenuItemDefinition::ACTION_SUBMENU || $item->submenuKey === null) {
+                continue;
+            }
+
+            $activeVersionId = $connection->table('telegram_menu_configuration_heads')
+                ->where('menu_key', $item->submenuKey)
+                ->value('active_version_id');
+            if (! is_int($activeVersionId) && ! is_string($activeVersionId)) {
+                throw new RuntimeException('Telegram menu references an unpublished submenu.');
             }
         }
     }
@@ -388,10 +438,13 @@ final readonly class TelegramMenuConfigurationService
     /** @return object{id:int|string,menu_key:string,active_version_id:int|string|null,generation:int|string,next_version:int|string}|null */
     private function head(string $menuKey): ?object
     {
-        return $this->database->connection()
+        /** @var object{id:int|string,menu_key:string,active_version_id:int|string|null,generation:int|string,next_version:int|string}|null $head */
+        $head = $this->database->connection()
             ->table('telegram_menu_configuration_heads')
             ->where('menu_key', $menuKey)
             ->first(['id', 'menu_key', 'active_version_id', 'generation', 'next_version']);
+
+        return $head;
     }
 
     private function ensureHead(Connection $connection, string $menuKey): void
@@ -411,6 +464,7 @@ final readonly class TelegramMenuConfigurationService
     /** @return object{id:int|string,menu_key:string,active_version_id:int|string|null,generation:int|string,next_version:int|string} */
     private function lockedHead(Connection $connection, string $menuKey): object
     {
+        /** @var object{id:int|string,menu_key:string,active_version_id:int|string|null,generation:int|string,next_version:int|string}|null $head */
         $head = $connection->table('telegram_menu_configuration_heads')
             ->where('menu_key', $menuKey)
             ->lockForUpdate()
