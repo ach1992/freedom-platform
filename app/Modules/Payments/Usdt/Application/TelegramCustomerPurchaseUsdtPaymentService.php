@@ -28,6 +28,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
         private UsdtAmountQuoteService $amountQuotes,
         private UsdtPaymentAuthorityService $authorities,
         private UsdtTxidSubmissionService $submissions,
+        private UsdtBlockchainVerificationService $verification,
         private Clock $clock,
     ) {}
 
@@ -196,6 +197,7 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 [
                     PaymentIntentState::AwaitingUserAction->value,
                     PaymentIntentState::Submitted->value,
+                    PaymentIntentState::PendingManualReview->value,
                 ],
             );
 
@@ -210,8 +212,19 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             );
             if (! hash_equals($submission->authorityPublicId, strtoupper($authorityPublicId))
                 || ! hash_equals($submission->paymentIntentPublicId, (string) $stored->intent_public_id)
-                || $submission->state !== PaymentIntentState::Submitted->value) {
+                || ! in_array($submission->state, [
+                    PaymentIntentState::Submitted->value,
+                    PaymentIntentState::PendingManualReview->value,
+                ], true)) {
                 throw new RuntimeException('Telegram USDT TXID submission does not match current checkout authority.');
+            }
+
+            $review = $this->verification->routeManualReview(
+                $submission->publicId,
+                $this->correlationId('manual-review', $operationKey),
+            );
+            if ($review->reviewPublicId === null || $review->state !== PaymentIntentState::PendingManualReview->value) {
+                throw new RuntimeException('Telegram USDT submission did not enter the canonical manual-review queue.');
             }
 
             $intent = $connection->table('payment_intents')
@@ -219,10 +232,10 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 ->lockForUpdate()
                 ->first(['state', 'captured_at']);
             if ($intent === null
-                || $intent->state !== PaymentIntentState::Submitted->value
+                || $intent->state !== PaymentIntentState::PendingManualReview->value
                 || $intent->captured_at !== null
                 || $connection->table('purchase_settlements')->where('payment_intent_id', $stored->intent_id)->exists()) {
-                throw new RuntimeException('Telegram USDT submission unexpectedly produced settlement authority.');
+                throw new RuntimeException('Telegram USDT manual-review queue unexpectedly produced settlement authority.');
             }
 
             return new TelegramCustomerPurchaseUsdtSubmission(
@@ -230,8 +243,8 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 $submission->authorityPublicId,
                 $submission->paymentIntentPublicId,
                 $submission->txid,
-                $submission->state,
-                $submission->replayed,
+                $review->state,
+                $submission->replayed || $review->replayed,
             );
         }, 3);
     }
