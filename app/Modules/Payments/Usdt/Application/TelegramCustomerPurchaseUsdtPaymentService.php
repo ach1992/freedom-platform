@@ -158,6 +158,8 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
         string $authorityPublicId,
         string $txid,
         string $operationKey,
+        ?string $privateEvidenceReference = null,
+        ?string $evidenceContentHash = null,
     ): TelegramCustomerPurchaseUsdtSubmission {
         $this->assertSelf($actorUserId, $subjectUserId);
         $this->assertOperationKey($operationKey);
@@ -176,6 +178,8 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
             $authorityPublicId,
             $txid,
             $operationKey,
+            $privateEvidenceReference,
+            $evidenceContentHash,
         ): TelegramCustomerPurchaseUsdtSubmission {
             $this->authorizeCheckout(
                 $actorUserId,
@@ -206,8 +210,8 @@ final readonly class TelegramCustomerPurchaseUsdtPaymentService implements Teleg
                 strtoupper($authorityPublicId),
                 $subjectUserId,
                 $txid,
-                null,
-                null,
+                $privateEvidenceReference,
+                $evidenceContentHash,
                 $this->correlationId('txid', $operationKey),
             );
             if (! hash_equals($submission->authorityPublicId, strtoupper($authorityPublicId))

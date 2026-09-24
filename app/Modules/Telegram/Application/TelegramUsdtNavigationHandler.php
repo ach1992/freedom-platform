@@ -574,7 +574,7 @@ final readonly class TelegramUsdtNavigationHandler
             || ! $this->isUlid($payload['payment_intent_public_id'] ?? null)
             || ! is_string($payload['masked_txid'] ?? null)
             || preg_match('/\A0x[a-f0-9]{8}…[a-f0-9]{8}\z/u', $payload['masked_txid']) !== 1
-            || ($payload['state'] ?? null) !== 'submitted') {
+            || ! in_array($payload['state'] ?? null, ['submitted', 'pending_manual_review'], true)) {
             throw new RuntimeException('Telegram submitted USDT state is invalid.');
         }
 

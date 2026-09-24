@@ -209,7 +209,7 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                 );
             }
 
-            $state = $processed?->state ?? $submission->state;
+            $state = $processed->state ?? $submission->state;
             $reviewPublicId = $processed?->reviewPublicId;
             if (! in_array($state, ['submitted', 'pending_manual_review'], true)
                 || ($state === 'pending_manual_review' && $reviewPublicId === null)
@@ -230,7 +230,7 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                 $submission->claimedFaceValue,
                 $submission->claimedCurrency,
                 $state,
-                $submission->replayed || ($processed?->replayed ?? false),
+                $submission->replayed || ($processed->replayed ?? false),
             );
         }, 3);
     }

@@ -2,13 +2,11 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Payments\Application;
+namespace App\Modules\Telegram\Application;
 
-final readonly class AlternativePaymentReviewCase
+final readonly class TelegramAlternativePaymentReviewCase
 {
-    /**
-     * @param list<string> $candidateReservationPublicIds
-     */
+    /** @param list<string> $candidateReservationPublicIds */
     public function __construct(
         public string $kind,
         public string $reviewPublicId,

@@ -57,12 +57,12 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         $this->configureGiftCardMethod();
     }
 
-    public function test_customer_projection_exposes_only_active_manual_code_capable_types_and_denies_cross_actor_access(): void
+    public function test_customer_projection_exposes_active_configured_evidence_modes_and_denies_cross_actor_access(): void
     {
         $manualCode = $this->registerType('tg-manual-code', 'code_only', 'manual_only');
         $manualEither = $this->registerType('tg-manual-either', 'either', 'manual_only');
-        $this->registerType('tg-auto-code', 'code_only', 'automatic_only');
-        $this->registerType('tg-manual-image', 'image_only', 'manual_only');
+        $autoCode = $this->registerType('tg-auto-code', 'code_only', 'automatic_only');
+        $manualImage = $this->registerType('tg-manual-image', 'image_only', 'manual_only');
         $inactive = $this->registerType('tg-manual-inactive', 'code_only', 'manual_only');
         $this->app->make(GiftCardTypeService::class)->setActive($inactive->typeCode, false);
         $purchase = $this->purchase('projection');
@@ -77,14 +77,31 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
             $purchase['decision_configuration_hash'],
         );
 
-        self::assertSame([$manualCode->typeCode, $manualEither->typeCode], array_map(
+        self::assertSame([
+            $autoCode->typeCode,
+            $manualCode->typeCode,
+            $manualEither->typeCode,
+            $manualImage->typeCode,
+        ], array_map(
             static fn ($type): string => $type->typeCode,
             $types,
         ));
-        self::assertSame($manualCode->configurationHash, $types[0]->configurationHash);
-        self::assertSame('IRR', $types[0]->faceCurrency);
-        self::assertSame('Steam', $types[0]->brand);
-        self::assertSame('GLOBAL', $types[0]->region);
+        self::assertSame($manualCode->configurationHash, $types[1]->configurationHash);
+        self::assertSame('IRR', $types[1]->faceCurrency);
+        self::assertSame('Steam', $types[1]->brand);
+        self::assertSame('GLOBAL', $types[1]->region);
+        self::assertSame([
+            'tg-auto-code' => ['code_only', 'automatic_only'],
+            'tg-manual-code' => ['code_only', 'manual_only'],
+            'tg-manual-either' => ['either', 'manual_only'],
+            'tg-manual-image' => ['image_only', 'manual_only'],
+        ], array_column(array_map(
+            static fn ($type): array => [
+                $type->typeCode,
+                [$type->submissionMode, $type->verificationMode],
+            ],
+            $types,
+        ), 1, 0));
 
         $this->expectException(AuthorizationException::class);
         $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class)->availableTypesForSelf(

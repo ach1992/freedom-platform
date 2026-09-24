@@ -31,5 +31,7 @@ interface TelegramCustomerPurchaseUsdtPayment
         string $authorityPublicId,
         string $txid,
         string $operationKey,
+        ?string $privateEvidenceReference = null,
+        ?string $evidenceContentHash = null,
     ): TelegramCustomerPurchaseUsdtSubmission;
 }

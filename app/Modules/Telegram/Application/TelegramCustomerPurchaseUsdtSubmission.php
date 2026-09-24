@@ -21,7 +21,7 @@ final readonly class TelegramCustomerPurchaseUsdtSubmission
                 throw new InvalidArgumentException('Telegram USDT submission identity is invalid.');
             }
         }
-        if (preg_match('/\A0x[a-f0-9]{64}\z/', $txid) !== 1 || $state !== 'submitted') {
+        if (preg_match('/\A0x[a-f0-9]{64}\z/', $txid) !== 1 || ! in_array($state, ['submitted', 'pending_manual_review'], true)) {
             throw new InvalidArgumentException('Telegram USDT submission state is invalid.');
         }
     }

@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Localization\Application\LocalizationResolver;
-use App\Modules\Payments\Application\AlternativePaymentReviewCase;
-use App\Modules\Payments\Application\AlternativePaymentReviewService;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -39,7 +38,7 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
         private TelegramConfidentialDeliveryQueue $delivery,
         private TelegramInteractionSessionService $sessions,
         private TelegramInteractionCallbackService $callbacks,
-        private AlternativePaymentReviewService $reviews,
+        private TelegramAlternativePaymentReview $reviews,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
     ) {}
@@ -487,7 +486,7 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
     private function renderDetail(
         TelegramInteractionAction $action,
         int $sessionVersion,
-        AlternativePaymentReviewCase $case,
+        TelegramAlternativePaymentReviewCase $case,
         bool $staleCandidate = false,
     ): void {
         $locale = $this->locale($action->userId);
@@ -607,7 +606,7 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
     }
 
     /**
-     * @param list<list<TelegramInlineCallbackButton>> $rows
+     * @param  list<list<TelegramInlineCallbackButton>>  $rows
      */
     private function send(TelegramInteractionAction $action, string $text, array $rows, string $suffix): void
     {
@@ -668,7 +667,10 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
         ));
     }
 
-    /** @param array<string,mixed> $payload */
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array{0:string,1:string}
+     */
     private function selection(array $payload): array
     {
         $kind = $payload['kind'] ?? null;

@@ -183,7 +183,7 @@ final readonly class ConfiguredAlternativePaymentProviderResolver implements Alt
     }
 
     /** @param array<string, mixed> $definition
-     *  @return array<string, string>
+     * @return array<string, string>
      */
     private function requiredMap(array $definition, string $key, string $label): array
     {
@@ -203,7 +203,7 @@ final readonly class ConfiguredAlternativePaymentProviderResolver implements Alt
     }
 
     /** @param array<string, mixed> $definition
-     *  @return list<string>
+     * @return list<string>
      */
     private function requiredStringList(array $definition, string $key, string $label): array
     {

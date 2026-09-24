@@ -62,6 +62,8 @@ final class TelegramGiftCardNavigationPayment implements TelegramCustomerPurchas
             'Steam',
             'GLOBAL',
             'IRR',
+            'code_only',
+            'manual_only',
             $this->typeConfigurationHash,
         )];
     }
@@ -134,6 +136,48 @@ final class TelegramGiftCardNavigationPayment implements TelegramCustomerPurchas
         $this->submissions[$operationKey] = $accepted;
 
         return $accepted;
+    }
+
+    public function submitEvidenceForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $typeCode,
+        string $typeConfigurationHash,
+        int $claimedFaceValue,
+        ?string $code,
+        ?string $privateImageReference,
+        ?string $telegramFileId,
+        ?string $telegramFileUniqueId,
+        ?string $imageContentHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseGiftCardSubmission {
+        if ($code === null
+            || $privateImageReference !== null
+            || $telegramFileId !== null
+            || $telegramFileUniqueId !== null
+            || $imageContentHash !== null) {
+            throw new RuntimeException('Unexpected Telegram Gift Card private evidence in code-only fake.');
+        }
+
+        return $this->submitCodeForSelf(
+            $actorUserId,
+            $subjectUserId,
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+            $typeCode,
+            $typeConfigurationHash,
+            $claimedFaceValue,
+            $code,
+            $operationKey,
+        );
     }
 
     private function assertAuthority(
@@ -324,7 +368,7 @@ final class TelegramGiftCardNavigationTest extends TestCase
             ->where('id', (int) $home->id)
             ->first(['state', 'payload']);
         self::assertNotNull($codeInput);
-        self::assertSame('purchase_gift_card_code_input', (string) $codeInput->state);
+        self::assertSame('purchase_gift_card_evidence_input', (string) $codeInput->state);
         self::assertStringContainsString('1250000', (string) $codeInput->payload);
         self::assertSame(0, $payment->submitEffects);
         self::assertSame($userId, (int) DB::table('telegram_interaction_sessions')->where('id', (int) $home->id)->value('user_id'));

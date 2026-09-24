@@ -10,20 +10,55 @@ use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence
 use App\Modules\Payments\GiftCard\Application\GiftCardReviewDecisionService;
 use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationEvidence;
 use App\Modules\Payments\Usdt\Application\UsdtManualReviewDecisionService;
-use App\Shared\Application\Clock;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewCase;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
-use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
-final readonly class AlternativePaymentReviewService
+/**
+ * @phpstan-type C2cReviewRow object{
+ *     review_public_id:mixed,
+ *     review_state:mixed,
+ *     candidate_count:mixed,
+ *     created_at:mixed,
+ *     transaction_id:mixed,
+ *     subject_public_id:mixed,
+ *     provider_code:mixed,
+ *     amount_irr:mixed,
+ *     currency:mixed,
+ *     reference:mixed,
+ *     c2c_destination_account_id:mixed,
+ *     occurred_at:mixed
+ * }
+ * @phpstan-type GiftCardReviewRow object{
+ *     review_public_id:mixed,
+ *     review_state:mixed,
+ *     created_at:mixed,
+ *     subject_public_id:mixed,
+ *     masked_code:mixed,
+ *     private_image_reference:mixed,
+ *     claimed_face_value:mixed,
+ *     claimed_currency:mixed,
+ *     provider_code:mixed
+ * }
+ * @phpstan-type UsdtReviewRow object{
+ *     review_public_id:mixed,
+ *     review_state:mixed,
+ *     created_at:mixed,
+ *     subject_public_id:mixed,
+ *     txid:mixed,
+ *     private_evidence_reference:mixed,
+ *     minimum_confirmations:mixed,
+ *     amount_irr:mixed
+ * }
+ */
+final readonly class AlternativePaymentReviewService implements TelegramAlternativePaymentReview
 {
-    public const PERMISSION = 'access.sensitive_actions.approve';
-
     private const USDT_MANUAL_PROVIDER = 'manual-review';
 
     public function __construct(
@@ -32,20 +67,19 @@ final readonly class AlternativePaymentReviewService
         private CardToCardReviewDecisionService $cardToCard,
         private GiftCardReviewDecisionService $giftCards,
         private UsdtManualReviewDecisionService $usdt,
-        private Clock $clock,
     ) {}
 
     public function availableFor(int $actorUserId): bool
     {
-        return $this->administratorUsers->allowsUser($actorUserId, self::PERMISSION);
+        return $this->administratorUsers->allowsUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
     }
 
     /**
-     * @return list<AlternativePaymentReviewCase>
+     * @return list<TelegramAlternativePaymentReviewCase>
      */
     public function pending(int $actorUserId, int $limit = 15): array
     {
-        $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
         if ($limit < 1 || $limit > 30) {
             throw new DomainException('Alternative-payment review list limit is invalid.');
         }
@@ -63,16 +97,15 @@ final readonly class AlternativePaymentReviewService
 
         usort(
             $cases,
-            static fn (AlternativePaymentReviewCase $left, AlternativePaymentReviewCase $right): int =>
-                strcmp($left->createdAt, $right->createdAt),
+            static fn (TelegramAlternativePaymentReviewCase $left, TelegramAlternativePaymentReviewCase $right): int => strcmp($left->createdAt, $right->createdAt),
         );
 
         return array_slice($cases, 0, $limit);
     }
 
-    public function find(int $actorUserId, string $kind, string $reviewPublicId): AlternativePaymentReviewCase
+    public function find(int $actorUserId, string $kind, string $reviewPublicId): TelegramAlternativePaymentReviewCase
     {
-        $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
         $this->assertIdentity($kind, $reviewPublicId);
 
         return match ($kind) {
@@ -90,7 +123,7 @@ final readonly class AlternativePaymentReviewService
         string $reason,
         string $requestKey,
     ): void {
-        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
         $this->assertIdentity('c2c', $reviewPublicId);
         if (! Str::isUlid($reservationPublicId)) {
             throw new DomainException('C2C review reservation public ID is invalid.');
@@ -112,7 +145,7 @@ final readonly class AlternativePaymentReviewService
         string $reason,
         string $requestKey,
     ): void {
-        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
         $this->assertIdentity('gift_card', $reviewPublicId);
         $externalRedemptionId = trim($externalRedemptionId);
         if (preg_match('/\A[\x21-\x7E]{1,191}\z/', $externalRedemptionId) !== 1) {
@@ -193,7 +226,7 @@ final readonly class AlternativePaymentReviewService
         string $reason,
         string $requestKey,
     ): void {
-        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
         $this->assertIdentity('usdt', $reviewPublicId);
         if ($confirmations < 1 || $confirmations > 10_000_000) {
             throw new DomainException('USDT confirmation count is invalid.');
@@ -285,7 +318,7 @@ final readonly class AlternativePaymentReviewService
         string $reason,
         string $requestKey,
     ): void {
-        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, self::PERMISSION);
+        $administratorId = $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
         $this->assertIdentity($kind, $reviewPublicId);
 
         match ($kind) {
@@ -306,8 +339,9 @@ final readonly class AlternativePaymentReviewService
         };
     }
 
-    private function findC2c(string $reviewPublicId): AlternativePaymentReviewCase
+    private function findC2c(string $reviewPublicId): TelegramAlternativePaymentReviewCase
     {
+        /** @var C2cReviewRow|null $row */
         $row = $this->database->connection()->table('c2c_match_reviews as review')
             ->join('c2c_bank_transactions as transaction', 'transaction.id', '=', 'review.c2c_bank_transaction_id')
             ->where('review.public_id', strtoupper($reviewPublicId))
@@ -333,8 +367,9 @@ final readonly class AlternativePaymentReviewService
         return $this->c2cCase($row, true);
     }
 
-    private function findGiftCard(string $reviewPublicId): AlternativePaymentReviewCase
+    private function findGiftCard(string $reviewPublicId): TelegramAlternativePaymentReviewCase
     {
+        /** @var GiftCardReviewRow|null $row */
         $row = $this->database->connection()->table('gift_card_reviews as review')
             ->join('gift_card_submissions as submission', 'submission.id', '=', 'review.gift_card_submission_id')
             ->join('gift_card_types as type', 'type.id', '=', 'submission.gift_card_type_id')
@@ -358,8 +393,9 @@ final readonly class AlternativePaymentReviewService
         return $this->giftCardCase($row);
     }
 
-    private function findUsdt(string $reviewPublicId): AlternativePaymentReviewCase
+    private function findUsdt(string $reviewPublicId): TelegramAlternativePaymentReviewCase
     {
+        /** @var UsdtReviewRow|null $row */
         $row = $this->database->connection()->table('usdt_manual_reviews as review')
             ->join('usdt_txid_submissions as submission', 'submission.id', '=', 'review.usdt_txid_submission_id')
             ->join('usdt_payment_authorities as authority', 'authority.id', '=', 'submission.usdt_payment_authority_id')
@@ -383,10 +419,11 @@ final readonly class AlternativePaymentReviewService
         return $this->usdtCase($row);
     }
 
-    /** @return list<object> */
+    /** @return list<C2cReviewRow> */
     private function c2cRows(int $limit): array
     {
-        return $this->database->connection()->table('c2c_match_reviews as review')
+        /** @var list<C2cReviewRow> $rows */
+        $rows = array_values($this->database->connection()->table('c2c_match_reviews as review')
             ->join('c2c_bank_transactions as transaction', 'transaction.id', '=', 'review.c2c_bank_transaction_id')
             ->where('review.state', 'pending')
             ->orderBy('review.created_at')
@@ -405,13 +442,16 @@ final readonly class AlternativePaymentReviewService
                 'transaction.c2c_destination_account_id',
                 'transaction.occurred_at',
             ])
-            ->all();
+            ->all());
+
+        return $rows;
     }
 
-    /** @return list<object> */
+    /** @return list<GiftCardReviewRow> */
     private function giftCardRows(int $limit): array
     {
-        return $this->database->connection()->table('gift_card_reviews as review')
+        /** @var list<GiftCardReviewRow> $rows */
+        $rows = array_values($this->database->connection()->table('gift_card_reviews as review')
             ->join('gift_card_submissions as submission', 'submission.id', '=', 'review.gift_card_submission_id')
             ->join('gift_card_types as type', 'type.id', '=', 'submission.gift_card_type_id')
             ->where('review.state', 'pending')
@@ -428,13 +468,16 @@ final readonly class AlternativePaymentReviewService
                 'submission.claimed_currency',
                 'type.provider_code',
             ])
-            ->all();
+            ->all());
+
+        return $rows;
     }
 
-    /** @return list<object> */
+    /** @return list<UsdtReviewRow> */
     private function usdtRows(int $limit): array
     {
-        return $this->database->connection()->table('usdt_manual_reviews as review')
+        /** @var list<UsdtReviewRow> $rows */
+        $rows = array_values($this->database->connection()->table('usdt_manual_reviews as review')
             ->join('usdt_txid_submissions as submission', 'submission.id', '=', 'review.usdt_txid_submission_id')
             ->join('usdt_payment_authorities as authority', 'authority.id', '=', 'submission.usdt_payment_authority_id')
             ->join('payment_intents as intent', 'intent.id', '=', 'submission.payment_intent_id')
@@ -451,14 +494,17 @@ final readonly class AlternativePaymentReviewService
                 'authority.minimum_confirmations',
                 'intent.amount_irr',
             ])
-            ->all();
+            ->all());
+
+        return $rows;
     }
 
-    private function c2cCase(object $row, bool $includeCandidates): AlternativePaymentReviewCase
+    /** @param C2cReviewRow $row */
+    private function c2cCase(object $row, bool $includeCandidates): TelegramAlternativePaymentReviewCase
     {
         $candidates = $includeCandidates ? $this->c2cCandidates($row) : [];
 
-        return new AlternativePaymentReviewCase(
+        return new TelegramAlternativePaymentReviewCase(
             'c2c',
             (string) $row->review_public_id,
             (string) $row->subject_public_id,
@@ -475,9 +521,10 @@ final readonly class AlternativePaymentReviewService
         );
     }
 
-    private function giftCardCase(object $row): AlternativePaymentReviewCase
+    /** @param GiftCardReviewRow $row */
+    private function giftCardCase(object $row): TelegramAlternativePaymentReviewCase
     {
-        return new AlternativePaymentReviewCase(
+        return new TelegramAlternativePaymentReviewCase(
             'gift_card',
             (string) $row->review_public_id,
             (string) $row->subject_public_id,
@@ -494,14 +541,15 @@ final readonly class AlternativePaymentReviewService
         );
     }
 
-    private function usdtCase(object $row): AlternativePaymentReviewCase
+    /** @param UsdtReviewRow $row */
+    private function usdtCase(object $row): TelegramAlternativePaymentReviewCase
     {
         $txid = strtolower((string) $row->txid);
         $reference = strlen($txid) > 20
             ? substr($txid, 0, 10).'…'.substr($txid, -8)
             : $txid;
 
-        return new AlternativePaymentReviewCase(
+        return new TelegramAlternativePaymentReviewCase(
             'usdt',
             (string) $row->review_public_id,
             (string) $row->subject_public_id,
@@ -518,7 +566,10 @@ final readonly class AlternativePaymentReviewService
         );
     }
 
-    /** @return list<string> */
+    /**
+     * @param  C2cReviewRow  $row
+     * @return list<string>
+     */
     private function c2cCandidates(object $row): array
     {
         return array_values($this->database->connection()->table('c2c_amount_reservations as reservation')
