@@ -9,6 +9,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
@@ -26,8 +27,11 @@ use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
+use App\Modules\Telegram\Application\TelegramAdministratorAccessNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
+use App\Modules\Telegram\Application\TelegramAdministratorSearchNavigationHandler;
+use App\Modules\Telegram\Application\TelegramAdministratorSearchService;
 use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
@@ -158,7 +162,15 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramNavigationEntryGateway::class),
             ),
         );
+        $this->app->singleton(
+            TelegramAdministratorSearchService::class,
+            fn (Application $application): TelegramAdministratorSearchService => new TelegramAdministratorSearchService(
+                $application->tagged(TelegramAdministratorSearchSource::class),
+            ),
+        );
         $this->app->singleton(TelegramNavigationHandler::class);
+        $this->app->singleton(TelegramAdministratorAccessNavigationHandler::class);
+        $this->app->singleton(TelegramAdministratorSearchNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);
         $this->app->singleton(TelegramClientGuideNavigationHandler::class);

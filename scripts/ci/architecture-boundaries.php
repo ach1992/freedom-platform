@@ -26,6 +26,8 @@ return [
         'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\Contracts\\TelegramAdministratorCustomerTargetDiscovery',
         'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorCustomerTarget',
         'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorCustomerTargetSearchResult',
+        'app/Modules/Customers/Application/TelegramAdministratorIdentitySearchSource.php|App\\Modules\\Telegram\\Application\\Contracts\\TelegramAdministratorSearchSource',
+        'app/Modules/Customers/Application/TelegramAdministratorIdentitySearchSource.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorSearchItem',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\Contracts\\QuoteDiscountAuthority',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountAuthorization',
         'app/Modules/Promotions/Application/BenefitCodeDiscountQuoteAuthority.php|App\\Modules\\Orders\\Application\\QuoteDiscountAuthorizationRequest',
@@ -50,6 +52,8 @@ return [
     // data-classification review boundary; RESTRICTED owners must keep using
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
+        'app/Modules/Telegram/Application/TelegramAdministratorAccessNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
         'app/Modules/Telegram/Application/TelegramBroadcastNavigationHandler.php',

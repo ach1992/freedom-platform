@@ -9,17 +9,20 @@ use App\Modules\Catalog\Application\TelegramCustomerPurchaseCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerTrialCatalogService;
 use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Customers\Application\TelegramAdministratorCustomerTargetDiscoveryService;
+use App\Modules\Customers\Application\TelegramAdministratorIdentitySearchSource;
 use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
 use App\Modules\Orders\Application\AgentPurchaseCountService;
 use App\Modules\Orders\Application\AgentReportService;
 use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
 use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\TelegramAdministratorOrderSearchSource;
 use App\Modules\Orders\Application\TelegramAgentBulkPurchaseService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseDiscountQuoteService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseOrderService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseQuoteService;
 use App\Modules\Orders\Application\TelegramSupportOwnedOrderProjectionService;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
+use App\Modules\Payments\Application\TelegramAdministratorPaymentSearchSource;
 use App\Modules\Payments\Application\TelegramCustomerPurchaseWalletPaymentService;
 use App\Modules\Payments\Application\TelegramSupportOwnedPaymentIntentProjectionService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
@@ -41,11 +44,13 @@ use App\Modules\Payments\Zarinpal\Application\TelegramCustomerPurchaseZarinpalPa
 use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Promotions\Application\BenefitCodeDiscountQuoteAuthority;
 use App\Modules\Promotions\Application\PurchasePromotionUsageAuthorityService;
+use App\Modules\Provisioning\Application\TelegramAdministratorServiceSearchSource;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialClaimService;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialProvisioningStatusService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
@@ -91,6 +96,12 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramAgentReport::class, AgentReportService::class);
         $this->app->bind(TelegramAgentBulkPurchase::class, TelegramAgentBulkPurchaseService::class);
         $this->app->bind(TelegramAdministratorCustomerTargetDiscovery::class, TelegramAdministratorCustomerTargetDiscoveryService::class);
+        $this->app->tag([
+            TelegramAdministratorIdentitySearchSource::class,
+            TelegramAdministratorOrderSearchSource::class,
+            TelegramAdministratorPaymentSearchSource::class,
+            TelegramAdministratorServiceSearchSource::class,
+        ], TelegramAdministratorSearchSource::class);
         $this->app->bind(TelegramClientGuideCatalog::class, TelegramClientGuideCatalogService::class);
         $this->app->bind(TelegramCustomerPurchaseCatalog::class, TelegramCustomerPurchaseCatalogService::class);
         $this->app->bind(TelegramCustomerTrialCatalog::class, TelegramCustomerTrialCatalogService::class);

@@ -16,6 +16,8 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 {
     public function __construct(
         private TelegramNavigationHandler $navigation,
+        private TelegramAdministratorAccessNavigationHandler $adminAccess,
+        private TelegramAdministratorSearchNavigationHandler $adminSearch,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramBroadcastNavigationResolver $broadcastResolver,
         private TelegramClientGuideNavigationHandler $clientGuides,
@@ -49,6 +51,16 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->clientGuides->supports($action)) {
             $this->clientGuides->handle($action);
+
+            return;
+        }
+        if ($this->adminAccess->supports($action)) {
+            $this->adminAccess->handle($action);
+
+            return;
+        }
+        if ($this->adminSearch->supports($action)) {
+            $this->adminSearch->handle($action);
 
             return;
         }

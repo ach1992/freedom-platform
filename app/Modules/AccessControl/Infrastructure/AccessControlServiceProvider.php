@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\Modules\AccessControl\Infrastructure;
 
 use App\Modules\AccessControl\Application\AccessMutationAudit;
+use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryService;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Application\AdministratorLifecycleService;
+use App\Modules\AccessControl\Application\AdministratorOwnerTransferTelegramService;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
+use App\Modules\AccessControl\Application\AdministratorProvisioningService;
+use App\Modules\AccessControl\Application\AdministratorSensitiveMutationService;
+use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\AccessControl\Application\OwnerTransferService;
 use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
 use App\Modules\AccessControl\Application\SensitiveApprovalAudit;
@@ -32,6 +37,44 @@ final class AccessControlServiceProvider extends ServiceProvider
             fn (Application $application): AdministratorPermissionAuthorizer => new AdministratorPermissionAuthorizer(
                 $application->make(DatabaseManager::class),
                 $application->make(PermissionResolver::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorUserPermissionAuthorizer::class,
+            fn (Application $application): AdministratorUserPermissionAuthorizer => new AdministratorUserPermissionAuthorizer(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorAccessManagementQueryService::class,
+            fn (Application $application): AdministratorAccessManagementQueryService => new AdministratorAccessManagementQueryService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorUserPermissionAuthorizer::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorProvisioningService::class,
+            fn (Application $application): AdministratorProvisioningService => new AdministratorProvisioningService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorSensitiveMutationService::class,
+            fn (Application $application): AdministratorSensitiveMutationService => new AdministratorSensitiveMutationService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorUserPermissionAuthorizer::class),
+                $application->make(SensitiveActionApprovalService::class),
+                $application->make(AdministratorAccessService::class),
+                $application->make(AdministratorLifecycleService::class),
+                $application->make(AdministratorProvisioningService::class),
             ),
         );
 
@@ -78,6 +121,16 @@ final class AccessControlServiceProvider extends ServiceProvider
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(SensitiveApprovalAudit::class),
                 $application->make(Clock::class),
+            ),
+        );
+
+        $this->app->singleton(
+            AdministratorOwnerTransferTelegramService::class,
+            fn (Application $application): AdministratorOwnerTransferTelegramService => new AdministratorOwnerTransferTelegramService(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorUserPermissionAuthorizer::class),
+                $application->make(AdministratorAccessManagementQueryService::class),
+                $application->make(OwnerTransferService::class),
             ),
         );
 
