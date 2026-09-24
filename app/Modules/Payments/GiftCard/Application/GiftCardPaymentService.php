@@ -81,6 +81,58 @@ final readonly class GiftCardPaymentService
         }, 3);
     }
 
+    /** @requirement GFT-001 GFT-002 GFT-004 PAY-002 PAY-003 DAT-002 DAT-003 SEC-002 QUA-004 */
+    public function routeManualReview(
+        string $submissionPublicId,
+        string $reasonCode,
+        string $correlationId,
+    ): GiftCardProcessingReceipt {
+        if (! Str::isUlid($submissionPublicId)
+            || preg_match('/\A[a-z0-9_.-]{2,64}\z/', $reasonCode) !== 1) {
+            throw new DomainException('Gift-card manual-review identity is invalid.');
+        }
+        $this->assertToken($correlationId, 'Gift-card manual-review correlation ID', 8, 64);
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $submissionPublicId,
+            $reasonCode,
+            $correlationId,
+        ): GiftCardProcessingReceipt {
+            $authority = $this->submissionAuthority($connection, $submissionPublicId, true);
+            if ($authority === null) {
+                throw new DomainException('Gift-card submission does not exist.');
+            }
+            if ($authority->state === 'pending_manual_review') {
+                if ($authority->intent_state !== PaymentIntentState::PendingManualReview->value) {
+                    throw new RuntimeException('Gift-card manual-review replay intent state is inconsistent.');
+                }
+                $receipt = $this->receipt($connection, $authority, true);
+                if ($receipt->reviewPublicId === null) {
+                    throw new RuntimeException('Gift-card manual-review replay is missing review authority.');
+                }
+
+                return $receipt;
+            }
+            if ($authority->state !== 'submitted' || $authority->intent_state !== PaymentIntentState::Submitted->value) {
+                throw new DomainException('Gift-card submission cannot enter manual review from its current state.');
+            }
+
+            $this->createReview($connection, $authority, $reasonCode, $correlationId);
+            $refreshed = $this->submissionAuthority($connection, $submissionPublicId);
+            if ($refreshed === null
+                || $refreshed->state !== 'pending_manual_review'
+                || $refreshed->intent_state !== PaymentIntentState::PendingManualReview->value) {
+                throw new RuntimeException('Gift-card manual-review transition did not converge.');
+            }
+            $receipt = $this->receipt($connection, $refreshed, false);
+            if ($receipt->reviewPublicId === null) {
+                throw new RuntimeException('Gift-card manual-review transition is missing review authority.');
+            }
+
+            return $receipt;
+        }, 3);
+    }
+
     /** @requirement GFT-001 GFT-002 GFT-003 GFT-004 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-001 QUA-004 */
     public function process(
         string $submissionPublicId,
