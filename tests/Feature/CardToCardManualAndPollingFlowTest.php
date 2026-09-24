@@ -10,6 +10,7 @@ use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
 use App\Modules\Payments\CardToCard\Application\CardToCardManualSubmissionService;
+use App\Modules\Payments\CardToCard\Application\CardToCardManualReviewQueueService;
 use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentReceipt;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentService;
@@ -148,6 +149,43 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
         self::assertSame('captured', DB::table('payment_intents')->where('public_id', $submission->paymentIntentPublicId)->value('state'));
         self::assertSame(1, DB::table('purchase_settlements')->count());
         self::assertSame('accepted', DB::table('c2c_match_reviews')->where('public_id', $review->reviewPublicId)->value('state'));
+    }
+
+    public function test_manual_submission_can_enter_canonical_review_queue_without_capture_and_replays_safely(): void
+    {
+        $payment = $this->payment('manual-queue');
+        $paidAt = $this->clock->value->modify('+2 minutes');
+        $submission = $this->app->make(CardToCardManualSubmissionService::class)->submit(
+            'c2c.manual.submission.queue.0001',
+            $payment['user_id'],
+            $payment['receipt']->reservationPublicId,
+            $payment['receipt']->payableAmountIrr,
+            $paidAt,
+            hash('sha256', 'manual-review-queue-evidence'),
+            privateReceiptReference: 'private://telegram/receipt/review-queue',
+            correlationId: $this->correlation('manual-review-queue-submit'),
+        );
+
+        $review = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
+            $submission->publicId,
+            $this->correlation('manual-review-queue'),
+        );
+
+        self::assertNotNull($review->reviewPublicId);
+        self::assertSame('review_pending:manual_required', $review->outcome);
+        self::assertSame(1, $review->candidateCount);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame('pending', DB::table('c2c_match_reviews')->where('public_id', $review->reviewPublicId)->value('state'));
+        self::assertSame('manual-receipt', DB::table('c2c_bank_transactions')->where('public_id', $review->bankTransactionPublicId)->value('provider_code'));
+
+        $replay = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
+            $submission->publicId,
+            $this->correlation('manual-review-queue-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($review->reviewPublicId, $replay->reviewPublicId);
+        self::assertSame(1, DB::table('c2c_match_reviews')->count());
+        self::assertSame(1, DB::table('c2c_bank_transactions')->where('provider_code', 'manual-receipt')->count());
     }
 
     public function test_fake_provider_polling_exact_match_captures_before_cursor_advances(): void

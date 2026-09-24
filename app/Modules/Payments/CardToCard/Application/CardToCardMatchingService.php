@@ -228,6 +228,80 @@ final readonly class CardToCardMatchingService
         }, 3);
     }
 
+    /** @requirement C2C-002 C2C-004 C2C-005 PAY-002 ACL-002 DAT-002 DAT-003 DAT-004 QUA-004 */
+    public function queueManualReview(
+        string $bankTransactionPublicId,
+        string $reservationPublicId,
+        string $correlationId,
+    ): CardToCardMatchReceipt {
+        if (! Str::isUlid($bankTransactionPublicId) || ! Str::isUlid($reservationPublicId)) {
+            throw new DomainException('C2C manual-review transaction/reservation identity is invalid.');
+        }
+        $this->assertToken($correlationId, 'C2C manual-review correlation ID', 8, 64);
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $bankTransactionPublicId,
+            $reservationPublicId,
+            $correlationId,
+        ): CardToCardMatchReceipt {
+            $transaction = $connection->table('c2c_bank_transactions')
+                ->where('public_id', $bankTransactionPublicId)
+                ->lockForUpdate()
+                ->first();
+            if ($transaction === null) {
+                throw new DomainException('C2C manual-review bank transaction does not exist.');
+            }
+
+            $existingMatch = $connection->table('c2c_transaction_matches')
+                ->where('c2c_bank_transaction_id', $transaction->id)
+                ->first();
+            if ($existingMatch !== null) {
+                return $this->matchReceipt($connection, $transaction, $existingMatch, true);
+            }
+
+            $existingReview = $connection->table('c2c_match_reviews')
+                ->where('c2c_bank_transaction_id', $transaction->id)
+                ->first();
+            if ($existingReview !== null) {
+                return $this->reviewReceipt($transaction, $existingReview, true);
+            }
+
+            if ($transaction->status !== 'settled') {
+                throw new DomainException('C2C manual review requires settled normalized evidence.');
+            }
+
+            $reservation = $connection->table('c2c_amount_reservations as reservation')
+                ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
+                ->where('reservation.public_id', $reservationPublicId)
+                ->where('reservation.c2c_destination_account_id', $transaction->c2c_destination_account_id)
+                ->where('reservation.payable_amount_irr', $transaction->amount_irr)
+                ->where('reservation.reserved_at', '<=', $transaction->occurred_at)
+                ->where('reservation.late_review_until', '>=', $transaction->occurred_at)
+                ->where('intent.purpose', 'purchase')
+                ->where('intent.payment_method_code', 'card_to_card')
+                ->where('intent.provider_code', 'card_to_card')
+                ->whereIn('intent.state', ['awaiting_user_action', 'submitted'])
+                ->whereNull('intent.captured_at')
+                ->lockForUpdate()
+                ->first([
+                    'reservation.*',
+                    'intent.source_quote_public_id as source_quote_public_id',
+                    'intent.user_id as intent_user_id',
+                ]);
+            if ($reservation === null || ! $this->settlementCandidateAvailable($reservation)) {
+                throw new DomainException('C2C manual-review reservation is no longer a valid settlement candidate.');
+            }
+
+            return $this->createReview(
+                $connection,
+                $transaction,
+                'manual_required',
+                1,
+                $correlationId,
+            );
+        }, 3);
+    }
+
     private function settlementCandidateAvailable(stdClass $candidate): bool
     {
         if (! is_string($candidate->source_quote_public_id ?? null) || (int) ($candidate->intent_user_id ?? 0) < 1) {
