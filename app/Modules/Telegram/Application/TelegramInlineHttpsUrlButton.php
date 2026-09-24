@@ -15,6 +15,7 @@ final readonly class TelegramInlineHttpsUrlButton
         public string $url,
         public TelegramInlineHttpsUrlPurpose $purpose,
         public ?TelegramInlineButtonStyle $style = null,
+        public ?string $iconCustomEmojiId = null,
     ) {
         if ($text === '' || trim($text) === '' || mb_strlen($text) > self::MAXIMUM_TEXT_CHARACTERS) {
             throw new InvalidArgumentException('Telegram inline button text must contain 1-64 visible characters.');
@@ -24,17 +25,25 @@ final readonly class TelegramInlineHttpsUrlButton
         }
 
         TelegramInlineHttpsUrlPolicy::assertAllowed($url, $purpose);
+        if ($iconCustomEmojiId !== null && preg_match('/\A[0-9]{1,64}\z/', $iconCustomEmojiId) !== 1) {
+            throw new InvalidArgumentException('Telegram inline button custom emoji ID is invalid.');
+        }
     }
 
-    /** @return array{text:string,https_url:string,https_url_purpose:string,style:?string} */
+    /** @return array{text:string,https_url:string,https_url_purpose:string,style:?string,icon_custom_emoji_id:?string} */
     public function snapshot(): array
     {
-        return [
+        $snapshot = [
             'text' => $this->text,
             'https_url' => $this->url,
             'https_url_purpose' => $this->purpose->value,
             'style' => $this->style?->value,
         ];
+        if ($this->iconCustomEmojiId !== null) {
+            $snapshot['icon_custom_emoji_id'] = $this->iconCustomEmojiId;
+        }
+
+        return $snapshot;
     }
 
     /** @return array{redacted:true,type:string,purpose:string} */

@@ -57,6 +57,8 @@ use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
 use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
+use App\Modules\Telegram\Application\TelegramMenuConfigurationMutationExecutor;
+use App\Modules\Telegram\Application\TelegramMenuConfigurationService;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
@@ -238,6 +240,23 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(AdministratorPermissionAuthorizer::class),
                 $application->make(TelegramConfigurationMutationAudit::class),
                 $application->make(TelegramMembershipConfigurationFence::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramMenuConfigurationMutationExecutor::class,
+            fn (Application $application): TelegramMenuConfigurationMutationExecutor => new TelegramMenuConfigurationMutationExecutor(
+                $application->make(DatabaseManager::class),
+                $application->make(AdministratorPermissionAuthorizer::class),
+                $application->make(TelegramConfigurationMutationAudit::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramMenuConfigurationService::class,
+            fn (Application $application): TelegramMenuConfigurationService => new TelegramMenuConfigurationService(
+                $application->make(DatabaseManager::class),
+                $application->make(TelegramMenuConfigurationMutationExecutor::class),
+                $application->make(TelegramConfigurationMutationAudit::class),
+                $application->make(Clock::class),
             ),
         );
         $this->app->singleton(
