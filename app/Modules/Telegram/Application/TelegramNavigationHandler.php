@@ -193,6 +193,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     {
         if ($action->sessionState === TelegramNavigationEntryGateway::STATE) {
             if ($action->kind === TelegramInteractionActionKind::Callback) {
+                if ($action->callbackAction === self::ACTION_MENU_SUBMENU) {
+                    [$menuKey, $title] = $this->submenuTargetFromPayload($action->callbackPayload);
+                    $this->showSubmenu($action, $menuKey, $title);
+
+                    return;
+                }
                 if ($action->callbackPayload !== []) {
                     throw new RuntimeException('Telegram home callback payload is unsupported.');
                 }
@@ -203,12 +209,6 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 }
                 if ($action->callbackAction === self::ACTION_REFERRAL) {
                     $this->showReferral($action);
-
-                    return;
-                }
-                if ($action->callbackAction === self::ACTION_MENU_SUBMENU) {
-                    [$menuKey, $title] = $this->submenuTargetFromPayload($action->callbackPayload);
-                    $this->showSubmenu($action, $menuKey, $title);
 
                     return;
                 }

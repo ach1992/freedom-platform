@@ -1605,6 +1605,234 @@ final class TelegramNavigationEntryTest extends TestCase
     }
 
     /** @requirement CNT-002 CNT-003 ACL-002 SEC-002 DAT-003 QUA-001 QUA-004 */
+    public function test_published_home_submenu_callback_enters_active_submenu_returns_home_and_payloads_fail_closed(): void
+    {
+        $telegramUserId = 9614;
+        $username = 'configured_submenu';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(6144, $telegramUserId, $username, 'en', '/start'));
+        $processor->process('123456789', 6144);
+
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $administratorId = $this->salesContentAdministratorForUser((int) $account->user_id);
+
+        $menus = $this->app->make(TelegramMenuConfigurationService::class);
+        $submenu = $menus->createVersion(
+            'submenu.help',
+            new TelegramMenuConfigurationDefinition([
+                new TelegramMenuItemDefinition(
+                    key: 'copy_help',
+                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+                    actionType: TelegramMenuItemDefinition::ACTION_COPY_TEXT,
+                    actionKey: null,
+                    labelFa: 'کپی راهنما',
+                    labelEn: 'Copy help',
+                    normalEmoji: '📋',
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 0,
+                    order: 0,
+                    copyText: 'HELP-CODE',
+                ),
+            ]),
+            new TelegramConfigurationChangeContext(
+                'configured-submenu-create-6144',
+                'configured-submenu-6144',
+                'telegram_menu_configuration',
+                'Create submenu callback regression fixture.',
+                $administratorId,
+            ),
+        );
+        $menus->publish(
+            $submenu->publicId,
+            0,
+            new TelegramConfigurationChangeContext(
+                'configured-submenu-publish-6144',
+                'configured-submenu-6144-publish',
+                'telegram_menu_configuration',
+                'Publish submenu callback regression fixture.',
+                $administratorId,
+            ),
+        );
+
+        $home = $menus->createVersion(
+            'home',
+            new TelegramMenuConfigurationDefinition([
+                new TelegramMenuItemDefinition(
+                    key: 'my_account',
+                    kind: TelegramMenuItemDefinition::KIND_SYSTEM,
+                    actionType: TelegramMenuItemDefinition::ACTION_REGISTERED,
+                    actionKey: 'my_account',
+                    labelFa: null,
+                    labelEn: null,
+                    normalEmoji: null,
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 0,
+                    order: 0,
+                ),
+                new TelegramMenuItemDefinition(
+                    key: 'my_services',
+                    kind: TelegramMenuItemDefinition::KIND_SYSTEM,
+                    actionType: TelegramMenuItemDefinition::ACTION_REGISTERED,
+                    actionKey: 'my_services',
+                    labelFa: null,
+                    labelEn: null,
+                    normalEmoji: null,
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 1,
+                    order: 0,
+                ),
+                new TelegramMenuItemDefinition(
+                    key: 'help',
+                    kind: TelegramMenuItemDefinition::KIND_CUSTOM,
+                    actionType: TelegramMenuItemDefinition::ACTION_SUBMENU,
+                    actionKey: null,
+                    labelFa: 'راهنما',
+                    labelEn: 'Help',
+                    normalEmoji: 'ℹ️',
+                    premiumEmojiId: null,
+                    style: TelegramInlineButtonStyle::Primary,
+                    row: 2,
+                    order: 0,
+                    submenuKey: 'submenu.help',
+                ),
+            ]),
+            new TelegramConfigurationChangeContext(
+                'configured-home-submenu-create-6144',
+                'configured-home-submenu-6144',
+                'telegram_menu_configuration',
+                'Create Home submenu callback regression fixture.',
+                $administratorId,
+            ),
+        );
+        $menus->publish(
+            $home->publicId,
+            0,
+            new TelegramConfigurationChangeContext(
+                'configured-home-submenu-publish-6144',
+                'configured-home-submenu-6144-publish',
+                'telegram_menu_configuration',
+                'Publish Home submenu callback regression fixture.',
+                $administratorId,
+            ),
+        );
+
+        $this->accept($this->payload(6145, $telegramUserId, $username, 'en', '/menu'));
+        $this->processTelegramUpdateOrFail($processor, 6145);
+
+        $submenuPayload = json_encode(
+            ['menu_key' => 'submenu.help', 'title' => 'ℹ️ Help'],
+            JSON_THROW_ON_ERROR,
+        );
+        $submenuToken = $this->callbackToken(
+            'navigation.menu.submenu',
+            (int) $account->id,
+            $submenuPayload,
+        );
+        $this->accept($this->callbackPayload(6146, $telegramUserId, $username, 'en', $submenuToken));
+        $this->processTelegramUpdateOrFail($processor, 6146);
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['public_id', 'state', 'version']);
+        self::assertNotNull($session);
+        self::assertSame('menu_submenu', (string) $session->state);
+
+        $submenuOperation = DB::table('telegram_delivery_operations')
+            ->where('recipient_chat_id', $telegramUserId)
+            ->orderByDesc('id')
+            ->first(['public_id']);
+        self::assertNotNull($submenuOperation);
+        $submenuSnapshot = DB::table(TelegramDeliveryInteractivePresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $submenuOperation->public_id)
+            ->value('keyboard_snapshot');
+        self::assertIsString($submenuSnapshot);
+        $submenuKeyboard = json_decode($submenuSnapshot, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('📋 Copy help', $submenuKeyboard['rows'][0][0]['text']);
+        self::assertSame('HELP-CODE', $submenuKeyboard['rows'][0][0]['copy_text']);
+        self::assertSame(
+            trans('telegram.navigation.buttons.back', locale: 'en'),
+            $submenuKeyboard['rows'][1][0]['text'],
+        );
+
+        $backToken = $this->callbackToken('navigation.back', (int) $account->id);
+        $this->accept($this->callbackPayload(6147, $telegramUserId, $username, 'en', $backToken));
+        $this->processTelegramUpdateOrFail($processor, 6147);
+        self::assertSame(
+            TelegramNavigationEntryGateway::STATE,
+            DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', (int) $account->id)
+                ->value('state'),
+        );
+
+        $currentSession = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['public_id', 'version']);
+        self::assertNotNull($currentSession);
+        $callbacks = $this->app->make(TelegramInteractionCallbackService::class);
+
+        $nonSubmenuWithPayload = $callbacks->issue(
+            (string) $currentSession->public_id,
+            (int) $currentSession->version,
+            'navigation.my_account',
+            ['unexpected' => 'payload'],
+            'configured-submenu-invalid-home-payload-6148',
+        );
+        $this->accept($this->callbackPayload(
+            6148,
+            $telegramUserId,
+            $username,
+            'en',
+            $nonSubmenuWithPayload->token,
+        ));
+        try {
+            $processor->process('123456789', 6148);
+            self::fail('Non-submenu Home actions with payload must fail closed.');
+        } catch (RuntimeException) {
+            self::assertSame(
+                'failed',
+                DB::table('processed_telegram_updates')
+                    ->where('bot_id', '123456789')
+                    ->where('update_id', 6148)
+                    ->value('state'),
+            );
+        }
+
+        $malformedSubmenu = $callbacks->issue(
+            (string) $currentSession->public_id,
+            (int) $currentSession->version,
+            'navigation.menu.submenu',
+            ['menu_key' => 'submenu.help'],
+            'configured-submenu-malformed-payload-6149',
+        );
+        $this->accept($this->callbackPayload(
+            6149,
+            $telegramUserId,
+            $username,
+            'en',
+            $malformedSubmenu->token,
+        ));
+        try {
+            $processor->process('123456789', 6149);
+            self::fail('Malformed submenu Home payload must fail closed.');
+        } catch (RuntimeException) {
+            self::assertSame(
+                'failed',
+                DB::table('processed_telegram_updates')
+                    ->where('bot_id', '123456789')
+                    ->where('update_id', 6149)
+                    ->value('state'),
+            );
+        }
+    }
+
+    /** @requirement CNT-002 CNT-003 ACL-002 SEC-002 DAT-003 QUA-001 QUA-004 */
     public function test_admin_menu_configuration_create_preview_publish_and_rollback_use_canonical_version_authority(): void
     {
         $telegramUserId = 9613;
