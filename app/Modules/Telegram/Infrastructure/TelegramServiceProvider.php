@@ -30,6 +30,7 @@ use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorAccessNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
+use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorSearchNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorSearchService;
 use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseNavigationHandler;
@@ -173,6 +174,7 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAdministratorAccessNavigationHandler::class);
+        $this->app->singleton(TelegramAlternativePaymentReviewNavigationHandler::class);
         $this->app->singleton(TelegramAdministratorSearchNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);

@@ -60,10 +60,43 @@ Referral locked: :referral_locked',
             'buttons' => [
                 'access' => 'Access Control',
                 'global_search' => 'Cross-entity Search',
+                'payment_reviews' => 'Payment Reviews',
                 'customer_search' => 'Customer Search',
                 'usdt_rate' => 'USDT / NOWPayments rate',
                 'client_guides' => 'Client Guides',
                 'menus' => 'Menus & Buttons',
+            ],
+            'payment_reviews' => [
+                'list' => "Alternative Payment Reviews\n\n:items\n\nSelect a pending review. Every decision is authorized again at execution time.",
+                'empty' => "Alternative Payment Reviews\n\nNo pending C2C, Gift Card, or direct-USDT review is currently available.",
+                'item' => "#:number — :kind\nReview: :id\nSubject: :subject\nProvider: :provider\nReference: :reference\nAmount: :amount\nPrivate evidence: :private",
+                'detail' => "Payment Review\n\nKind: :kind\nReview: :id\nSubject: :subject\nProvider: :provider\nReference: :reference\nAmount: :amount\nPrivate evidence attached: :private\nC2C candidate reservations:\n:candidates\nRequired USDT confirmations: :confirmations\n\nApproval never bypasses canonical financial guards.",
+                'not_available' => 'Not available',
+                'yes' => 'Yes',
+                'no' => 'No',
+                'kinds' => [
+                    'c2c' => 'Card to card',
+                    'gift_card' => 'Gift Card',
+                    'usdt' => 'Direct USDT',
+                ],
+                'buttons' => [
+                    'open' => 'Open review #:number',
+                    'refresh' => 'Refresh',
+                    'approve' => 'Approve with evidence',
+                    'approve_candidate' => 'Approve C2C candidate #:number',
+                    'reject' => 'Reject',
+                ],
+                'input' => [
+                    'reject' => "Send the mandatory rejection reason. No other input is stored in session state.",
+                    'c2c' => "Send the mandatory C2C approval reason. The selected reservation and normalized bank evidence will be revalidated before capture.",
+                    'gift_card' => "Send: external_redemption_id | reason\n\nThe full Gift Card code is never requested or stored in Telegram session state. The canonical review service revalidates exact amount/type/provider evidence before settlement.",
+                    'usdt' => "Send: confirmations | transaction_time | reason\nExample: 20 | 2026-09-24T12:34:56+00:00 | Verified on BSC explorer\n\nThe stored TXID/network/destination/amount authority is revalidated before settlement.",
+                    'invalid' => 'The review input was invalid, stale, unauthorized, or failed a financial-authority check. No bypass was applied.',
+                ],
+                'notices' => [
+                    'changed' => 'The review decision was recorded through the canonical payment authority.',
+                    'stale' => 'The selected candidate/review changed. Fresh authority is shown; review it again.',
+                ],
             ],
             'menus' => [
                 'list' => 'Menu & Button Configuration

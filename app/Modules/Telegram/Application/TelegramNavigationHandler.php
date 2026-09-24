@@ -911,6 +911,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             && ! $this->administratorCustomerTargets->availableFor($action->userId)
             && ! $this->administratorSearchAvailableFor($action->userId)
             && ! $this->administratorAccess->availableForUser($action->userId)
+            && ! $this->administratorUsers->allowsUser($action->userId, \App\Modules\Payments\Application\AlternativePaymentReviewService::PERMISSION)
             && ! $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
             && ! $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $this->returnHome($action);
@@ -1128,6 +1129,24 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.access', $locale),
                 $access->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
+        if ($this->administratorUsers->allowsUser(
+            $action->userId,
+            \App\Modules\Payments\Application\AlternativePaymentReviewService::PERMISSION,
+        )) {
+            $paymentReviews = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAlternativePaymentReviewNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-payment-reviews:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.payment_reviews', $locale),
+                $paymentReviews->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }
