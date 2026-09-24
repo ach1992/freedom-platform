@@ -17,14 +17,14 @@ final readonly class TelegramInlineKeyboardSnapshot
 
     private const MAXIMUM_BYTES = 16_384;
 
-    /** @var list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton>> */
+    /** @var list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton>> */
     private array $rows;
 
     private string $json;
 
     private string $hash;
 
-    /** @param list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton>> $rows */
+    /** @param list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton>> $rows */
     public function __construct(array $rows)
     {
         if ($rows === [] || count($rows) > self::MAXIMUM_ROWS) {
@@ -38,7 +38,9 @@ final readonly class TelegramInlineKeyboardSnapshot
                 throw new InvalidArgumentException('Telegram inline keyboard rows must contain 1-8 buttons.');
             }
             foreach ($row as $button) {
-                if (! $button instanceof TelegramInlineCallbackButton && ! $button instanceof TelegramInlineHttpsUrlButton) {
+                if (! $button instanceof TelegramInlineCallbackButton
+                    && ! $button instanceof TelegramInlineHttpsUrlButton
+                    && ! $button instanceof TelegramInlineCopyTextButton) {
                     throw new InvalidArgumentException('Telegram inline keyboard contains an invalid button.');
                 }
                 if ($button instanceof TelegramInlineCallbackButton) {
@@ -57,7 +59,7 @@ final readonly class TelegramInlineKeyboardSnapshot
         $values = [
             'rows' => array_map(
                 static fn (array $row): array => array_map(
-                    static fn (TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton $button): array => $button->snapshot(),
+                    static fn (TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton $button): array => $button->snapshot(),
                     $row,
                 ),
                 $rows,
@@ -108,10 +110,13 @@ final readonly class TelegramInlineKeyboardSnapshot
                 }
 
                 $keys = array_keys($decodedButton);
-                if ($keys === ['text', 'callback_public_id', 'style']) {
+                if ($keys === ['text', 'callback_public_id', 'style']
+                    || $keys === ['text', 'callback_public_id', 'style', 'icon_custom_emoji_id']) {
                     if (! is_string($decodedButton['text'] ?? null)
                         || ! is_string($decodedButton['callback_public_id'] ?? null)
-                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)) {
+                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)
+                        || (array_key_exists('icon_custom_emoji_id', $decodedButton)
+                            && ! is_string($decodedButton['icon_custom_emoji_id']))) {
                         throw new InvalidArgumentException('Stored Telegram inline keyboard button is invalid.');
                     }
                     $style = $decodedButton['style'] === null
@@ -124,16 +129,20 @@ final readonly class TelegramInlineKeyboardSnapshot
                         $decodedButton['text'],
                         $decodedButton['callback_public_id'],
                         $style,
+                        $decodedButton['icon_custom_emoji_id'] ?? null,
                     );
 
                     continue;
                 }
 
-                if ($keys === ['text', 'https_url', 'https_url_purpose', 'style']) {
+                if ($keys === ['text', 'https_url', 'https_url_purpose', 'style']
+                    || $keys === ['text', 'https_url', 'https_url_purpose', 'style', 'icon_custom_emoji_id']) {
                     if (! is_string($decodedButton['text'] ?? null)
                         || ! is_string($decodedButton['https_url'] ?? null)
                         || ! is_string($decodedButton['https_url_purpose'] ?? null)
-                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)) {
+                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)
+                        || (array_key_exists('icon_custom_emoji_id', $decodedButton)
+                            && ! is_string($decodedButton['icon_custom_emoji_id']))) {
                         throw new InvalidArgumentException('Stored Telegram inline keyboard URL button is invalid.');
                     }
                     $purpose = TelegramInlineHttpsUrlPurpose::tryFrom($decodedButton['https_url_purpose']);
@@ -148,6 +157,32 @@ final readonly class TelegramInlineKeyboardSnapshot
                         $decodedButton['https_url'],
                         $purpose,
                         $style,
+                        $decodedButton['icon_custom_emoji_id'] ?? null,
+                    );
+
+                    continue;
+                }
+
+                if ($keys === ['text', 'copy_text', 'style']
+                    || $keys === ['text', 'copy_text', 'style', 'icon_custom_emoji_id']) {
+                    if (! is_string($decodedButton['text'] ?? null)
+                        || ! is_string($decodedButton['copy_text'] ?? null)
+                        || (! is_string($decodedButton['style'] ?? null) && ($decodedButton['style'] ?? null) !== null)
+                        || (array_key_exists('icon_custom_emoji_id', $decodedButton)
+                            && ! is_string($decodedButton['icon_custom_emoji_id']))) {
+                        throw new InvalidArgumentException('Stored Telegram inline keyboard copy-text button is invalid.');
+                    }
+                    $style = $decodedButton['style'] === null
+                        ? null
+                        : TelegramInlineButtonStyle::tryFrom($decodedButton['style']);
+                    if ($decodedButton['style'] !== null && $style === null) {
+                        throw new InvalidArgumentException('Stored Telegram inline keyboard copy-text button style is invalid.');
+                    }
+                    $row[] = new TelegramInlineCopyTextButton(
+                        $decodedButton['text'],
+                        $decodedButton['copy_text'],
+                        $style,
+                        $decodedButton['icon_custom_emoji_id'] ?? null,
                     );
 
                     continue;
@@ -166,7 +201,7 @@ final readonly class TelegramInlineKeyboardSnapshot
         return $snapshot;
     }
 
-    /** @return list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton>> */
+    /** @return list<list<TelegramInlineCallbackButton|TelegramInlineHttpsUrlButton|TelegramInlineCopyTextButton>> */
     public function rows(): array
     {
         return $this->rows;

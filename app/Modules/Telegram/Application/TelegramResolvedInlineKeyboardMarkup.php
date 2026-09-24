@@ -38,7 +38,7 @@ final class TelegramResolvedInlineKeyboardMarkup implements Stringable
         return new self($snapshot, $callbackDataByPublicId);
     }
 
-    /** @return array{inline_keyboard:list<list<array<string,string>>>} */
+    /** @return array{inline_keyboard:list<list<array<string,mixed>>>} */
     public function providerPayload(): array
     {
         $rows = [];
@@ -55,11 +55,19 @@ final class TelegramResolvedInlineKeyboardMarkup implements Stringable
                         'text' => $button->text,
                         'url' => $button->url,
                     ];
+                } elseif ($button instanceof TelegramInlineCopyTextButton) {
+                    $providerButton = [
+                        'text' => $button->text,
+                        'copy_text' => ['text' => $button->copyText],
+                    ];
                 } else {
                     throw new LogicException('Telegram inline keyboard contains an unsupported resolved button type.');
                 }
                 if ($button->style !== null) {
                     $providerButton['style'] = $button->style->value;
+                }
+                if ($button->iconCustomEmojiId !== null) {
+                    $providerButton['icon_custom_emoji_id'] = $button->iconCustomEmojiId;
                 }
                 $providerRow[] = $providerButton;
             }

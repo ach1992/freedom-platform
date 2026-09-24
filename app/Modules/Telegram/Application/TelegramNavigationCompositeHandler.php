@@ -21,6 +21,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramBroadcastNavigationResolver $broadcastResolver,
         private TelegramClientGuideNavigationHandler $clientGuides,
+        private TelegramMenuConfigurationNavigationHandler $menuConfiguration,
         private TelegramAgentBulkPurchaseNavigationHandler $agentBulk,
         private TelegramAgentNavigationHandler $agent,
         private TelegramTrialNavigationHandler $trial,
@@ -51,6 +52,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->clientGuides->supports($action)) {
             $this->clientGuides->handle($action);
+
+            return;
+        }
+        if ($this->menuConfiguration->supports($action)) {
+            $this->menuConfiguration->handle($action);
 
             return;
         }

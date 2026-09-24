@@ -99,6 +99,9 @@ final class NonRestrictedTelegramPresentationProvenanceTest extends TestCase
         self::assertIsArray($architecture);
         self::assertSame($runtimeSources, $architecture['telegram_non_restricted_presentation_sources'] ?? null);
 
+        $menuConfiguration = 'app/Modules/Telegram/Application/TelegramMenuConfigurationNavigationHandler.php';
+        self::assertContains($menuConfiguration, $runtimeSources);
+
         $entryGateway = 'app/Modules/Telegram/Application/TelegramNavigationEntryGateway.php';
         self::assertContains($entryGateway, $runtimeSources);
         self::assertNotContains('app/Modules/Telegram/Application/TelegramInteractionDispatcher.php', $runtimeSources);

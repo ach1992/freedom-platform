@@ -17,7 +17,21 @@ return [
             'agent_status' => 'وضعیت درخواست همکاری',
             'agent_menu' => 'منوی نماینده',
             'admin' => 'مدیریت',
+            'referral' => 'دعوت دوستان',
             'back' => 'بازگشت',
+        ],
+        'menu' => [
+            'submenu' => 'منو: :title
+
+یکی از گزینه‌های زیر را انتخاب کنید.',
+        ],
+        'referral' => [
+            'view' => 'دعوت دوستان
+
+کد معرفی شما: :referral_token
+لینک معرفی شما: :referral_link
+معرف ثبت شده: :has_inviter
+وضعیت قفل معرفی: :referral_locked',
         ],
         'account' => [
             'view' => "حساب من\n\nشناسه حساب: :public_id\nنوع حساب: :account_type\nوضعیت: :account_status\nسطح: :tier\nتأیید تلفن: :phone_verification\nتأیید هویت: :identity_verification\nاطلاعات هویتی:\n:identity_items\nتاریخ عضویت: :joined_at\nآخرین مشاهده: :last_seen_at\n\nکیف پول\nموجودی قابل استفاده نقدی: :cash_available ریال\nمبلغ در حال نگهداری: :cash_holds ریال\nموجودی تشویقی قابل استفاده: :promotional_available ریال\n\nمعرفی\nکد معرفی شما: :referral_token\nلینک معرفی شما: :referral_link\nمعرف ثبت شده: :has_inviter\nوضعیت قفل معرفی: :referral_locked",
@@ -49,6 +63,42 @@ return [
                 'customer_search' => 'جستجوی مشتری',
                 'usdt_rate' => 'نرخ USDT / NOWPayments',
                 'client_guides' => 'اپلیکیشن‌ها و راهنماها',
+                'menus' => 'منوها و دکمه‌ها',
+            ],
+            'menus' => [
+                'list' => 'مدیریت منوها و دکمه‌ها
+
+منوی انتخاب‌شده: :selected
+
+:items
+
+نسخه‌ها ابتدا فقط پیش‌نمایش می‌شوند و تا زمان انتشار روی کاربران اثر ندارند.',
+                'item' => ':menu_key — نسخه فعال :version — نسل انتشار :generation',
+                'none' => 'هنوز نسخه‌ای ساخته نشده است.',
+                'not_selected' => 'انتخاب نشده',
+                'version_button' => 'پیش‌نمایش نسخه :version',
+                'create_button' => 'ساخت نسخه جدید',
+                'publish_button' => 'انتشار این نسخه',
+                'rollback_button' => 'بازگشت به این نسخه',
+                'changed' => 'نسخه انتخاب‌شده با موفقیت فعال شد.',
+                'stale' => 'نسخه فعال در این فاصله تغییر کرده است. وضعیت تازه نمایش داده شد؛ دوباره نسخه موردنظر را بررسی کنید.',
+                'editor' => 'ساخت نسخه منو
+
+یک JSON معتبر مطابق الگوی زیر ارسال کنید. actionها فقط از allowlist امن پذیرفته می‌شوند. برای premium emoji وجود normal_emoji الزامی است. ردیف 9 برای کنترل‌های بازگشت/انتشار رزرو شده است.
+
+:example',
+                'invalid' => 'تعریف ارسال‌شده معتبر نیست یا یکی از محدودیت‌های ایمنی منو را نقض می‌کند. هیچ نسخه‌ای ساخته نشد.',
+                'preview' => 'پیش‌نمایش منو
+
+کلید: :menu_key
+نسخه: :version
+نسل انتشار فعلی: :generation
+تعداد آیتم‌ها: :items
+فعال: :active
+
+دکمه‌های پیش‌نمایش عمداً هیچ action واقعی اجرا نمی‌کنند.',
+                'yes' => 'بله',
+                'no' => 'خیر',
             ],
             'access' => [
                 'menu' => "مدیریت دسترسی\n\nهویت مدیران، نقش‌ها، override مجوزها، تأییدهای حساس و انتقال مالکیت از authority اصلی AccessControl مدیریت می‌شوند. هر تغییر هنگام اجرا دوباره مجوزسنجی می‌شود.",
