@@ -11,6 +11,7 @@ use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
 use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
+use App\Modules\Payments\Presentation\Console\AlternativePaymentMaintenanceCommand;
 use App\Modules\Payments\Presentation\Console\PurchasePaymentMaintenanceCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceAutoRenewalsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceNotificationsCommand;
@@ -54,6 +55,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ProcessServiceNotificationsCommand::class,
         ProcessServiceSynchronizationsCommand::class,
         RecordWorkerHeartbeatCommand::class,
+        AlternativePaymentMaintenanceCommand::class,
         PurchasePaymentMaintenanceCommand::class,
         ProcessTelegramBroadcastsCommand::class,
         WalletMaintenanceCommand::class,
