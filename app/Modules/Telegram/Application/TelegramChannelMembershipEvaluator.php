@@ -6,6 +6,7 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use Closure;
 use DomainException;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
@@ -15,8 +16,8 @@ final readonly class TelegramChannelMembershipEvaluator
     public function __construct(
         private DatabaseManager $database,
         private TelegramChannelMembershipRuleResolver $resolver,
-        private TelegramMembershipLookup $membershipLookup,
-        private ProtectedTelegramDeliveryRuntime $runtime,
+        private TelegramMembershipLookup|Closure $membershipLookup,
+        private ProtectedTelegramDeliveryRuntime|Closure $runtime,
     ) {}
 
     /** @requirement ONB-003 CHN-001 SEC-001 SEC-003 QUA-001 */
@@ -43,7 +44,7 @@ final readonly class TelegramChannelMembershipEvaluator
                     'telegram_membership_channel_inactive',
                 );
             } else {
-                $lookup = $this->membershipLookup->lookup($channel->telegramChatId, $telegramUserId);
+                $lookup = $this->membershipLookup()->lookup($channel->telegramChatId, $telegramUserId);
             }
 
             $evidence[] = new TelegramChannelMembershipChannelEvidence(
@@ -77,10 +78,38 @@ final readonly class TelegramChannelMembershipEvaluator
         );
     }
 
+    private function membershipLookup(): TelegramMembershipLookup
+    {
+        if ($this->membershipLookup instanceof TelegramMembershipLookup) {
+            return $this->membershipLookup;
+        }
+
+        $lookup = ($this->membershipLookup)();
+        if (! $lookup instanceof TelegramMembershipLookup) {
+            throw new RuntimeException('Telegram membership lookup resolver is invalid.');
+        }
+
+        return $lookup;
+    }
+
+    private function runtime(): ProtectedTelegramDeliveryRuntime
+    {
+        if ($this->runtime instanceof ProtectedTelegramDeliveryRuntime) {
+            return $this->runtime;
+        }
+
+        $runtime = ($this->runtime)();
+        if (! $runtime instanceof ProtectedTelegramDeliveryRuntime) {
+            throw new RuntimeException('Telegram delivery runtime resolver is invalid.');
+        }
+
+        return $runtime;
+    }
+
     /** @return array{id:int,telegram_user_id:int} */
     private function telegramAccount(int $userId): array
     {
-        $botId = $this->runtime->botId();
+        $botId = $this->runtime()->botId();
         if (filter_var($botId, FILTER_VALIDATE_INT) === false || (int) $botId < 1) {
             throw new RuntimeException('Telegram membership evaluation bot identity is invalid.');
         }

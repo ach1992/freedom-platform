@@ -301,8 +301,8 @@ final class TelegramServiceProvider extends ServiceProvider
             fn (Application $application): TelegramChannelMembershipEvaluator => new TelegramChannelMembershipEvaluator(
                 $application->make(DatabaseManager::class),
                 $application->make(TelegramChannelMembershipRuleResolver::class),
-                $application->make(TelegramMembershipLookup::class),
-                $application->make(ProtectedTelegramDeliveryRuntime::class),
+                fn (): TelegramMembershipLookup => $application->make(TelegramMembershipLookup::class),
+                fn (): ProtectedTelegramDeliveryRuntime => $application->make(ProtectedTelegramDeliveryRuntime::class),
             ),
         );
         $this->app->singleton(
