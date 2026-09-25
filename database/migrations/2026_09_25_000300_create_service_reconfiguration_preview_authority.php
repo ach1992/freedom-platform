@@ -35,7 +35,9 @@ return new class extends Migration
             $table->foreign('target_route_selection_id', 'srp_target_route_fk')
                 ->references('id')->on('plan_offering_route_selections')->restrictOnDelete();
             $table->foreignId('target_service_target_id')->constrained('panel_service_targets')->restrictOnDelete();
+            $table->unsignedBigInteger('target_service_target_version');
             $table->foreignId('target_protocol_profile_id')->constrained('panel_protocol_profiles')->restrictOnDelete();
+            $table->unsignedBigInteger('target_protocol_profile_version');
             $table->unsignedBigInteger('target_capacity_reservation_id')->unique('srp_target_capacity_uq');
             $table->foreign('target_capacity_reservation_id', 'srp_target_capacity_fk')
                 ->references('id')->on('panel_capacity_reservations')->restrictOnDelete();
@@ -57,7 +59,7 @@ return new class extends Migration
 
         foreach ([
             "ALTER TABLE service_reconfiguration_previews ADD CONSTRAINT srp_hashes_chk CHECK (request_key_hash REGEXP '^[0-9a-f]{64}$' AND payload_hash REGEXP '^[0-9a-f]{64}$')",
-            'ALTER TABLE service_reconfiguration_previews ADD CONSTRAINT srp_generation_chk CHECK (source_remote_identity_generation >= 1 AND source_lifecycle_version >= 0 AND source_mutation_generation >= 0)',
+            'ALTER TABLE service_reconfiguration_previews ADD CONSTRAINT srp_generation_chk CHECK (source_remote_identity_generation >= 1 AND source_lifecycle_version >= 0 AND source_mutation_generation >= 0 AND target_service_target_version >= 1 AND target_protocol_profile_version >= 1)',
             'ALTER TABLE service_reconfiguration_previews ADD CONSTRAINT srp_change_chk CHECK (changes_plan = 1 OR changes_target = 1 OR changes_protocol = 1)',
             'ALTER TABLE service_reconfiguration_previews ADD CONSTRAINT srp_price_chk CHECK (total_price_irr = price_difference_irr + operation_fee_irr)',
             "ALTER TABLE service_reconfiguration_previews ADD CONSTRAINT srp_state_chk CHECK (state = 'previewed')",
@@ -103,6 +105,7 @@ BEGIN
     INNER JOIN plan_offering_route_selections target_selection ON target_selection.id = NEW.target_route_selection_id
     INNER JOIN panel_capacity_reservations reservation ON reservation.id = NEW.target_capacity_reservation_id
     INNER JOIN panel_target_capacities capacity ON capacity.id = reservation.panel_target_capacity_id
+    INNER JOIN panel_service_targets source_target ON source_target.id = NEW.source_service_target_id
     INNER JOIN panel_service_targets target_row ON target_row.id = NEW.target_service_target_id
     INNER JOIN panel_protocol_profiles profile_row ON profile_row.id = NEW.target_protocol_profile_id
     WHERE user_row.id = NEW.actor_user_id
@@ -121,9 +124,12 @@ BEGIN
       AND reservation.expires_at = NEW.expires_at
       AND capacity.panel_service_target_id = NEW.target_service_target_id
       AND capacity.state = 'enabled'
+      AND source_target.panel_connection_id = target_row.panel_connection_id
       AND target_row.state = 'active'
       AND target_row.capability_status = 'verified'
-      AND profile_row.state = 'active';
+      AND target_row.version = NEW.target_service_target_version
+      AND profile_row.state = 'active'
+      AND profile_row.version = NEW.target_protocol_profile_version;
 
     SET expected_price_difference = GREATEST(
         (SELECT base_price_irr FROM plan_offerings WHERE id = NEW.target_plan_offering_id)
@@ -153,6 +159,15 @@ BEGIN
        OR expected_source_offering IS NULL
        OR NEW.source_plan_offering_id <> expected_source_offering
        OR NOT (NEW.source_protocol_profile_id <=> expected_source_profile)
+       OR (NEW.source_route_selection_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM plan_offering_route_selections source_selection
+            INNER JOIN panel_capacity_reservations source_reservation ON source_reservation.id = source_selection.capacity_reservation_id
+            WHERE source_selection.id = NEW.source_route_selection_id
+              AND source_selection.selected_service_target_id = NEW.source_service_target_id
+              AND source_reservation.state = 'committed'
+              AND source_reservation.units = 1
+       ))
        OR NEW.changes_plan <> (NEW.source_plan_offering_id <> NEW.target_plan_offering_id)
        OR NEW.changes_target <> (NEW.source_service_target_id <> NEW.target_service_target_id)
        OR NEW.changes_protocol <> NOT (NEW.source_protocol_profile_id <=> NEW.target_protocol_profile_id)

@@ -26,7 +26,9 @@ use Illuminate\Database\Connection;
  *   source_route_selection_id:?int,
  *   target_route_selection_id:int,
  *   target_service_target_id:int,
+ *   target_service_target_version:int,
  *   target_protocol_profile_id:int,
+ *   target_protocol_profile_version:int,
  *   price_difference_irr:int,
  *   operation_fee_irr:int,
  *   total_price_irr:int,
@@ -46,10 +48,12 @@ trait QuoteServiceServiceReconfigurations
         ServiceReconfigurationQuoteContext $context,
         DateTimeImmutable $quoteExpiresAt,
     ): array {
-        /** @var object{id:int|string,public_id:string,actor_user_id:int|string,service_subscription_id:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,source_remote_identity_generation:int|string,source_lifecycle_version:int|string,source_mutation_generation:int|string,target_plan_offering_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_protocol_profile_id:int|string,target_capacity_reservation_id:int|string,changes_plan:int|bool,changes_target:int|bool,changes_protocol:int|bool,price_difference_irr:int|string,operation_fee_irr:int|string,total_price_irr:int|string,discount_eligible:int|bool,state:string,expires_at:string,service_public_id:string,service_user_id:int|string,service_route_selection_id:int|string|null,service_target_id:int|string|null,service_remote_identity_generation:int|string,service_lifecycle_version:int|string,service_mutation_generation:int|string,service_lifecycle_state:string,service_remote_deleted_at:?string,service_provisioned_at:?string,reservation_state:string,reservation_expires_at:string}|null $preview */
+        /** @var object{id:int|string,public_id:string,actor_user_id:int|string,service_subscription_id:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,source_remote_identity_generation:int|string,source_lifecycle_version:int|string,source_mutation_generation:int|string,target_plan_offering_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,changes_plan:int|bool,changes_target:int|bool,changes_protocol:int|bool,price_difference_irr:int|string,operation_fee_irr:int|string,total_price_irr:int|string,discount_eligible:int|bool,state:string,expires_at:string,service_public_id:string,service_user_id:int|string,service_route_selection_id:int|string|null,service_target_id:int|string|null,service_remote_identity_generation:int|string,service_lifecycle_version:int|string,service_mutation_generation:int|string,service_lifecycle_state:string,service_remote_deleted_at:?string,service_provisioned_at:?string,reservation_state:string,reservation_expires_at:string}|null $preview */
         $preview = $connection->table('service_reconfiguration_previews as preview')
             ->join('service_subscriptions as service', 'service.id', '=', 'preview.service_subscription_id')
             ->join('panel_capacity_reservations as reservation', 'reservation.id', '=', 'preview.target_capacity_reservation_id')
+            ->join('panel_service_targets as target_inventory', 'target_inventory.id', '=', 'preview.target_service_target_id')
+            ->join('panel_protocol_profiles as target_profile', 'target_profile.id', '=', 'preview.target_protocol_profile_id')
             ->where('preview.public_id', $context->previewPublicId)
             ->lockForUpdate()
             ->first([
@@ -57,7 +61,8 @@ trait QuoteServiceServiceReconfigurations
                 'preview.source_route_selection_id', 'preview.source_service_target_id',
                 'preview.source_remote_identity_generation', 'preview.source_lifecycle_version', 'preview.source_mutation_generation',
                 'preview.target_plan_offering_id', 'preview.target_route_selection_id', 'preview.target_service_target_id',
-                'preview.target_protocol_profile_id', 'preview.target_capacity_reservation_id',
+                'preview.target_service_target_version', 'preview.target_protocol_profile_id', 'preview.target_protocol_profile_version',
+                'preview.target_capacity_reservation_id',
                 'preview.changes_plan', 'preview.changes_target', 'preview.changes_protocol',
                 'preview.price_difference_irr', 'preview.operation_fee_irr', 'preview.total_price_irr',
                 'preview.discount_eligible', 'preview.state', 'preview.expires_at',
@@ -83,6 +88,8 @@ trait QuoteServiceServiceReconfigurations
             || $quoteExpiresAt > $previewExpiresAt
             || $preview->reservation_state !== 'held'
             || $reservationExpiresAt < $quoteExpiresAt
+            || (int) $this->database->connection()->table('panel_service_targets')->where('id', (int) $preview->target_service_target_id)->value('version') !== (int) $preview->target_service_target_version
+            || (int) $this->database->connection()->table('panel_protocol_profiles')->where('id', (int) $preview->target_protocol_profile_id)->value('version') !== (int) $preview->target_protocol_profile_version
             || $preview->service_provisioned_at === null
             || $preview->service_remote_deleted_at !== null
             || ! in_array($preview->service_lifecycle_state, ['active', 'suspended'], true)
@@ -112,7 +119,9 @@ trait QuoteServiceServiceReconfigurations
             'source_route_selection_id' => $preview->source_route_selection_id === null ? null : $this->positiveDatabaseInt($preview->source_route_selection_id, 'Service reconfiguration source route selection ID'),
             'target_route_selection_id' => $this->positiveDatabaseInt($preview->target_route_selection_id, 'Service reconfiguration target route selection ID'),
             'target_service_target_id' => $this->positiveDatabaseInt($preview->target_service_target_id, 'Service reconfiguration target service target ID'),
+            'target_service_target_version' => $this->positiveDatabaseInt($preview->target_service_target_version, 'Service reconfiguration target service target version'),
             'target_protocol_profile_id' => $this->positiveDatabaseInt($preview->target_protocol_profile_id, 'Service reconfiguration target protocol profile ID'),
+            'target_protocol_profile_version' => $this->positiveDatabaseInt($preview->target_protocol_profile_version, 'Service reconfiguration target protocol profile version'),
             'price_difference_irr' => $this->nonNegativeDatabaseInt($preview->price_difference_irr, 'Service reconfiguration price difference'),
             'operation_fee_irr' => $this->nonNegativeDatabaseInt($preview->operation_fee_irr, 'Service reconfiguration operation fee'),
             'total_price_irr' => $totalPrice,

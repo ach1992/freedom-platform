@@ -116,6 +116,8 @@ BEGIN
         INNER JOIN plan_offerings target_offering ON target_offering.id = preview_row.target_plan_offering_id
         INNER JOIN plan_offering_route_selections target_selection ON target_selection.id = preview_row.target_route_selection_id
         INNER JOIN panel_capacity_reservations reservation_row ON reservation_row.id = preview_row.target_capacity_reservation_id
+        INNER JOIN panel_service_targets target_inventory ON target_inventory.id = preview_row.target_service_target_id
+        INNER JOIN panel_protocol_profiles target_profile ON target_profile.id = preview_row.target_protocol_profile_id
         WHERE preview_row.id = NEW.service_reconfiguration_preview_id
           AND BINARY preview_row.public_id = BINARY NEW.service_reconfiguration_preview_public_id
           AND preview_row.actor_user_id = NEW.user_id
@@ -128,7 +130,9 @@ BEGIN
           AND preview_row.target_plan_offering_id = NEW.plan_offering_id
           AND preview_row.target_route_selection_id = NEW.service_target_route_selection_id_snapshot
           AND preview_row.target_service_target_id = NEW.service_target_service_target_id_snapshot
+          AND preview_row.target_service_target_version = NEW.service_target_service_target_version_snapshot
           AND preview_row.target_protocol_profile_id = NEW.service_target_protocol_profile_id_snapshot
+          AND preview_row.target_protocol_profile_version = NEW.service_target_protocol_profile_version_snapshot
           AND preview_row.total_price_irr = NEW.base_price_irr
           AND preview_row.discount_eligible = NEW.offering_discount_eligible
           AND preview_row.state = 'previewed'
@@ -153,7 +157,12 @@ BEGIN
           AND target_selection.panel_protocol_profile_id = preview_row.target_protocol_profile_id
           AND target_selection.capacity_reservation_id = preview_row.target_capacity_reservation_id
           AND reservation_row.state = 'held'
-          AND reservation_row.expires_at >= NEW.expires_at;
+          AND reservation_row.expires_at >= NEW.expires_at
+          AND target_inventory.state = 'active'
+          AND target_inventory.capability_status = 'verified'
+          AND target_inventory.version = preview_row.target_service_target_version
+          AND target_profile.state = 'active'
+          AND target_profile.version = preview_row.target_protocol_profile_version;
         IF valid_reconfiguration_count <> 1 THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service reconfiguration Quote authority is stale or invalid.';
         END IF;

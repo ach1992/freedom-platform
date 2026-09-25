@@ -29,7 +29,8 @@ use RuntimeException;
  *     service_package_code_snapshot:string|null, service_package_type_snapshot:string|null, service_package_duration_days_snapshot:int|string|null,
  *     service_package_data_bytes_snapshot:int|string|null, service_required_capability_code_snapshot:string|null, service_mutation_generation_snapshot:int|string|null,
  *     service_reconfiguration_preview_id:int|string|null, service_reconfiguration_preview_public_id:string|null, service_source_route_selection_id_snapshot:int|string|null,
- *     service_target_route_selection_id_snapshot:int|string|null, service_target_service_target_id_snapshot:int|string|null, service_target_protocol_profile_id_snapshot:int|string|null,
+ *     service_target_route_selection_id_snapshot:int|string|null, service_target_service_target_id_snapshot:int|string|null, service_target_service_target_version_snapshot:int|string|null,
+ *     service_target_protocol_profile_id_snapshot:int|string|null, service_target_protocol_profile_version_snapshot:int|string|null,
  *     valid_from:string, expires_at:string
  * }
  */
@@ -102,7 +103,8 @@ trait QuoteServiceReadsQuotes
             'service_mutation_generation_snapshot', 'service_reconfiguration_preview_id',
             'service_reconfiguration_preview_public_id', 'service_source_route_selection_id_snapshot',
             'service_target_route_selection_id_snapshot', 'service_target_service_target_id_snapshot',
-            'service_target_protocol_profile_id_snapshot', 'valid_from', 'expires_at',
+            'service_target_service_target_version_snapshot', 'service_target_protocol_profile_id_snapshot',
+            'service_target_protocol_profile_version_snapshot', 'valid_from', 'expires_at',
         ];
     }
 
@@ -239,7 +241,9 @@ trait QuoteServiceReadsQuotes
             || $row->service_reconfiguration_preview_public_id === null
             || $row->service_target_route_selection_id_snapshot === null
             || $row->service_target_service_target_id_snapshot === null
-            || $row->service_target_protocol_profile_id_snapshot === null) {
+            || $row->service_target_service_target_version_snapshot === null
+            || $row->service_target_protocol_profile_id_snapshot === null
+            || $row->service_target_protocol_profile_version_snapshot === null) {
             throw new RuntimeException('Stored Service reconfiguration Quote binding is incomplete.');
         }
         /** @var object{price_difference_irr:int|string,operation_fee_irr:int|string,total_price_irr:int|string,changes_plan:int|bool,changes_target:int|bool,changes_protocol:int|bool}|null $preview */
@@ -263,7 +267,9 @@ trait QuoteServiceReadsQuotes
             $row->service_source_route_selection_id_snapshot === null ? null : $this->positiveDatabaseInt($row->service_source_route_selection_id_snapshot, 'Quote source route selection ID'),
             $this->positiveDatabaseInt($row->service_target_route_selection_id_snapshot, 'Quote target route selection ID'),
             $this->positiveDatabaseInt($row->service_target_service_target_id_snapshot, 'Quote target Service target ID'),
+            $this->positiveDatabaseInt($row->service_target_service_target_version_snapshot, 'Quote target Service target version'),
             $this->positiveDatabaseInt($row->service_target_protocol_profile_id_snapshot, 'Quote target protocol profile ID'),
+            $this->positiveDatabaseInt($row->service_target_protocol_profile_version_snapshot, 'Quote target protocol profile version'),
             $this->nonNegativeDatabaseInt($preview->price_difference_irr, 'Quote reconfiguration price difference'),
             $this->nonNegativeDatabaseInt($preview->operation_fee_irr, 'Quote reconfiguration operation fee'),
             $this->nonNegativeDatabaseInt($preview->total_price_irr, 'Quote reconfiguration total price'),

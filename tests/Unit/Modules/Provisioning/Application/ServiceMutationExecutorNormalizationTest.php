@@ -50,7 +50,7 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         self::assertIsInt($preflight);
         self::assertIsInt($claim);
         self::assertLessThan($claim, $preflight);
-        self::assertSame(4, substr_count($source, '$this->assertProviderCallOutsideTransaction();'));
+        self::assertSame(5, substr_count($source, '$this->assertProviderCallOutsideTransaction();'), 'Reconfiguration adds a post-effect authoritative verification lookup outside the DB transaction.');
     }
 
     public function test_stale_provider_boundary_is_fail_closed_without_entering_remote_effect(): void
@@ -70,6 +70,14 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         self::assertStringContainsString('PanelOperationOutcome::Success => ProvisioningState::Succeeded', $source);
         self::assertStringContainsString('PanelOperationOutcome::DefinitiveFailure => ProvisioningState::FailedFinal', $source);
         self::assertStringContainsString('PanelOperationOutcome::RetryableFailure, PanelOperationOutcome::UncertainResult => ProvisioningState::UncertainRemoteResult', $source);
+    }
+
+    public function test_reconfiguration_cannot_bypass_captured_purchase_authority_through_manual_queue(): void
+    {
+        $source = $this->classSource(ServiceMutationQueueService::class);
+
+        self::assertStringContainsString('if ($type->isPaidCommercialMutation())', $source);
+        self::assertStringContainsString('Paid Service commercial mutations require captured purchase authority.', $source);
     }
 
     public function test_uncertain_and_review_states_remain_unresolved_queue_blockers(): void

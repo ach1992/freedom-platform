@@ -326,7 +326,9 @@ trait QuoteServiceCreatesQuotes
                         'service_source_route_selection_id_snapshot' => $serviceReconfiguration['source_route_selection_id'],
                         'service_target_route_selection_id_snapshot' => $serviceReconfiguration['target_route_selection_id'],
                         'service_target_service_target_id_snapshot' => $serviceReconfiguration['target_service_target_id'],
+                        'service_target_service_target_version_snapshot' => $serviceReconfiguration['target_service_target_version'],
                         'service_target_protocol_profile_id_snapshot' => $serviceReconfiguration['target_protocol_profile_id'],
+                        'service_target_protocol_profile_version_snapshot' => $serviceReconfiguration['target_protocol_profile_version'],
                     ];
                 }
 

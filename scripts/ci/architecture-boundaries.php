@@ -659,6 +659,7 @@ return [
         'service_notification_preference_histories' => 'Provisioning',
         'service_notification_preferences' => 'Provisioning',
         'service_reconfiguration_previews' => 'Provisioning',
+        'service_reconfiguration_authorities' => 'Provisioning',
         'service_notification_scan_cursor' => 'Provisioning',
         'service_notification_states' => 'Provisioning',
         'service_operational_authority_capability' => 'Provisioning',

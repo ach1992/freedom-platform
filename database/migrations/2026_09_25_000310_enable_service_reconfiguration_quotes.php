@@ -104,7 +104,9 @@ return new class extends Migration
                 $table->unsignedBigInteger('service_source_route_selection_id_snapshot')->nullable()->after('service_reconfiguration_preview_public_id');
                 $table->unsignedBigInteger('service_target_route_selection_id_snapshot')->nullable()->after('service_source_route_selection_id_snapshot');
                 $table->unsignedBigInteger('service_target_service_target_id_snapshot')->nullable()->after('service_target_route_selection_id_snapshot');
-                $table->unsignedBigInteger('service_target_protocol_profile_id_snapshot')->nullable()->after('service_target_service_target_id_snapshot');
+                $table->unsignedBigInteger('service_target_service_target_version_snapshot')->nullable()->after('service_target_service_target_id_snapshot');
+                $table->unsignedBigInteger('service_target_protocol_profile_id_snapshot')->nullable()->after('service_target_service_target_version_snapshot');
+                $table->unsignedBigInteger('service_target_protocol_profile_version_snapshot')->nullable()->after('service_target_protocol_profile_id_snapshot');
             });
         }
         foreach ($this->reconfigurationColumns() as $column) {
@@ -143,7 +145,9 @@ return new class extends Migration
             'service_source_route_selection_id_snapshot',
             'service_target_route_selection_id_snapshot',
             'service_target_service_target_id_snapshot',
+            'service_target_service_target_version_snapshot',
             'service_target_protocol_profile_id_snapshot',
+            'service_target_protocol_profile_version_snapshot',
         ];
     }
 
@@ -169,7 +173,9 @@ return new class extends Migration
         AND `service_source_route_selection_id_snapshot` IS NULL
         AND `service_target_route_selection_id_snapshot` IS NULL
         AND `service_target_service_target_id_snapshot` IS NULL
-        AND `service_target_protocol_profile_id_snapshot` IS NULL)
+        AND `service_target_service_target_version_snapshot` IS NULL
+        AND `service_target_protocol_profile_id_snapshot` IS NULL
+        AND `service_target_protocol_profile_version_snapshot` IS NULL)
     OR
     (`action_snapshot` IN ('renew','add_data','add_days','add_data_days')
         AND `service_subscription_id` IS NOT NULL
@@ -211,7 +217,9 @@ return new class extends Migration
         AND `service_reconfiguration_preview_public_id` IS NOT NULL
         AND `service_target_route_selection_id_snapshot` IS NOT NULL
         AND `service_target_service_target_id_snapshot` IS NOT NULL
-        AND `service_target_protocol_profile_id_snapshot` IS NOT NULL)
+        AND `service_target_service_target_version_snapshot` >= 1
+        AND `service_target_protocol_profile_id_snapshot` IS NOT NULL
+        AND `service_target_protocol_profile_version_snapshot` >= 1)
 )
 SQL;
     }

@@ -22,7 +22,9 @@ use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
+use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuotePricingInput;
+use App\Modules\Orders\Application\QuoteReceipt;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Application\ServiceReconfigurationQuoteContext;
 use App\Modules\Orders\Domain\QuoteAction;
@@ -31,19 +33,33 @@ use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
 use App\Modules\Panels\Application\PanelCredentialPolicy;
+use App\Modules\Payments\Application\Contracts\PaymentEvidence;
+use App\Modules\Payments\Application\Contracts\PaymentEvidenceAuthority;
+use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
+use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
+use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
+use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\PurchaseSettlementReceipt;
+use App\Modules\Payments\Application\PurchaseSettlementService;
+use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceBatchGrantService;
 use App\Modules\Provisioning\Application\ServiceImportReceipt;
 use App\Modules\Provisioning\Application\ServiceImportService;
+use App\Modules\Provisioning\Application\ServiceMutationExecutor;
 use App\Modules\Provisioning\Application\ServiceOperationalAuthorityGuard;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Application\ServiceOwnershipTransferService;
+use App\Modules\Provisioning\Application\ServicePurchaseMutationQueueService;
 use App\Modules\Provisioning\Application\ServiceReconfigurationPreviewService;
 use App\Modules\Provisioning\Application\ServiceRepairService;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
+use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
+use App\Shared\Domain\Money;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Migrations\Migration;
@@ -670,7 +686,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 null,
                 null,
                 0,
-                $first->expiresAt->modify('-1 minute'),
+                (new \DateTimeImmutable($first->expiresAt))->modify('-1 minute'),
             ),
             'service-reconfiguration-quote-correlation',
             null,
@@ -698,7 +714,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 null,
                 null,
                 0,
-                $first->expiresAt->modify('-1 minute'),
+                (new \DateTimeImmutable($first->expiresAt))->modify('-1 minute'),
             ),
             'service-reconfiguration-quote-correlation',
             null,
@@ -719,7 +735,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                     null,
                     null,
                     0,
-                    $first->expiresAt->modify('-2 minutes'),
+                    (new \DateTimeImmutable($first->expiresAt))->modify('-2 minutes'),
                 ),
                 'service-reconfiguration-quote-second',
                 null,
@@ -733,12 +749,12 @@ final class ServiceOperationalAuthorityTest extends TestCase
 
         $stored = DB::table('service_reconfiguration_previews')
             ->where('public_id', $first->previewPublicId)
-            ->first(['target_route_selection_id', 'capacity_reservation_id', 'state', 'request_key_hash', 'payload_hash']);
+            ->first(['target_route_selection_id', 'target_capacity_reservation_id', 'state', 'request_key_hash', 'payload_hash']);
         self::assertNotNull($stored);
         self::assertSame('previewed', $stored->state);
         self::assertSame(hash('sha256', $requestKey), $stored->request_key_hash);
         self::assertSame(64, strlen((string) $stored->payload_hash));
-        self::assertSame('held', DB::table('panel_capacity_reservations')->where('id', (int) $stored->capacity_reservation_id)->value('state'));
+        self::assertSame('held', DB::table('panel_capacity_reservations')->where('id', (int) $stored->target_capacity_reservation_id)->value('state'));
         self::assertSame($fixture['offering_id'], (int) DB::table('plan_offering_route_selections')
             ->where('id', (int) $stored->target_route_selection_id)->value('plan_offering_id'));
 
@@ -766,6 +782,370 @@ final class ServiceOperationalAuthorityTest extends TestCase
         } catch (QueryException) {
             // Expected immutable evidence guard.
         }
+    }
+
+    public function test_paid_service_reconfiguration_uses_canonical_purchase_effect_capacity_and_delivery_authorities(): void
+    {
+        $fixture = $this->reconfigurationFixture('paid-effect');
+        $attached = $this->attachedService(
+            $fixture,
+            'remote-reconfiguration-paid',
+            'reconfiguration-paid-user',
+            'reconfiguration-paid-import',
+        );
+        self::assertIsString($attached->serviceSubscriptionPublicId);
+        $servicePublicId = $attached->serviceSubscriptionPublicId;
+        $before = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
+            'id', 'order_item_id', 'route_selection_id', 'service_target_id', 'remote_service_id',
+            'remote_identity_generation', 'lifecycle_version', 'mutation_generation',
+        ]);
+        self::assertNotNull($before);
+        self::assertNull($before->route_selection_id, 'Imported Service begins without a capacity-backed current route.');
+        $historicalOfferingId = (int) DB::table('order_items')->where('id', (int) $before->order_item_id)->value('plan_offering_id');
+
+        $preview = $this->app->make(ServiceReconfigurationPreviewService::class)->previewForSelf(
+            $fixture['user_id'],
+            $servicePublicId,
+            $fixture['offering_code'],
+            $fixture['server_code'],
+            $fixture['profile_code'],
+            'service.reconfiguration.paid.preview.000001',
+            'service-reconfiguration-paid-preview',
+        );
+        $quote = $this->app->make(QuoteService::class)->create(
+            'service.reconfiguration.paid.quote.000001',
+            $fixture['user_id'],
+            $fixture['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                (new \DateTimeImmutable($preview->expiresAt))->modify('-1 minute'),
+            ),
+            'service-reconfiguration-paid-quote',
+            null,
+            null,
+            new ServiceReconfigurationQuoteContext($preview->previewPublicId),
+        );
+        self::assertSame(QuoteAction::Reconfigure, $quote->action);
+        $settlement = $this->captureReconfigurationQuote($quote, $fixture['owner_id'], 'paid-effect');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            'service-reconfiguration-paid-order',
+        );
+
+        $queueService = $this->app->make(ServicePurchaseMutationQueueService::class);
+        $queued = $queueService->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'service.reconfiguration.paid.queue.000001',
+            'service-reconfiguration-paid-queue',
+        );
+        $queueReplay = $queueService->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'service.reconfiguration.paid.queue.000001',
+            'service-reconfiguration-paid-queue',
+        );
+        self::assertSame(ServiceMutationType::Reconfigure, $queued->type);
+        self::assertSame(ProvisioningState::Queued, $queued->state);
+        self::assertFalse($queued->replayed);
+        self::assertTrue($queueReplay->replayed);
+        self::assertSame($queued->operationPublicId, $queueReplay->operationPublicId);
+        self::assertSame(0, DB::table('service_paid_mutation_authorities')
+            ->where('service_subscription_id', (int) $before->id)->count());
+        self::assertSame(1, DB::table('service_reconfiguration_authorities')
+            ->where('service_subscription_id', (int) $before->id)->count());
+        self::assertSame((int) $before->mutation_generation + 1, (int) DB::table('service_subscriptions')
+            ->where('id', (int) $before->id)->value('mutation_generation'));
+
+        $authorityBefore = DB::table('service_reconfiguration_authorities as authority_row')
+            ->join('panel_capacity_reservations as reservation', 'reservation.id', '=', 'authority_row.target_capacity_reservation_id')
+            ->where('authority_row.service_subscription_id', (int) $before->id)
+            ->first([
+                'authority_row.target_route_selection_id', 'authority_row.target_service_target_id',
+                'authority_row.target_capacity_reservation_id', 'reservation.state as reservation_state',
+            ]);
+        self::assertNotNull($authorityBefore);
+        self::assertSame('held', $authorityBefore->reservation_state);
+
+        $result = $this->app->make(ServiceMutationExecutor::class)->execute($queued->operationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $result->state);
+        self::assertSame(ServiceMutationType::Reconfigure, $result->type);
+        self::assertSame([0], $fixture['adapter']->reconfigurationTransactionLevels);
+        self::assertCount(1, $fixture['adapter']->reconfigurationRequests);
+        self::assertSame($fixture['target_id'], $fixture['adapter']->reconfigurationRequests[0]->validatedAttributes['target_service_target_id']);
+
+        $after = DB::table('service_subscriptions')->where('id', (int) $before->id)->first([
+            'route_selection_id', 'service_target_id', 'remote_service_id', 'remote_identity_generation',
+            'lifecycle_version', 'mutation_generation',
+        ]);
+        self::assertNotNull($after);
+        self::assertSame((int) $authorityBefore->target_route_selection_id, (int) $after->route_selection_id);
+        self::assertSame((int) $authorityBefore->target_service_target_id, (int) $after->service_target_id);
+        self::assertSame('remote-reconfiguration-paid', $after->remote_service_id);
+        self::assertSame((int) $before->remote_identity_generation + 1, (int) $after->remote_identity_generation);
+        self::assertSame((int) $before->lifecycle_version + 1, (int) $after->lifecycle_version);
+        self::assertSame((int) $before->mutation_generation + 1, (int) $after->mutation_generation);
+        self::assertSame('committed', DB::table('panel_capacity_reservations')
+            ->where('id', (int) $authorityBefore->target_capacity_reservation_id)->value('state'));
+        self::assertSame($historicalOfferingId, (int) DB::table('order_items')
+            ->where('id', (int) $before->order_item_id)->value('plan_offering_id'));
+        self::assertNotNull(DB::table('service_reconfiguration_authorities')
+            ->where('service_subscription_id', (int) $before->id)->value('result_recorded_at'));
+        self::assertSame(64, strlen((string) DB::table('service_reconfiguration_authorities')
+            ->where('service_subscription_id', (int) $before->id)->value('remote_result_snapshot_hash')));
+        self::assertSame(1, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', (int) $before->id)
+            ->where('purpose', 'resend')
+            ->count());
+
+        $executionReplay = $this->app->make(ServiceMutationExecutor::class)->execute($queued->operationPublicId);
+        self::assertTrue($executionReplay->replayed);
+        self::assertSame(1, count($fixture['adapter']->reconfigurationRequests), 'Terminal replay must never call the provider twice.');
+
+        $firstReservationId = (int) $authorityBefore->target_capacity_reservation_id;
+        $capacityId = (int) DB::table('panel_capacity_reservations')
+            ->where('id', $firstReservationId)
+            ->value('panel_target_capacity_id');
+        self::assertSame(1, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('committed_units'));
+
+        $secondPreview = $this->app->make(ServiceReconfigurationPreviewService::class)->previewForSelf(
+            $fixture['user_id'],
+            $servicePublicId,
+            $fixture['offering_code'],
+            $fixture['server_code'],
+            $fixture['alternate_profile_code'],
+            'service.reconfiguration.paid.preview.000002',
+            'service-reconfiguration-paid-preview-two',
+        );
+        $secondQuote = $this->app->make(QuoteService::class)->create(
+            'service.reconfiguration.paid.quote.000002',
+            $fixture['user_id'],
+            $fixture['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                (new \DateTimeImmutable($secondPreview->expiresAt))->modify('-1 minute'),
+            ),
+            'service-reconfiguration-paid-quote-two',
+            null,
+            null,
+            new ServiceReconfigurationQuoteContext($secondPreview->previewPublicId),
+        );
+        $secondSettlement = $this->captureReconfigurationQuote($secondQuote, $fixture['owner_id'], 'paid-effect-two');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $secondSettlement->settlementPublicId,
+            'service-reconfiguration-paid-order-two',
+        );
+        $secondQueued = $queueService->queueFromSettlement(
+            $secondSettlement->settlementPublicId,
+            'service.reconfiguration.paid.queue.000002',
+            'service-reconfiguration-paid-queue-two',
+        );
+        $secondAuthority = DB::table('service_reconfiguration_authorities')
+            ->where('provisioning_operation_id', DB::table('provisioning_operations')
+                ->where('public_id', $secondQueued->operationPublicId)->value('id'))
+            ->first(['target_capacity_reservation_id', 'source_route_selection_id']);
+        self::assertNotNull($secondAuthority);
+        self::assertSame((int) $after->route_selection_id, (int) $secondAuthority->source_route_selection_id);
+        self::assertSame('held', DB::table('panel_capacity_reservations')
+            ->where('id', (int) $secondAuthority->target_capacity_reservation_id)->value('state'));
+        self::assertSame(1, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('held_units'));
+        self::assertSame(1, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('committed_units'));
+
+        $secondResult = $this->app->make(ServiceMutationExecutor::class)->execute($secondQueued->operationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $secondResult->state);
+        self::assertSame('released', DB::table('panel_capacity_reservations')->where('id', $firstReservationId)->value('state'));
+        self::assertSame('committed', DB::table('panel_capacity_reservations')
+            ->where('id', (int) $secondAuthority->target_capacity_reservation_id)->value('state'));
+        self::assertSame(0, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('held_units'));
+        self::assertSame(1, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('committed_units'));
+        self::assertSame(2, count($fixture['adapter']->reconfigurationRequests));
+        self::assertSame([0, 0], $fixture['adapter']->reconfigurationTransactionLevels);
+        self::assertSame(2, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', (int) $before->id)
+            ->where('purpose', 'resend')
+            ->count());
+        self::assertSame($historicalOfferingId, (int) DB::table('order_items')
+            ->where('id', (int) $before->order_item_id)->value('plan_offering_id'));
+
+        $planPreview = $this->app->make(ServiceReconfigurationPreviewService::class)->previewForSelf(
+            $fixture['user_id'],
+            $servicePublicId,
+            $fixture['alternate_offering_code'],
+            $fixture['server_code'],
+            $fixture['alternate_profile_code'],
+            'service.reconfiguration.paid.preview.000003',
+            'service-reconfiguration-paid-preview-plan',
+        );
+        self::assertTrue($planPreview->changesPlan);
+        self::assertFalse($planPreview->changesTarget);
+        self::assertFalse($planPreview->changesProtocol);
+        self::assertSame(200_000, $planPreview->priceDifferenceIrr);
+        self::assertSame(25_000, $planPreview->operationFeeIrr);
+        self::assertSame(225_000, $planPreview->totalPriceIrr);
+        $planQuote = $this->app->make(QuoteService::class)->create(
+            'service.reconfiguration.paid.quote.000003',
+            $fixture['user_id'],
+            $fixture['alternate_offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                (new \DateTimeImmutable($planPreview->expiresAt))->modify('-1 minute'),
+            ),
+            'service-reconfiguration-paid-quote-plan',
+            null,
+            null,
+            new ServiceReconfigurationQuoteContext($planPreview->previewPublicId),
+        );
+        self::assertSame(225_000, $planQuote->finalPriceIrr);
+        $planSettlement = $this->captureReconfigurationQuote($planQuote, $fixture['owner_id'], 'paid-effect-plan');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $planSettlement->settlementPublicId,
+            'service-reconfiguration-paid-order-plan',
+        );
+        $planQueued = $queueService->queueFromSettlement(
+            $planSettlement->settlementPublicId,
+            'service.reconfiguration.paid.queue.000003',
+            'service-reconfiguration-paid-queue-plan',
+        );
+        $planAuthority = DB::table('service_reconfiguration_authorities')
+            ->where('provisioning_operation_id', DB::table('provisioning_operations')
+                ->where('public_id', $planQueued->operationPublicId)->value('id'))
+            ->first(['target_plan_offering_id', 'target_plan_offering_code', 'target_plan_offering_version', 'target_route_selection_id', 'target_capacity_reservation_id']);
+        self::assertNotNull($planAuthority);
+        self::assertSame($fixture['alternate_offering_id'], (int) $planAuthority->target_plan_offering_id);
+        self::assertSame($fixture['alternate_offering_code'], $planAuthority->target_plan_offering_code);
+
+        $planResult = $this->app->make(ServiceMutationExecutor::class)->execute($planQueued->operationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $planResult->state);
+        self::assertSame($fixture['alternate_offering_code'], $fixture['adapter']->reconfigurationRequests[2]->targetPlanOfferingCode);
+        self::assertSame($fixture['alternate_offering_id'], $fixture['adapter']->reconfigurationRequests[2]->validatedAttributes['target_plan_offering_id']);
+        $currentRouteOfferingId = (int) DB::table('plan_offering_route_selections')
+            ->where('id', (int) DB::table('service_subscriptions')->where('id', (int) $before->id)->value('route_selection_id'))
+            ->value('plan_offering_id');
+        self::assertSame($fixture['alternate_offering_id'], $currentRouteOfferingId);
+        self::assertSame($historicalOfferingId, (int) DB::table('order_items')
+            ->where('id', (int) $before->order_item_id)->value('plan_offering_id'), 'Plan change must never rewrite original commercial history.');
+        self::assertSame('released', DB::table('panel_capacity_reservations')
+            ->where('id', (int) $secondAuthority->target_capacity_reservation_id)->value('state'));
+        self::assertSame('committed', DB::table('panel_capacity_reservations')
+            ->where('id', (int) $planAuthority->target_capacity_reservation_id)->value('state'));
+        self::assertSame(0, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('held_units'));
+        self::assertSame(1, (int) DB::table('panel_target_capacities')->where('id', $capacityId)->value('committed_units'));
+        self::assertSame(3, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', (int) $before->id)
+            ->where('purpose', 'resend')
+            ->count());
+
+        try {
+            DB::table('service_subscriptions')->where('id', (int) $before->id)->update([
+                'route_selection_id' => null,
+            ]);
+            self::fail('Direct Service configuration rewrite must fail closed after reconfiguration.');
+        } catch (QueryException) {
+            self::assertSame((int) $planAuthority->target_route_selection_id, (int) DB::table('service_subscriptions')
+                ->where('id', (int) $before->id)->value('route_selection_id'));
+        }
+    }
+
+    public function test_paid_service_reconfiguration_provider_exception_is_uncertain_and_never_blind_retried(): void
+    {
+        $fixture = $this->reconfigurationFixture('uncertain-effect');
+        $attached = $this->attachedService(
+            $fixture,
+            'remote-reconfiguration-uncertain',
+            'reconfiguration-uncertain-user',
+            'reconfiguration-uncertain-import',
+        );
+        self::assertIsString($attached->serviceSubscriptionPublicId);
+        $servicePublicId = $attached->serviceSubscriptionPublicId;
+        $before = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
+            'id', 'route_selection_id', 'service_target_id', 'remote_service_id',
+            'remote_identity_generation', 'lifecycle_version', 'mutation_generation',
+        ]);
+        self::assertNotNull($before);
+        self::assertNull($before->route_selection_id);
+
+        $preview = $this->app->make(ServiceReconfigurationPreviewService::class)->previewForSelf(
+            $fixture['user_id'],
+            $servicePublicId,
+            $fixture['offering_code'],
+            $fixture['server_code'],
+            $fixture['profile_code'],
+            'service.reconfiguration.uncertain.preview.000001',
+            'service-reconfiguration-uncertain-preview',
+        );
+        $quote = $this->app->make(QuoteService::class)->create(
+            'service.reconfiguration.uncertain.quote.000001',
+            $fixture['user_id'],
+            $fixture['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                (new \DateTimeImmutable($preview->expiresAt))->modify('-1 minute'),
+            ),
+            'service-reconfiguration-uncertain-quote',
+            null,
+            null,
+            new ServiceReconfigurationQuoteContext($preview->previewPublicId),
+        );
+        $settlement = $this->captureReconfigurationQuote($quote, $fixture['owner_id'], 'uncertain-effect');
+        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $settlement->settlementPublicId,
+            'service-reconfiguration-uncertain-order',
+        );
+        $queued = $this->app->make(ServicePurchaseMutationQueueService::class)->queueFromSettlement(
+            $settlement->settlementPublicId,
+            'service.reconfiguration.uncertain.queue.000001',
+            'service-reconfiguration-uncertain-queue',
+        );
+        $authority = DB::table('service_reconfiguration_authorities')
+            ->where('provisioning_operation_id', DB::table('provisioning_operations')
+                ->where('public_id', $queued->operationPublicId)->value('id'))
+            ->first(['target_capacity_reservation_id']);
+        self::assertNotNull($authority);
+        $fixture['adapter']->reconfigurationThrows = true;
+
+        $uncertain = $this->app->make(ServiceMutationExecutor::class)->execute($queued->operationPublicId);
+        self::assertSame(ProvisioningState::UncertainRemoteResult, $uncertain->state);
+        self::assertSame([0], $fixture['adapter']->reconfigurationTransactionLevels);
+        self::assertCount(1, $fixture['adapter']->reconfigurationRequests);
+        $after = DB::table('service_subscriptions')->where('id', (int) $before->id)->first([
+            'route_selection_id', 'service_target_id', 'remote_service_id',
+            'remote_identity_generation', 'lifecycle_version', 'mutation_generation',
+        ]);
+        self::assertNotNull($after);
+        self::assertNull($after->route_selection_id);
+        self::assertSame((int) $before->service_target_id, (int) $after->service_target_id);
+        self::assertSame($before->remote_service_id, $after->remote_service_id);
+        self::assertSame((int) $before->remote_identity_generation, (int) $after->remote_identity_generation);
+        self::assertSame((int) $before->lifecycle_version, (int) $after->lifecycle_version);
+        self::assertSame((int) $before->mutation_generation + 1, (int) $after->mutation_generation);
+        self::assertSame('held', DB::table('panel_capacity_reservations')
+            ->where('id', (int) $authority->target_capacity_reservation_id)->value('state'));
+        self::assertNull(DB::table('service_reconfiguration_authorities')
+            ->where('service_subscription_id', (int) $before->id)->value('result_recorded_at'));
+        self::assertSame(0, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', (int) $before->id)->count());
+
+        try {
+            $this->app->make(ServiceMutationExecutor::class)->execute($queued->operationPublicId);
+            self::fail('Uncertain Service reconfiguration must require reconciliation before another provider attempt.');
+        } catch (DomainException $exception) {
+            self::assertStringContainsString('requires reconciliation', $exception->getMessage());
+        }
+        self::assertCount(1, $fixture['adapter']->reconfigurationRequests, 'Uncertain effect must never blind-retry the provider.');
     }
 
     public function test_resumable_batch_grants_preserve_success_across_partial_failure_without_financial_authority(): void
@@ -1312,7 +1692,72 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertNull($ambiguous->selectionToken);
     }
 
-    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter,offering_code:string,server_code:string,profile_code:string} */
+    private function captureReconfigurationQuote(QuoteReceipt $quote, int $administratorId, string $suffix): PurchaseSettlementReceipt
+    {
+        $methodCode = 'svc_reconfigure_'.$suffix;
+        $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $eligibility->configureMethod(
+            'service.reconfiguration.method.'.$suffix,
+            $administratorId,
+            $methodCode,
+            true,
+            false,
+            1,
+            'Service reconfiguration test payment method.',
+            'service-reconfiguration-method-'.$suffix,
+        );
+        $eligibility->recordHealth(
+            'service.reconfiguration.health.'.$suffix,
+            $administratorId,
+            $methodCode,
+            true,
+            $now->modify('+10 minutes'),
+            'Healthy Service reconfiguration test payment method.',
+            'service-reconfiguration-health-'.$suffix,
+        );
+        $decision = $eligibility->evaluate(
+            'service.reconfiguration.eligibility.'.$suffix,
+            $quote->userId,
+            $quote->quotePublicId,
+        );
+        $intent = $this->app->make(PurchasePaymentIntentService::class)->create(
+            'service.reconfiguration.intent.'.$suffix,
+            $quote->userId,
+            $quote->quotePublicId,
+            $decision->publicId,
+            $methodCode,
+            'service-reconfiguration-intent-'.$suffix,
+        );
+        DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->update([
+            'state' => 'submitted',
+            'updated_at' => now('UTC'),
+        ]);
+
+        return $this->app->make(PurchaseSettlementService::class)->capture(
+            $intent->intentPublicId,
+            $methodCode,
+            new VerifiedPaymentEvent(
+                'evt-service-reconfiguration-'.$suffix,
+                hash('sha256', 'service-reconfiguration-provider-event:'.$suffix),
+                new PaymentEvidence(
+                    ProviderOperationOutcome::Success,
+                    PaymentEvidenceAuthority::Authoritative,
+                    PaymentTransactionStatus::Settled,
+                    'txn-service-reconfiguration-'.$suffix,
+                    'evt-service-reconfiguration-'.$suffix,
+                    Money::irr($intent->amount->amount()),
+                    $now,
+                    $now,
+                    hash('sha256', 'service-reconfiguration-provider-evidence:'.$suffix),
+                    ['provider_reference' => 'txn-service-reconfiguration-'.$suffix],
+                ),
+            ),
+            'service-reconfiguration-settlement-'.$suffix,
+        );
+    }
+
+    /** @return array{owner_id:int,user_id:int,offering_id:int,alternate_offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter,offering_code:string,alternate_offering_code:string,server_code:string,profile_code:string,alternate_profile_code:string} */
     private function reconfigurationFixture(string $suffix): array
     {
         $seed = $this->benefitOffering('service-reconfiguration-seed-'.$suffix, 'panel.example.com');
@@ -1331,6 +1776,31 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $tagId = (int) DB::table('plan_offering_tags')->where('plan_offering_id', $seed['id'])->value('customer_tag_id');
         self::assertGreaterThan(0, $profileId);
         self::assertGreaterThan(0, $tagId);
+        $now = now('UTC');
+        $alternateProfileId = (int) DB::table('panel_protocol_profiles')->insertGetId([
+            'code' => 'svc-reconfig-alt-'.substr(hash('sha256', $suffix), 0, 16),
+            'name_fa' => 'Service reconfiguration alternate profile',
+            'name_en' => 'Service reconfiguration alternate profile',
+            'protocol_family' => 'vless',
+            'transport' => 'grpc',
+            'security_layer' => 'tls',
+            'host' => 'panel.example.com',
+            'sni' => 'panel.example.com',
+            'path' => null,
+            'port' => 443,
+            'flow' => null,
+            'state' => 'active',
+            'version' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_target_protocol_profiles')->insert([
+            'panel_service_target_id' => $targetId,
+            'panel_protocol_profile_id' => $alternateProfileId,
+            'customer_selectable' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
         $offeringCode = 'svc-reconfig-'.substr(hash('sha256', $suffix), 0, 18);
         $definition = new PlanOfferingDefinition(
             $offeringCode,
@@ -1356,16 +1826,29 @@ final class ServiceOperationalAuthorityTest extends TestCase
             false,
             ['normal'],
             [$tagId],
-            [new OfferingProtocolAssignment($profileId, true, true)],
+            [
+                new OfferingProtocolAssignment($profileId, true, true),
+                new OfferingProtocolAssignment($alternateProfileId, true, false),
+            ],
             ['create_service', 'fetch_status'],
-            [new OfferingOperationPolicy(
-                OfferingOperationCode::ChangeProtocol,
-                true,
-                true,
-                50_000,
-                true,
-                null,
-            )],
+            [
+                new OfferingOperationPolicy(
+                    OfferingOperationCode::ChangeProtocol,
+                    true,
+                    true,
+                    50_000,
+                    true,
+                    'reconfigure_service',
+                ),
+                new OfferingOperationPolicy(
+                    OfferingOperationCode::ChangePlan,
+                    true,
+                    true,
+                    25_000,
+                    true,
+                    'reconfigure_service',
+                ),
+            ],
             [],
         );
         $catalog = $this->app->make(PlanOfferingService::class);
@@ -1380,6 +1863,67 @@ final class ServiceOperationalAuthorityTest extends TestCase
             ),
         );
         $offeringId = $created->targetId;
+        $alternateOfferingCode = $offeringCode.'-plus';
+        $alternateDefinition = new PlanOfferingDefinition(
+            $alternateOfferingCode,
+            (int) $seedOffering->product_id,
+            null,
+            $serverId,
+            $targetId,
+            new PlanOfferingServiceMode('shared', 'Shared', 'Shared'),
+            PlanOfferingAudience::Both,
+            PlanOfferingServerSelectionMode::Customer,
+            PlanOfferingProtocolSelectionMode::Customer,
+            PlanOfferingTagMatchMode::All,
+            1_200_000,
+            30,
+            null,
+            2,
+            0,
+            1,
+            1,
+            true,
+            false,
+            false,
+            false,
+            ['normal'],
+            [$tagId],
+            [
+                new OfferingProtocolAssignment($profileId, true, true),
+                new OfferingProtocolAssignment($alternateProfileId, true, false),
+            ],
+            ['create_service', 'fetch_status'],
+            [
+                new OfferingOperationPolicy(
+                    OfferingOperationCode::ChangeProtocol,
+                    true,
+                    true,
+                    50_000,
+                    true,
+                    'reconfigure_service',
+                ),
+                new OfferingOperationPolicy(
+                    OfferingOperationCode::ChangePlan,
+                    true,
+                    true,
+                    25_000,
+                    true,
+                    'reconfigure_service',
+                ),
+            ],
+            [],
+        );
+        $alternateCreated = $catalog->create(
+            $alternateDefinition,
+            new CatalogChangeContext(
+                'service-reconfiguration-alt-offering-'.substr(hash('sha256', $suffix), 0, 20),
+                'service-reconfiguration-alt-correlation-'.substr(hash('sha256', $suffix), 0, 18),
+                'service_reconfiguration_test',
+                'Create an alternate Service reconfiguration Plan Offering.',
+                $ownerId,
+            ),
+        );
+        $alternateOfferingId = $alternateCreated->targetId;
         $this->app->make(PlanOfferingRoutePolicyService::class)->create(
             $offeringId,
             new PlanOfferingRoutePolicyDefinition([
@@ -1401,8 +1945,28 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 $ownerId,
             ),
         );
+        $this->app->make(PlanOfferingRoutePolicyService::class)->create(
+            $alternateOfferingId,
+            new PlanOfferingRoutePolicyDefinition([
+                new PlanOfferingRouteDefinition(
+                    $serverId,
+                    $targetId,
+                    PlanOfferingRouteType::Primary,
+                    0,
+                    true,
+                    null,
+                    null,
+                ),
+            ]),
+            new CatalogChangeContext(
+                'service-reconfiguration-alt-route-'.substr(hash('sha256', $suffix), 0, 20),
+                'service-reconfiguration-alt-route-correlation-'.substr(hash('sha256', $suffix), 0, 14),
+                'service_reconfiguration_test',
+                'Create an alternate Service reconfiguration route policy.',
+                $ownerId,
+            ),
+        );
 
-        $now = now('UTC');
         $connectionId = (int) DB::table('panel_service_targets')->where('id', $targetId)->value('panel_connection_id');
         DB::table('panel_connections')->where('id', $connectionId)->update([
             'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'service-reconfiguration-test'], JSON_THROW_ON_ERROR)),
@@ -1416,6 +1980,20 @@ final class ServiceOperationalAuthorityTest extends TestCase
         ]);
         $connectionVersion = (int) DB::table('panel_connections')->where('id', $connectionId)->value('version');
         $evidenceHash = hash('sha256', 'service-reconfiguration-evidence:'.$suffix);
+        if (! DB::table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
+            ->where('capability_code', 'reconfigure_service')
+            ->exists()) {
+            DB::table('panel_target_capabilities')->insert([
+                'panel_service_target_id' => $targetId,
+                'capability_code' => 'reconfigure_service',
+                'verification_status' => 'declared',
+                'evidence_hash' => null,
+                'verified_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
         DB::table('panel_target_capabilities')->where('panel_service_target_id', $targetId)->update([
             'verification_status' => 'verified',
             'evidence_hash' => $evidenceHash,
@@ -1470,6 +2048,18 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 $ownerId,
             ),
         );
+        $alternateVersion = (int) DB::table('plan_offerings')->where('id', $alternateOfferingId)->value('version');
+        $catalog->activate(
+            $alternateOfferingId,
+            $alternateVersion,
+            new CatalogChangeContext(
+                'service-reconfiguration-alt-activate-'.substr(hash('sha256', $suffix), 0, 20),
+                'service-reconfiguration-alt-activate-corr-'.substr(hash('sha256', $suffix), 0, 18),
+                'service_reconfiguration_test',
+                'Activate the verified alternate Service reconfiguration Plan Offering.',
+                $ownerId,
+            ),
+        );
 
         $adapter = new ServiceOperationalPanelAdapter;
         $this->app->instance(
@@ -1487,11 +2077,14 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'owner_id' => $ownerId,
             'user_id' => $userId,
             'offering_id' => $offeringId,
+            'alternate_offering_id' => $alternateOfferingId,
             'target_id' => $targetId,
             'adapter' => $adapter,
             'offering_code' => $offeringCode,
+            'alternate_offering_code' => $alternateOfferingCode,
             'server_code' => (string) DB::table('sales_servers')->where('id', $serverId)->value('code'),
             'profile_code' => (string) DB::table('panel_protocol_profiles')->where('id', $profileId)->value('code'),
+            'alternate_profile_code' => (string) DB::table('panel_protocol_profiles')->where('id', $alternateProfileId)->value('code'),
         ];
     }
 

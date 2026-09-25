@@ -173,7 +173,8 @@ final readonly class ServiceLifecycleCommandService
             ServiceMutationType::Renew,
             ServiceMutationType::AddData,
             ServiceMutationType::AddDays,
-            ServiceMutationType::AddDataDays => throw new DomainException('Paid Service entitlement mutations are not lifecycle customer commands.'),
+            ServiceMutationType::AddDataDays,
+            ServiceMutationType::Reconfigure => throw new DomainException('Paid Service commercial mutations are not lifecycle customer commands.'),
         };
     }
 
@@ -186,7 +187,8 @@ final readonly class ServiceLifecycleCommandService
             ServiceMutationType::Renew,
             ServiceMutationType::AddData,
             ServiceMutationType::AddDays,
-            ServiceMutationType::AddDataDays => throw new DomainException('Paid Service entitlement mutations are not lifecycle administrator commands.'),
+            ServiceMutationType::AddDataDays,
+            ServiceMutationType::Reconfigure => throw new DomainException('Paid Service commercial mutations are not lifecycle administrator commands.'),
         };
     }
 

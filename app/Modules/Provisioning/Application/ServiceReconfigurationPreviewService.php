@@ -106,6 +106,28 @@ final readonly class ServiceReconfigurationPreviewService
             ),
         );
 
+        /** @var object{version:int|string,panel_connection_id:int|string}|null $targetRecord */
+        $targetRecord = $this->database->connection()->table('panel_service_targets')
+            ->where('id', $route->serviceTargetId)
+            ->where('state', 'active')
+            ->where('capability_status', 'verified')
+            ->first(['version', 'panel_connection_id']);
+        $profileVersion = $this->database->connection()->table('panel_protocol_profiles')
+            ->where('id', $route->protocolProfileId)
+            ->where('state', 'active')
+            ->value('version');
+        if ($targetRecord === null
+            || (! is_int($profileVersion) && ! is_string($profileVersion))
+            || (int) $targetRecord->version < 1 || (int) $profileVersion < 1
+            || (int) $targetRecord->panel_connection_id !== (int) $baseline->source_panel_connection_id) {
+            $this->releaseHeldRoute($route->capacityReservationKey, $correlationId, $requestHash);
+            throw new DomainException('Selected Service reconfiguration inventory changed before preview persistence.');
+        }
+        $targetInventory = (object) [
+            'target_version' => (int) $targetRecord->version,
+            'profile_version' => (int) $profileVersion,
+        ];
+
         $changesPlan = (int) $baseline->source_plan_offering_id !== (int) $targetOffering->id;
         $changesTarget = (int) $baseline->service_target_id !== $route->serviceTargetId;
         $changesProtocol = $baseline->source_protocol_profile_id === null
@@ -131,6 +153,7 @@ final readonly class ServiceReconfigurationPreviewService
                 $baseline,
                 $targetOffering,
                 $route,
+                $targetInventory,
                 $changesPlan,
                 $changesTarget,
                 $changesProtocol,
@@ -167,7 +190,9 @@ final readonly class ServiceReconfigurationPreviewService
                         'target_plan_offering_id' => (int) $targetOffering->id,
                         'target_route_selection_id' => $route->selectionId,
                         'target_service_target_id' => $route->serviceTargetId,
+                        'target_service_target_version' => (int) $targetInventory->target_version,
                         'target_protocol_profile_id' => $route->protocolProfileId,
+                        'target_protocol_profile_version' => (int) $targetInventory->profile_version,
                         'target_capacity_reservation_id' => $route->capacityReservationId,
                         'target_capacity_reservation_key' => $route->capacityReservationKey,
                         'changes_plan' => $changesPlan,
@@ -204,19 +229,22 @@ final readonly class ServiceReconfigurationPreviewService
         return $receipt;
     }
 
-    /** @return object{service_id:int|string,account_type:string,route_selection_id:int|string|null,service_target_id:int|string,source_plan_offering_id:int|string,source_protocol_profile_id:int|string|null,source_base_price_irr:int|string,remote_identity_generation:int|string,lifecycle_version:int|string,mutation_generation:int|string} */
+    /** @return object{service_id:int|string,account_type:string,route_selection_id:int|string|null,service_target_id:int|string,source_panel_connection_id:int|string,source_plan_offering_id:int|string,source_protocol_profile_id:int|string|null,source_capacity_state:?string,source_base_price_irr:int|string,remote_identity_generation:int|string,lifecycle_version:int|string,mutation_generation:int|string} */
     private function baseline(int $actorUserId, string $servicePublicId): object
     {
-        /** @var object{service_id:int|string,account_type:string,route_selection_id:int|string|null,service_target_id:int|string|null,source_plan_offering_id:int|string,source_protocol_profile_id:int|string|null,source_base_price_irr:int|string,remote_identity_generation:int|string,lifecycle_version:int|string,mutation_generation:int|string,lifecycle_state:string,remote_service_id:?string,remote_deleted_at:?string,provisioned_at:?string}|null $row */
+        /** @var object{service_id:int|string,account_type:string,route_selection_id:int|string|null,service_target_id:int|string|null,source_panel_connection_id:int|string,source_plan_offering_id:int|string,source_protocol_profile_id:int|string|null,source_capacity_state:?string,source_base_price_irr:int|string,remote_identity_generation:int|string,lifecycle_version:int|string,mutation_generation:int|string,lifecycle_state:string,remote_service_id:?string,remote_deleted_at:?string,provisioned_at:?string}|null $row */
         $row = $this->database->connection()->table('service_subscriptions as service')
             ->join('users as user', 'user.id', '=', 'service.user_id')
             ->join('order_items as original_item', 'original_item.id', '=', 'service.order_item_id')
+            ->join('panel_service_targets as source_target', 'source_target.id', '=', 'service.service_target_id')
             ->leftJoin('plan_offering_route_selections as current_selection', 'current_selection.id', '=', 'service.route_selection_id')
+            ->leftJoin('panel_capacity_reservations as source_reservation', 'source_reservation.id', '=', 'current_selection.capacity_reservation_id')
             ->join('plan_offerings as source_offering', 'source_offering.id', '=', DB::raw('COALESCE(current_selection.plan_offering_id, original_item.plan_offering_id)'))
             ->where('service.public_id', $servicePublicId)
             ->where('service.user_id', $actorUserId)
             ->first([
                 'service.id as service_id', 'user.account_type', 'service.route_selection_id', 'service.service_target_id',
+                'source_target.panel_connection_id as source_panel_connection_id', 'source_reservation.state as source_capacity_state',
                 DB::raw('COALESCE(current_selection.plan_offering_id, original_item.plan_offering_id) as source_plan_offering_id'),
                 'current_selection.panel_protocol_profile_id as source_protocol_profile_id',
                 'source_offering.base_price_irr as source_base_price_irr', 'service.remote_identity_generation',
@@ -229,6 +257,7 @@ final readonly class ServiceReconfigurationPreviewService
             || $row->remote_deleted_at !== null
             || $row->provisioned_at === null
             || $row->service_target_id === null
+            || ($row->route_selection_id !== null && $row->source_capacity_state !== 'committed')
             || ! is_string($row->remote_service_id) || $row->remote_service_id === '') {
             throw new DomainException('Service is not eligible for reconfiguration.');
         }

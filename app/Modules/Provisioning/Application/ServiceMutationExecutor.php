@@ -4,13 +4,18 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\Panels\Application\CapacityOperationContext;
 use App\Modules\Panels\Application\Contracts\AtomicServiceEntitlementAdapter;
 use App\Modules\Panels\Application\Contracts\DataAllowanceMode;
 use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
+use App\Modules\Panels\Application\Contracts\PanelServiceReconfigurationAdapter;
+use App\Modules\Panels\Application\Contracts\PanelServiceReconfigurationRequest;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
+use App\Modules\Panels\Application\TargetCapacityAllocator;
 use App\Modules\Provisioning\Domain\ProvisioningState;
+use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
@@ -26,9 +31,10 @@ use Throwable;
 
 /**
  * @phpstan-type MutationOperation object{id:int|string,public_id:string,operation_key:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,correlation_id:string,effect_fence_key:?string,service_target_id:int|string|null,attempt_count:int|string,last_result_code:?string,last_result_message:?string,remote_service_id:?string,remote_effect_started_at:?string,remote_effect_completed_at:?string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
- * @phpstan-type MutationService object{id:int|string,public_id:string,service_target_id:int|string|null,remote_service_id:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
+ * @phpstan-type MutationService object{id:int|string,public_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type PaidTarget array{snapshot_hash:string,target_expires_at:?DateTimeImmutable,target_data_limit_bytes:?int}
  * @phpstan-type PaidAuthority object{id:int|string,provisioning_operation_id:int|string,purchase_settlement_id:int|string,payment_intent_id:int|string,action:string,duration_days:int|string|null,data_bytes:int|string|null,remote_snapshot_hash:?string,target_expires_at:?string,target_data_limit_bytes:int|string|null,targets_resolved_at:?string}
+ * @phpstan-type ReconfigurationExecutionAuthority object{id:int|string,provisioning_operation_id:int|string,service_subscription_id:int|string,purchase_settlement_id:int|string,payment_intent_id:int|string,target_plan_offering_id:int|string,target_plan_offering_code:string,target_plan_offering_version:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,target_capacity_reservation_key:string,target_reference:string,target_protocol_profile_code:string,quoted_remote_identity_generation:int|string,quoted_lifecycle_version:int|string,quoted_mutation_generation:int|string,result_remote_service_id:?string,remote_result_snapshot_hash:?string,result_recorded_at:?string,target_reservation_state:string,target_reservation_version:int|string,target_reservation_expires_at:string,current_offering_version:int|string,current_offering_state:string,current_offering_visibility:string,current_target_version:int|string,current_profile_version:int|string,target_connection_id:int|string,source_connection_id:int|string,source_reservation_state:?string,source_reservation_version:int|string|null,source_reservation_key:?string}
  */
 final readonly class ServiceMutationExecutor
 {
@@ -38,9 +44,11 @@ final readonly class ServiceMutationExecutor
         private DatabaseManager $database,
         private Clock $clock,
         private ProvisioningPanelAdapterResolver $adapters,
+        private TargetCapacityAllocator $capacity,
+        private ServiceDeliveryAttemptQueueService $deliveries,
     ) {}
 
-    /** @requirement SVC-004 PRV-001 PRV-002 PRV-003 DAT-003 SEC-002 SEC-008 QUA-004 */
+    /** @requirement SVC-004 SVC-005 PRV-001 PRV-002 PRV-003 DAT-003 SEC-002 SEC-008 QUA-004 */
     public function execute(string $operationPublicId): ServiceMutationReceipt
     {
         $operation = $this->operationByPublicId($operationPublicId);
@@ -65,7 +73,7 @@ final readonly class ServiceMutationExecutor
         try {
             $operation = $this->claim($operation);
         } catch (QueryException $exception) {
-            if (! $type->isPaidEntitlement() || ! $this->paidMutationFinanciallyInvalidated((int) $operation->id)) {
+            if (! $type->isPaidCommercialMutation() || ! $this->paidMutationFinanciallyInvalidated((int) $operation->id)) {
                 throw $exception;
             }
 
@@ -125,6 +133,15 @@ final readonly class ServiceMutationExecutor
                 'Panel does not provide an atomic combined data and expiry mutation boundary.',
             );
         }
+        if ($type === ServiceMutationType::Reconfigure && ! $adapter instanceof PanelServiceReconfigurationAdapter) {
+            return $this->finalize(
+                $operation,
+                $type,
+                ProvisioningState::FailedFinal,
+                'service_reconfiguration_adapter_unavailable',
+                'Panel does not provide the explicit Service reconfiguration effect boundary.',
+            );
+        }
 
         /** @var PaidTarget|null $paidTarget */
         $paidTarget = null;
@@ -165,37 +182,59 @@ final readonly class ServiceMutationExecutor
 
         $this->assertProviderCallOutsideTransaction();
 
-        $boundaryOperation = $paidTarget === null
-            ? $this->markProviderBoundary($operation, $type)
-            : $this->markPaidProviderBoundary($operation, $type, $paidTarget);
-        if ($boundaryOperation === null) {
-            return $this->finalize(
-                $operation,
-                $type,
-                ProvisioningState::NeedsReview,
-                'stale_service_at_provider_boundary',
-                'Service, financial, or remote identity authority changed before the provider boundary.',
-            );
+        $reconfigurationRequest = null;
+        if ($type === ServiceMutationType::Reconfigure) {
+            $boundary = $this->markReconfigurationProviderBoundary($operation, $type);
+            if ($boundary === null) {
+                return $this->finalize(
+                    $operation,
+                    $type,
+                    ProvisioningState::NeedsReview,
+                    'stale_reconfiguration_at_provider_boundary',
+                    'Service, financial, capacity, or destination authority changed before the provider boundary.',
+                );
+            }
+            [$operation, $reconfigurationRequest] = $boundary;
+        } else {
+            $boundaryOperation = $paidTarget === null
+                ? $this->markProviderBoundary($operation, $type)
+                : $this->markPaidProviderBoundary($operation, $type, $paidTarget);
+            if ($boundaryOperation === null) {
+                return $this->finalize(
+                    $operation,
+                    $type,
+                    ProvisioningState::NeedsReview,
+                    'stale_service_at_provider_boundary',
+                    'Service, financial, or remote identity authority changed before the provider boundary.',
+                );
+            }
+            $operation = $boundaryOperation;
         }
-        $operation = $boundaryOperation;
 
         $this->assertProviderCallOutsideTransaction();
 
         try {
-            $result = $paidTarget === null
-                ? $this->invoke(
-                    $adapter,
-                    $type,
-                    $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
-                    $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
-                )
-                : $this->invokePaid(
-                    $adapter,
-                    $type,
-                    $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
-                    $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
-                    $paidTarget,
-                );
+            if ($type === ServiceMutationType::Reconfigure) {
+                if (! $adapter instanceof PanelServiceReconfigurationAdapter || ! $reconfigurationRequest instanceof PanelServiceReconfigurationRequest) {
+                    throw new RuntimeException('Service reconfiguration provider boundary is unavailable.');
+                }
+                $result = $adapter->reconfigureService($reconfigurationRequest);
+            } else {
+                $result = $paidTarget === null
+                    ? $this->invoke(
+                        $adapter,
+                        $type,
+                        $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                        $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                    )
+                    : $this->invokePaid(
+                        $adapter,
+                        $type,
+                        $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                        $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                        $paidTarget,
+                    );
+            }
         } catch (Throwable) {
             return $this->finalize(
                 $operation,
@@ -206,7 +245,44 @@ final readonly class ServiceMutationExecutor
             );
         }
 
-        return $this->applyResult($operation, $type, $result);
+        if ($type !== ServiceMutationType::Reconfigure || $result->outcome !== PanelOperationOutcome::Success) {
+            return $this->applyResult($operation, $type, $result);
+        }
+        if ($result->service === null) {
+            return $this->finalize(
+                $operation,
+                $type,
+                ProvisioningState::NeedsReview,
+                'reconfiguration_success_without_snapshot',
+                'Panel reported reconfiguration success without an authoritative remote snapshot.',
+            );
+        }
+
+        $this->assertProviderCallOutsideTransaction();
+        try {
+            $verifiedRemote = $adapter->findByRemoteId($result->service->remoteId);
+        } catch (Throwable) {
+            return $this->finalize(
+                $operation,
+                $type,
+                ProvisioningState::UncertainRemoteResult,
+                'reconfiguration_verification_unavailable',
+                'Panel reconfiguration succeeded but authoritative remote verification is unavailable.',
+            );
+        }
+        if ($verifiedRemote === null
+            || ! hash_equals($result->service->remoteId, $verifiedRemote->remoteId)
+            || ! hash_equals($result->service->canonicalHash, $verifiedRemote->canonicalHash)) {
+            return $this->finalize(
+                $operation,
+                $type,
+                ProvisioningState::NeedsReview,
+                'reconfiguration_remote_result_mismatch',
+                'Panel reconfiguration result could not be matched to authoritative remote state.',
+            );
+        }
+
+        return $this->finalizeReconfigurationSuccess($operation, $result, $verifiedRemote);
     }
 
     /**
@@ -226,7 +302,7 @@ final readonly class ServiceMutationExecutor
             }
 
             $type = $this->mutationType($locked->operation_type);
-            if ($type->isPaidEntitlement() && $this->paidMutationFinanciallyInvalidatedOn($connection, (int) $locked->id)) {
+            if ($type->isPaidCommercialMutation() && $this->paidMutationFinanciallyInvalidatedOn($connection, (int) $locked->id)) {
                 return $this->rejectFinanciallyInvalidatedOn($connection, $locked);
             }
 
@@ -326,12 +402,22 @@ final readonly class ServiceMutationExecutor
 
     private function paidMutationFinanciallyInvalidatedOn(Connection $connection, int $operationId): bool
     {
-        return $connection->table('service_paid_mutation_authorities as paid_authority')
+        if ($connection->table('service_paid_mutation_authorities as paid_authority')
             ->join('provisioning_financial_invalidations as invalidation', function (JoinClause $join): void {
                 $join->on('invalidation.purchase_settlement_id', '=', 'paid_authority.purchase_settlement_id')
                     ->on('invalidation.payment_intent_id', '=', 'paid_authority.payment_intent_id');
             })
             ->where('paid_authority.provisioning_operation_id', $operationId)
+            ->exists()) {
+            return true;
+        }
+
+        return $connection->table('service_reconfiguration_authorities as authority_row')
+            ->join('provisioning_financial_invalidations as invalidation', function (JoinClause $join): void {
+                $join->on('invalidation.purchase_settlement_id', '=', 'authority_row.purchase_settlement_id')
+                    ->on('invalidation.payment_intent_id', '=', 'authority_row.payment_intent_id');
+            })
+            ->where('authority_row.provisioning_operation_id', $operationId)
             ->exists();
     }
 
@@ -376,6 +462,291 @@ final readonly class ServiceMutationExecutor
                 $this->clearEffectAuthority($connection);
             }
         }, 3);
+    }
+
+    /**
+     * @param  MutationOperation  $locator
+     * @return array{MutationOperation,PanelServiceReconfigurationRequest}|null
+     */
+    private function markReconfigurationProviderBoundary(object $locator, ServiceMutationType $type): ?array
+    {
+        if ($type !== ServiceMutationType::Reconfigure) {
+            throw new RuntimeException('Non-reconfiguration mutation reached the reconfiguration provider boundary.');
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type): ?array {
+            $operation = $this->operationById($connection, (int) $locator->id, true);
+            if ($this->state($operation->state) !== ProvisioningState::Running
+                || $operation->remote_effect_started_at !== null
+                || $operation->remote_effect_completed_at !== null) {
+                throw new DomainException('Service reconfiguration provider boundary cannot be entered from the current state.');
+            }
+
+            $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
+            if (! $this->serviceMatchesOperation($service, $operation, $type)) {
+                return null;
+            }
+            $authority = $this->reconfigurationAuthorityForOperation($connection, (int) $operation->id, true);
+            if ($authority === null
+                || $authority->result_recorded_at !== null
+                || $authority->result_remote_service_id !== null
+                || $authority->remote_result_snapshot_hash !== null
+                || ! ($authority->source_route_selection_id === null && $service->route_selection_id === null)
+                    && (int) $authority->source_route_selection_id !== (int) $service->route_selection_id
+                || (int) $authority->source_service_target_id !== (int) $service->service_target_id
+                || (int) $authority->quoted_remote_identity_generation !== (int) $service->remote_identity_generation
+                || (int) $authority->quoted_lifecycle_version !== (int) $service->lifecycle_version
+                || (int) $authority->quoted_mutation_generation + 1 !== (int) $service->mutation_generation
+                || $authority->target_reservation_state !== 'held'
+                || new DateTimeImmutable($authority->target_reservation_expires_at) <= $this->clock->now()
+                || $authority->current_offering_state !== 'active'
+                || $authority->current_offering_visibility !== 'visible'
+                || (int) $authority->current_offering_version !== (int) $authority->target_plan_offering_version
+                || (int) $authority->current_target_version !== (int) $authority->target_service_target_version
+                || (int) $authority->current_profile_version !== (int) $authority->target_protocol_profile_version
+                || (int) $authority->source_connection_id !== (int) $authority->target_connection_id
+                || ($authority->source_route_selection_id !== null && $authority->source_reservation_state !== 'committed')
+                || $connection->table('provisioning_financial_invalidations')
+                    ->where('purchase_settlement_id', (int) $authority->purchase_settlement_id)
+                    ->where('payment_intent_id', (int) $authority->payment_intent_id)
+                    ->exists()) {
+                return null;
+            }
+
+            $request = new PanelServiceReconfigurationRequest(
+                $operation->public_id,
+                $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                $authority->target_plan_offering_code,
+                $authority->target_reference,
+                $authority->target_protocol_profile_code,
+                [
+                    'target_plan_offering_id' => (int) $authority->target_plan_offering_id,
+                    'target_plan_offering_version' => (int) $authority->target_plan_offering_version,
+                    'target_route_selection_id' => (int) $authority->target_route_selection_id,
+                    'target_service_target_id' => (int) $authority->target_service_target_id,
+                    'target_protocol_profile_id' => (int) $authority->target_protocol_profile_id,
+                    'source_remote_identity_generation' => (int) $authority->quoted_remote_identity_generation,
+                    'source_lifecycle_version' => (int) $authority->quoted_lifecycle_version,
+                ],
+            );
+
+            $now = $this->timestamp();
+            $this->setEffectAuthority($connection, $operation);
+            try {
+                $updated = $connection->table('provisioning_operations')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', ProvisioningState::Running->value)
+                    ->where('state_version', (int) $operation->state_version)
+                    ->whereNull('remote_effect_started_at')
+                    ->update([
+                        'state_version' => (int) $operation->state_version + 1,
+                        'remote_effect_started_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Service reconfiguration provider boundary lost its authority.');
+                }
+
+                return [$this->operationById($connection, (int) $operation->id, true), $request];
+            } finally {
+                $this->clearEffectAuthority($connection);
+            }
+        }, 3);
+    }
+
+    /**
+     * @param  MutationOperation  $locator
+     */
+    private function finalizeReconfigurationSuccess(
+        object $locator,
+        PanelOperationResult $result,
+        RemoteServiceSnapshot $verifiedRemote,
+    ): ServiceMutationReceipt {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $result, $verifiedRemote): ServiceMutationReceipt {
+            $operation = $this->operationById($connection, (int) $locator->id, true);
+            if ($this->state($operation->state) !== ProvisioningState::Running
+                || $operation->remote_effect_started_at === null
+                || $operation->remote_effect_completed_at !== null) {
+                throw new DomainException('Service reconfiguration success cannot finalize from the current state.');
+            }
+            $type = $this->mutationType($operation->operation_type);
+            if ($type !== ServiceMutationType::Reconfigure) {
+                throw new RuntimeException('Non-reconfiguration mutation reached reconfiguration finalization.');
+            }
+            $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
+            if (! $this->serviceMatchesOperation($service, $operation, $type)) {
+                throw new DomainException('Service reconfiguration source authority changed after provider success.');
+            }
+
+            $authority = $this->reconfigurationAuthorityForOperation($connection, (int) $operation->id, true);
+            if ($authority === null
+                || $authority->result_recorded_at !== null
+                || $authority->result_remote_service_id !== null
+                || $authority->remote_result_snapshot_hash !== null
+                || $authority->target_reservation_state !== 'held'
+                || new DateTimeImmutable($authority->target_reservation_expires_at) <= $this->clock->now()
+                || $authority->current_offering_state !== 'active'
+                || $authority->current_offering_visibility !== 'visible'
+                || (int) $authority->current_offering_version !== (int) $authority->target_plan_offering_version
+                || (int) $authority->current_target_version !== (int) $authority->target_service_target_version
+                || (int) $authority->current_profile_version !== (int) $authority->target_protocol_profile_version
+                || (int) $authority->source_connection_id !== (int) $authority->target_connection_id
+                || ($authority->source_route_selection_id !== null && $authority->source_reservation_state !== 'committed')
+                || $connection->table('provisioning_financial_invalidations')
+                    ->where('purchase_settlement_id', (int) $authority->purchase_settlement_id)
+                    ->where('payment_intent_id', (int) $authority->payment_intent_id)
+                    ->exists()) {
+                throw new DomainException('Service reconfiguration destination or financial authority changed after provider success.');
+            }
+            if (! hash_equals($verifiedRemote->remoteId, $this->requiredString($result->service?->remoteId, 'Reconfiguration remote result ID'))
+                || ! hash_equals($verifiedRemote->canonicalHash, $this->requiredString($result->service?->canonicalHash, 'Reconfiguration remote result snapshot hash'))) {
+                throw new DomainException('Service reconfiguration remote verification changed before finalization.');
+            }
+
+            $now = $this->timestamp();
+            $this->setReconfigurationResultAuthority($connection, $operation, $verifiedRemote);
+            try {
+                $updatedAuthority = $connection->table('service_reconfiguration_authorities')
+                    ->where('id', (int) $authority->id)
+                    ->whereNull('result_recorded_at')
+                    ->whereNull('result_remote_service_id')
+                    ->whereNull('remote_result_snapshot_hash')
+                    ->update([
+                        'result_remote_service_id' => $verifiedRemote->remoteId,
+                        'remote_result_snapshot_hash' => $verifiedRemote->canonicalHash,
+                        'result_recorded_at' => $now,
+                    ]);
+                if ($updatedAuthority !== 1) {
+                    throw new RuntimeException('Service reconfiguration remote result evidence lost its authority.');
+                }
+            } finally {
+                $this->clearReconfigurationResultAuthority($connection);
+            }
+
+            $this->setEffectAuthority($connection, $operation);
+            try {
+                $updatedOperation = $connection->table('provisioning_operations')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', ProvisioningState::Running->value)
+                    ->where('state_version', (int) $operation->state_version)
+                    ->update([
+                        'state' => ProvisioningState::Succeeded->value,
+                        'state_version' => (int) $operation->state_version + 1,
+                        'last_result_code' => $this->resultCode($result->providerCode ?? 'panel_success'),
+                        'last_result_message' => $this->safeMessage($result->safeMessage ?? 'Panel Service reconfiguration completed and was verified.'),
+                        'remote_effect_completed_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                if ($updatedOperation !== 1) {
+                    throw new RuntimeException('Service reconfiguration operation finalization lost its state.');
+                }
+                $next = $this->operationById($connection, (int) $operation->id, true);
+
+                if ($authority->source_reservation_key !== null) {
+                    $this->capacity->release(
+                        $authority->source_reservation_key,
+                        $this->positiveDatabaseInt($authority->source_reservation_version, 'Source capacity reservation version'),
+                        new CapacityOperationContext(
+                            'service-reconfigure-source-release:'.$operation->public_id,
+                            $operation->correlation_id,
+                            'service_reconfiguration',
+                            'capacity_transfer',
+                            'remote_effect_succeeded',
+                        ),
+                    );
+                }
+                $this->capacity->commit(
+                    $authority->target_capacity_reservation_key,
+                    $this->positiveDatabaseInt($authority->target_reservation_version, 'Target capacity reservation version'),
+                    new CapacityOperationContext(
+                        'service-reconfigure-target-commit:'.$operation->public_id,
+                        $operation->correlation_id,
+                        'service_reconfiguration',
+                        'capacity_transfer',
+                        'remote_effect_succeeded',
+                    ),
+                );
+
+                $updatedService = $connection->table('service_subscriptions')
+                    ->where('id', (int) $service->id)
+                    ->where('mutation_generation', (int) $operation->operation_generation)
+                    ->where('remote_identity_generation', (int) $operation->target_remote_identity_generation)
+                    ->where('lifecycle_version', (int) $operation->target_lifecycle_version)
+                    ->where('service_target_id', (int) $authority->source_service_target_id)
+                    ->where('remote_service_id', $this->requiredString($operation->remote_service_id, 'Remote Service ID'))
+                    ->whereNull('remote_deleted_at')
+                    ->update([
+                        'route_selection_id' => (int) $authority->target_route_selection_id,
+                        'service_target_id' => (int) $authority->target_service_target_id,
+                        'remote_service_id' => $verifiedRemote->remoteId,
+                        'remote_identity_generation' => (int) $operation->target_remote_identity_generation + 1,
+                        'lifecycle_version' => (int) $operation->target_lifecycle_version + 1,
+                        'updated_at' => $now,
+                    ]);
+                if ($updatedService !== 1) {
+                    throw new RuntimeException('Service reconfiguration current configuration transition lost its authority.');
+                }
+
+                $this->deliveries->queue(
+                    $service->public_id,
+                    ServiceDeliveryPurpose::Resend,
+                    'service.reconfiguration.delivery.'.$operation->public_id,
+                    $operation->correlation_id,
+                );
+                $this->recordEvent(
+                    $connection,
+                    $next,
+                    ProvisioningState::Succeeded->value,
+                    $this->resultCode($result->providerCode ?? 'panel_success'),
+                );
+
+                return $this->receipt($next, $type, false);
+            } finally {
+                $this->clearEffectAuthority($connection);
+            }
+        }, 3);
+    }
+
+    /** @return ReconfigurationExecutionAuthority|null */
+    private function reconfigurationAuthorityForOperation(Connection $connection, int $operationId, bool $lock): ?object
+    {
+        $query = $connection->table('service_reconfiguration_authorities as authority_row')
+            ->join('panel_service_targets as source_target', 'source_target.id', '=', 'authority_row.source_service_target_id')
+            ->join('plan_offerings as target_offering', 'target_offering.id', '=', 'authority_row.target_plan_offering_id')
+            ->join('panel_capacity_reservations as target_reservation', 'target_reservation.id', '=', 'authority_row.target_capacity_reservation_id')
+            ->join('panel_service_targets as target_target', 'target_target.id', '=', 'authority_row.target_service_target_id')
+            ->join('panel_protocol_profiles as target_profile', 'target_profile.id', '=', 'authority_row.target_protocol_profile_id')
+            ->leftJoin('plan_offering_route_selections as source_selection', 'source_selection.id', '=', 'authority_row.source_route_selection_id')
+            ->leftJoin('panel_capacity_reservations as source_reservation', 'source_reservation.id', '=', 'source_selection.capacity_reservation_id')
+            ->where('authority_row.provisioning_operation_id', $operationId);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        /** @var ReconfigurationExecutionAuthority|null $row */
+        $row = $query->first([
+            'authority_row.id', 'authority_row.provisioning_operation_id', 'authority_row.service_subscription_id',
+            'authority_row.purchase_settlement_id', 'authority_row.payment_intent_id',
+            'authority_row.target_plan_offering_id', 'authority_row.target_plan_offering_code', 'authority_row.target_plan_offering_version',
+            'authority_row.source_route_selection_id',
+            'authority_row.source_service_target_id', 'authority_row.target_route_selection_id', 'authority_row.target_service_target_id',
+            'authority_row.target_service_target_version', 'authority_row.target_protocol_profile_id',
+            'authority_row.target_protocol_profile_version', 'authority_row.target_capacity_reservation_id',
+            'authority_row.target_capacity_reservation_key', 'authority_row.target_reference',
+            'authority_row.target_protocol_profile_code', 'authority_row.quoted_remote_identity_generation',
+            'authority_row.quoted_lifecycle_version', 'authority_row.quoted_mutation_generation',
+            'authority_row.result_remote_service_id', 'authority_row.remote_result_snapshot_hash', 'authority_row.result_recorded_at',
+            'target_reservation.state as target_reservation_state', 'target_reservation.version as target_reservation_version',
+            'target_reservation.expires_at as target_reservation_expires_at',
+            'target_offering.version as current_offering_version', 'target_offering.state as current_offering_state',
+            'target_offering.visibility as current_offering_visibility', 'target_target.version as current_target_version',
+            'target_target.panel_connection_id as target_connection_id', 'target_profile.version as current_profile_version',
+            'source_target.panel_connection_id as source_connection_id', 'source_reservation.state as source_reservation_state',
+            'source_reservation.version as source_reservation_version', 'source_reservation.reservation_key as source_reservation_key',
+        ]);
+
+        return $row;
     }
 
     /**
@@ -663,7 +1034,7 @@ final readonly class ServiceMutationExecutor
         ServiceMutationType $type,
         string $now,
     ): void {
-        if ($type->isPaidEntitlement()
+        if ($type->isPaidCommercialMutation()
             || in_array($type, [ServiceMutationType::ResetUsage, ServiceMutationType::RotateSubscriptionLink], true)) {
             return;
         }
@@ -728,7 +1099,8 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::Renew,
             ServiceMutationType::AddData,
             ServiceMutationType::AddDays,
-            ServiceMutationType::AddDataDays => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+            ServiceMutationType::AddDataDays,
+            ServiceMutationType::Reconfigure => in_array($service->lifecycle_state, ['active', 'suspended'], true),
         };
     }
 
@@ -743,7 +1115,8 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::Renew,
             ServiceMutationType::AddData,
             ServiceMutationType::AddDays,
-            ServiceMutationType::AddDataDays => throw new RuntimeException('Paid Service mutation reached the manual provider path.'),
+            ServiceMutationType::AddDataDays,
+            ServiceMutationType::Reconfigure => throw new RuntimeException('Paid Service mutation reached the manual provider path.'),
         };
     }
 
@@ -797,8 +1170,8 @@ final readonly class ServiceMutationExecutor
         }
         /** @var MutationService|null $row */
         $row = $query->first([
-            'id', 'public_id', 'service_target_id', 'remote_service_id', 'lifecycle_state', 'lifecycle_version',
-            'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
+            'id', 'public_id', 'route_selection_id', 'service_target_id', 'remote_service_id', 'provisioned_at',
+            'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation', 'remote_deleted_at',
         ]);
         if ($row === null) {
             throw new RuntimeException('Service Subscription disappeared during mutation execution.');
@@ -913,6 +1286,26 @@ final readonly class ServiceMutationExecutor
         $connection->statement('SET @app_service_paid_mutation_snapshot_hash = NULL');
         $connection->statement('SET @app_service_paid_mutation_target_expires_at = NULL');
         $connection->statement('SET @app_service_paid_mutation_target_data_limit = NULL');
+    }
+
+    /** @param MutationOperation $operation */
+    private function setReconfigurationResultAuthority(
+        Connection $connection,
+        object $operation,
+        RemoteServiceSnapshot $remote,
+    ): void {
+        $connection->statement('SET @app_service_reconfiguration_result_authority = ?', ['service_reconfiguration_result_v1']);
+        $connection->statement('SET @app_service_reconfiguration_operation_id = ?', [(int) $operation->id]);
+        $connection->statement('SET @app_service_reconfiguration_result_remote_id = ?', [$remote->remoteId]);
+        $connection->statement('SET @app_service_reconfiguration_result_snapshot_hash = ?', [$remote->canonicalHash]);
+    }
+
+    private function clearReconfigurationResultAuthority(Connection $connection): void
+    {
+        $connection->statement('SET @app_service_reconfiguration_result_authority = NULL');
+        $connection->statement('SET @app_service_reconfiguration_operation_id = NULL');
+        $connection->statement('SET @app_service_reconfiguration_result_remote_id = NULL');
+        $connection->statement('SET @app_service_reconfiguration_result_snapshot_hash = NULL');
     }
 
     private function timestamp(): string
