@@ -237,7 +237,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
                 'settlements' => DB::table('purchase_settlements')->count(),
             ];
             $privateReference = 'telegram-private-media:'.strtoupper((string) Str::ulid());
-            $evidenceBytes = $this->paymentEvidencePng().(string) $offset;
+            $evidenceBytes = $this->paymentEvidencePng($offset);
             $contentHash = hash('sha256', $evidenceBytes);
 
             if (! $manualExpected) {

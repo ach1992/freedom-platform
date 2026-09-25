@@ -11,12 +11,22 @@ use RuntimeException;
 
 trait TelegramPaymentPrivateMediaTestSupport
 {
-    protected function paymentEvidencePng(): string
+    protected function paymentEvidencePng(int $variant = 0): string
     {
-        $decoded = base64_decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNg+A8AAQIBANEay48AAAAASUVORK5CYII=',
-            true,
-        );
+        $fixtures = [
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mPgFpcHAAByAELH9UOGAAAAAElFTkSuQmCC',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mMwiOsBAAHcARt0nzIgAAAAAElFTkSuQmCC',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mMIXfoTAANGAfRKBBY8AAAAAElFTkSuQmCC',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mOoepMGAAOwAc3+auLrAAAAAElFTkSuQmCC',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mOYb3wZAAMaAabt5xugAAAAAElFTkSuQmCC',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mM4UuUAAAOEAX9BgEDWAAAAAElFTkSuQmCC',
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN4eXAtAATuAlhrfOJFAAAAAElFTkSuQmCC',
+        ];
+        if (! array_key_exists($variant, $fixtures)) {
+            throw new RuntimeException('Payment evidence PNG fixture variant is invalid.');
+        }
+
+        $decoded = base64_decode($fixtures[$variant], true);
         if (! is_string($decoded)) {
             throw new RuntimeException('Payment evidence PNG fixture could not be decoded.');
         }
