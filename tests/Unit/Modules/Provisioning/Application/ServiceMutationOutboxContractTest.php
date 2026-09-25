@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Modules\Provisioning\Application;
 
+use App\Modules\Orders\Application\PaidServiceMutationOrderOutboxPublisher;
+use App\Modules\Provisioning\Application\PaidServiceMutationOrderOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceMutationOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceMutationQueueService;
 use App\Modules\Provisioning\Application\ServiceMutationRecoveryService;
@@ -94,6 +96,23 @@ final class ServiceMutationOutboxContractTest extends TestCase
             '[InitialProvisioningOutboxHandler::class, PaidServiceMutationOrderOutboxHandler::class, ServiceMutationOutboxHandler::class]',
             $source,
         );
+    }
+
+    public function test_paid_service_mutation_order_event_is_safe_and_routes_back_to_canonical_queue(): void
+    {
+        self::assertSame('orders.paid_service_mutation.materialized', PaidServiceMutationOrderOutboxPublisher::OUTBOX_EVENT_TYPE);
+        self::assertSame(1, PaidServiceMutationOrderOutboxPublisher::OUTBOX_CONTRACT_VERSION);
+
+        $publisher = $this->classSource(PaidServiceMutationOrderOutboxPublisher::class);
+        self::assertStringContainsString('QuoteAction::Reconfigure', $publisher);
+        self::assertStringContainsString("'purchase_settlement_public_id' => \$purchaseSettlementPublicId", $publisher);
+        self::assertStringNotContainsString('remote_service_id', $publisher);
+
+        $handler = $this->classSource(PaidServiceMutationOrderOutboxHandler::class);
+        self::assertStringContainsString('ServicePurchaseMutationQueueService::canonicalRequestKeyForSettlement', $handler);
+        self::assertStringContainsString('$this->mutations->queueFromSettlement(', $handler);
+        self::assertStringContainsString('OutboxDispatchOutcome::DefinitiveFailure', $handler);
+        self::assertStringContainsString('OutboxDispatchOutcome::RetryableFailure', $handler);
     }
 
     /** @param class-string $class */

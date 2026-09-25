@@ -286,7 +286,10 @@ final readonly class ServiceReconfigurationNoChargeQueueService
         return $row;
     }
 
-    /** @param ServiceRow $service @param PreviewRow $preview */
+    /**
+     * @param  ServiceRow  $service
+     * @param  PreviewRow  $preview
+     */
     private function assertCurrentNoChargeAuthority(object $service, object $preview): void
     {
         if ((int) $preview->total_price_irr !== 0
@@ -362,7 +365,10 @@ final readonly class ServiceReconfigurationNoChargeQueueService
         return $row;
     }
 
-    /** @param ServiceRow $service @param OperationRow $operation */
+    /**
+     * @param  ServiceRow  $service
+     * @param  OperationRow  $operation
+     */
     private function receipt(object $service, object $operation, bool $replayed): ServiceMutationReceipt
     {
         $state = ProvisioningState::tryFrom((string) $operation->state)

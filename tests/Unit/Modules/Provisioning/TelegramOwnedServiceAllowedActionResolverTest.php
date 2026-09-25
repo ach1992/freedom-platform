@@ -95,6 +95,19 @@ final class TelegramOwnedServiceAllowedActionResolverTest extends TestCase
         self::assertContains(TelegramOwnedServiceAction::AddData, $withPolicyCapability);
     }
 
+    public function test_reconfigure_requires_both_customer_policy_and_verified_provider_capability(): void
+    {
+        $resolver = new TelegramOwnedServiceAllowedActionResolver;
+        $policies = $this->policies();
+        $policies['reconfigure'] = ['customer_enabled' => true, 'required_capability_code' => null];
+
+        $withoutCapability = $resolver->resolve('active', true, $policies, [], []);
+        self::assertNotContains(TelegramOwnedServiceAction::Reconfigure, $withoutCapability);
+
+        $withCapability = $resolver->resolve('active', true, $policies, [], ['reconfigure_service']);
+        self::assertSame([TelegramOwnedServiceAction::Reconfigure], $withCapability);
+    }
+
     public function test_unprovisioned_or_incompatible_lifecycle_has_no_allowed_actions_and_unsupported_policy_is_ignored(): void
     {
         $policies = $this->policies();
