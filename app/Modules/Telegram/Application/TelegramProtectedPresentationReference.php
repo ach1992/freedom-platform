@@ -16,11 +16,15 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
 
     private const PREFIX_V3 = '[PROTECTED_TELEGRAM_REFERENCE:v3:';
 
+    private const PREFIX_V4 = '[PROTECTED_TELEGRAM_REFERENCE:v4:';
+
     private const PURPOSE_CARD_TO_CARD_DESTINATION = 'card_to_card_destination';
 
     private const PURPOSE_MEMBERSHIP_JOIN_PROMPT = 'membership_join_prompt';
 
     private const PURPOSE_SUPPORT_ATTACHMENT = 'support_attachment';
+
+    private const PURPOSE_PAYMENT_REVIEW_EVIDENCE = 'payment_review_evidence';
 
     private function __construct(
         public string $purpose,
@@ -30,6 +34,7 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         public ?int $planOfferingId = null,
         public ?string $configurationHash = null,
         public ?string $audience = null,
+        public ?string $kind = null,
     ) {}
 
     public static function cardToCardDestination(string $reservationPublicId, string $locale): self
@@ -90,6 +95,22 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         );
     }
 
+    public static function paymentReviewEvidence(string $kind, string $reviewPublicId, string $locale): self
+    {
+        if (! in_array($kind, ['c2c', 'gift_card', 'usdt'], true)
+            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $reviewPublicId) !== 1) {
+            throw new DomainException('Protected Telegram payment-review evidence identity is invalid.');
+        }
+        self::assertLocale($locale);
+
+        return new self(
+            self::PURPOSE_PAYMENT_REVIEW_EVIDENCE,
+            strtoupper($reviewPublicId),
+            $locale,
+            kind: $kind,
+        );
+    }
+
     public static function restore(string $value): self
     {
         if (preg_match(
@@ -122,6 +143,14 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
             return self::supportAttachment($matches[2], $matches[1], $matches[3]);
         }
 
+        if (preg_match(
+            '/\A\[PROTECTED_TELEGRAM_REFERENCE:v4:payment_review_evidence:(c2c|gift_card|usdt):([0-9A-HJKMNP-TV-Z]{26}):(fa|en)\]\z/',
+            $value,
+            $matches,
+        ) === 1) {
+            return self::paymentReviewEvidence($matches[1], $matches[2], $matches[3]);
+        }
+
         throw new DomainException('Stored protected Telegram reference is invalid.');
     }
 
@@ -138,6 +167,20 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
     public function isSupportAttachment(): bool
     {
         return $this->purpose === self::PURPOSE_SUPPORT_ATTACHMENT;
+    }
+
+    public function isPaymentReviewEvidence(): bool
+    {
+        return $this->purpose === self::PURPOSE_PAYMENT_REVIEW_EVIDENCE;
+    }
+
+    public function paymentReviewKind(): string
+    {
+        if (! $this->isPaymentReviewEvidence() || $this->kind === null) {
+            throw new LogicException('Protected Telegram payment-review evidence kind is unavailable.');
+        }
+
+        return $this->kind;
     }
 
     public function supportAttachmentAudience(): string
@@ -165,6 +208,9 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         }
         if ($this->isSupportAttachment() && $this->audience !== null) {
             return self::PREFIX_V3.$this->purpose.':'.$this->audience.':'.$this->publicId.':'.$this->locale.']';
+        }
+        if ($this->isPaymentReviewEvidence() && $this->kind !== null) {
+            return self::PREFIX_V4.$this->purpose.':'.$this->kind.':'.$this->publicId.':'.$this->locale.']';
         }
 
         throw new LogicException('Protected Telegram reference is incomplete.');

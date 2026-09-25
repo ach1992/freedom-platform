@@ -6,6 +6,7 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -20,6 +21,7 @@ final readonly class TelegramProtectedPresentationResolver
         private ?SupportTicketAttachmentService $supportAttachments = null,
         private ?TelegramSupportMembershipFreshnessGuard $supportMembership = null,
         private ?TelegramPrivateMediaDeliveryResolver $privateMedia = null,
+        private ?TelegramAlternativePaymentReview $paymentReviews = null,
     ) {}
 
     public function resolveForSelf(
@@ -38,6 +40,9 @@ final readonly class TelegramProtectedPresentationResolver
         }
         if ($reference->isSupportAttachment()) {
             return $this->supportAttachmentForSelf($userId, $reference);
+        }
+        if ($reference->isPaymentReviewEvidence()) {
+            return $this->paymentReviewEvidenceForSelf($userId, $reference);
         }
         if (! $reference->isCardToCardDestination()) {
             throw new RuntimeException('Protected Telegram presentation reference is unavailable.');
@@ -125,6 +130,64 @@ final readonly class TelegramProtectedPresentationResolver
         );
     }
 
+    private function paymentReviewEvidenceForSelf(
+        int $userId,
+        TelegramProtectedPresentationReference $reference,
+    ): ProtectedTelegramPresentation {
+        if ($this->paymentReviews === null || $this->privateMedia === null) {
+            throw new RuntimeException('Protected Telegram payment-review evidence dependencies are unavailable.');
+        }
+
+        try {
+            $grant = $this->paymentReviews->privateEvidence(
+                $userId,
+                $reference->paymentReviewKind(),
+                $reference->publicId,
+            );
+        } catch (AuthorizationException|DomainException $exception) {
+            throw new DomainException(
+                'Protected Telegram payment-review evidence is no longer authorized or pending.',
+                previous: $exception,
+            );
+        }
+
+        if (! hash_equals($reference->paymentReviewKind(), $grant->kind)
+            || ! hash_equals($reference->publicId, $grant->reviewPublicId)) {
+            throw new RuntimeException('Protected Telegram payment-review evidence identity changed.');
+        }
+
+        $payload = $this->privateMedia->resolvePaymentReviewEvidence(
+            $grant->privateMediaReference,
+            $grant->associationType,
+            $grant->associationPublicId,
+        );
+        $contents = $payload->bytes();
+        $expectedHash = $grant->contentSha256->reveal();
+        if (preg_match('/\A[0-9a-f]{64}\z/', $expectedHash) !== 1
+            || ! hash_equals($expectedHash, hash('sha256', $contents))) {
+            throw new RuntimeException('Protected Telegram payment-review evidence hash binding failed.');
+        }
+
+        $caption = $this->translation(
+            'telegram.navigation.admin.payment_reviews.evidence_caption',
+            $reference->locale,
+            [
+                'kind' => $this->translation(
+                    'telegram.navigation.admin.payment_reviews.kinds.'.$grant->kind,
+                    $reference->locale,
+                ),
+                'review' => $grant->reviewPublicId,
+                'submission' => $grant->associationPublicId,
+            ],
+        );
+
+        return ProtectedTelegramPresentation::binaryDocument(
+            $contents,
+            'payment-review-evidence-'.$grant->associationPublicId.'.'.$this->extensionForMime($payload->detectedMime),
+            $caption,
+        );
+    }
+
     /** @param array<string,int|string> $replace */
     private function translation(string $key, string $locale, array $replace = []): string
     {
@@ -145,7 +208,7 @@ final readonly class TelegramProtectedPresentationResolver
             'video/mp4' => 'mp4',
             'application/pdf' => 'pdf',
             'text/plain' => 'txt',
-            default => throw new RuntimeException('Protected Telegram Support attachment MIME type is invalid.'),
+            default => throw new RuntimeException('Protected Telegram document MIME type is invalid.'),
         };
     }
 

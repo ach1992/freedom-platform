@@ -67,6 +67,14 @@ final class TelegramPrivateMediaDeliveryProvenanceGuard
         );
     }
 
+    public static function assertPaymentReviewProtectedResolverCaller(): void
+    {
+        self::assertExactInternalCaller(
+            TelegramProtectedPresentationResolver::class,
+            __DIR__.'/TelegramProtectedPresentationResolver.php',
+        );
+    }
+
     public static function assertDirectMessageFacadeCaller(): void
     {
         self::assertExactInternalCaller(

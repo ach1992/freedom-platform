@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application\Contracts;
 
 use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewCase;
+use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewEvidence;
 
 interface TelegramAlternativePaymentReview
 {
@@ -20,6 +21,12 @@ interface TelegramAlternativePaymentReview
         string $kind,
         string $reviewPublicId,
     ): TelegramAlternativePaymentReviewCase;
+
+    public function privateEvidence(
+        int $actorUserId,
+        string $kind,
+        string $reviewPublicId,
+    ): TelegramAlternativePaymentReviewEvidence;
 
     public function approveC2c(
         int $actorUserId,

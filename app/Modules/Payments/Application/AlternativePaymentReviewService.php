@@ -12,6 +12,8 @@ use App\Modules\Payments\Usdt\Application\Contracts\UsdtBlockchainVerificationEv
 use App\Modules\Payments\Usdt\Application\UsdtManualReviewDecisionService;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewCase;
+use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewEvidence;
+use App\Shared\Application\RestrictedValue;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -29,6 +31,7 @@ use Throwable;
  *     transaction_id:mixed,
  *     subject_public_id:mixed,
  *     provider_code:mixed,
+ *     provider_transaction_id:mixed,
  *     amount_irr:mixed,
  *     currency:mixed,
  *     reference:mixed,
@@ -112,6 +115,22 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
             'c2c' => $this->findC2c($reviewPublicId),
             'gift_card' => $this->findGiftCard($reviewPublicId),
             'usdt' => $this->findUsdt($reviewPublicId),
+            default => throw new DomainException('Alternative-payment review kind is invalid.'),
+        };
+    }
+
+    public function privateEvidence(
+        int $actorUserId,
+        string $kind,
+        string $reviewPublicId,
+    ): TelegramAlternativePaymentReviewEvidence {
+        $this->administratorUsers->authorizeUser($actorUserId, TelegramAlternativePaymentReview::PERMISSION);
+        $this->assertIdentity($kind, $reviewPublicId);
+
+        return match ($kind) {
+            'c2c' => $this->c2cPrivateEvidence($reviewPublicId),
+            'gift_card' => $this->giftCardPrivateEvidence($reviewPublicId),
+            'usdt' => $this->usdtPrivateEvidence($reviewPublicId),
             default => throw new DomainException('Alternative-payment review kind is invalid.'),
         };
     }
@@ -339,6 +358,142 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
         };
     }
 
+    private function c2cPrivateEvidence(string $reviewPublicId): TelegramAlternativePaymentReviewEvidence
+    {
+        $transaction = $this->database->connection()->table('c2c_match_reviews as review')
+            ->join('c2c_bank_transactions as transaction', 'transaction.id', '=', 'review.c2c_bank_transaction_id')
+            ->where('review.public_id', strtoupper($reviewPublicId))
+            ->where('review.state', 'pending')
+            ->first(['transaction.provider_code', 'transaction.provider_transaction_id']);
+        if ($transaction === null) {
+            throw new DomainException('Pending C2C review evidence does not exist.');
+        }
+
+        $submissionPublicId = $this->c2cManualSubmissionPublicId(
+            (string) $transaction->provider_code,
+            (string) $transaction->provider_transaction_id,
+        );
+        if ($submissionPublicId === null) {
+            throw new DomainException('Pending C2C review has no deliverable private evidence.');
+        }
+
+        $submission = $this->database->connection()->table('c2c_manual_submissions')
+            ->where('public_id', $submissionPublicId)
+            ->first(['public_id', 'private_receipt_reference', 'evidence_hash']);
+        if ($submission === null) {
+            throw new DomainException('Pending C2C review private evidence is unavailable.');
+        }
+
+        return $this->paymentEvidence(
+            'c2c',
+            $reviewPublicId,
+            'c2c_manual_submission',
+            (string) $submission->public_id,
+            $submission->private_receipt_reference,
+            $submission->evidence_hash,
+        );
+    }
+
+    private function giftCardPrivateEvidence(string $reviewPublicId): TelegramAlternativePaymentReviewEvidence
+    {
+        $submission = $this->database->connection()->table('gift_card_reviews as review')
+            ->join('gift_card_submissions as submission', 'submission.id', '=', 'review.gift_card_submission_id')
+            ->where('review.public_id', strtoupper($reviewPublicId))
+            ->where('review.state', 'pending')
+            ->first(['submission.public_id', 'submission.private_image_reference', 'submission.image_content_hash']);
+        if ($submission === null) {
+            throw new DomainException('Pending Gift Card review private evidence does not exist.');
+        }
+
+        return $this->paymentEvidence(
+            'gift_card',
+            $reviewPublicId,
+            'gift_card_submission',
+            (string) $submission->public_id,
+            $submission->private_image_reference,
+            $submission->image_content_hash,
+        );
+    }
+
+    private function usdtPrivateEvidence(string $reviewPublicId): TelegramAlternativePaymentReviewEvidence
+    {
+        $submission = $this->database->connection()->table('usdt_manual_reviews as review')
+            ->join('usdt_txid_submissions as submission', 'submission.id', '=', 'review.usdt_txid_submission_id')
+            ->where('review.public_id', strtoupper($reviewPublicId))
+            ->where('review.state', 'pending')
+            ->first(['submission.public_id', 'submission.private_evidence_reference', 'submission.evidence_content_hash']);
+        if ($submission === null) {
+            throw new DomainException('Pending USDT review private evidence does not exist.');
+        }
+
+        return $this->paymentEvidence(
+            'usdt',
+            $reviewPublicId,
+            'usdt_txid_submission',
+            (string) $submission->public_id,
+            $submission->private_evidence_reference,
+            $submission->evidence_content_hash,
+        );
+    }
+
+    private function paymentEvidence(
+        string $kind,
+        string $reviewPublicId,
+        string $associationType,
+        string $associationPublicId,
+        mixed $privateReference,
+        mixed $contentSha256,
+    ): TelegramAlternativePaymentReviewEvidence {
+        if (! is_string($privateReference)
+            || preg_match('/\Atelegram-private-media:([0-9A-HJKMNP-TV-Z]{26})\z/i', $privateReference, $matches) !== 1
+            || ! is_string($contentSha256)
+            || preg_match('/\A[0-9a-f]{64}\z/', strtolower($contentSha256)) !== 1) {
+            throw new DomainException('Alternative-payment review private evidence is unavailable.');
+        }
+
+        return new TelegramAlternativePaymentReviewEvidence(
+            $kind,
+            strtoupper($reviewPublicId),
+            $associationType,
+            strtoupper($associationPublicId),
+            RestrictedValue::fromString('telegram-private-media:'.strtoupper($matches[1])),
+            RestrictedValue::fromString(strtolower($contentSha256)),
+        );
+    }
+
+    private function c2cManualSubmissionPublicId(string $providerCode, string $providerTransactionId): ?string
+    {
+        if ($providerCode !== 'manual-receipt'
+            || preg_match('/\Areceipt:([0-9A-HJKMNP-TV-Z]{26})\z/i', $providerTransactionId, $matches) !== 1) {
+            return null;
+        }
+
+        return strtoupper($matches[1]);
+    }
+
+    private function c2cPrivateEvidenceAvailable(object $row): bool
+    {
+        $submissionPublicId = $this->c2cManualSubmissionPublicId(
+            (string) $row->provider_code,
+            (string) $row->provider_transaction_id,
+        );
+        if ($submissionPublicId === null) {
+            return false;
+        }
+
+        return $this->isTelegramPrivateMediaReference(
+            $this->database->connection()->table('c2c_manual_submissions')
+                ->where('public_id', $submissionPublicId)
+                ->value('private_receipt_reference'),
+        );
+    }
+
+    private function isTelegramPrivateMediaReference(mixed $value): bool
+    {
+        return is_string($value)
+            && preg_match('/\Atelegram-private-media:[0-9A-HJKMNP-TV-Z]{26}\z/i', $value) === 1;
+    }
+
     private function findC2c(string $reviewPublicId): TelegramAlternativePaymentReviewCase
     {
         /** @var C2cReviewRow|null $row */
@@ -354,6 +509,7 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
                 'transaction.id as transaction_id',
                 'transaction.public_id as subject_public_id',
                 'transaction.provider_code',
+                'transaction.provider_transaction_id',
                 'transaction.amount_irr',
                 'transaction.currency',
                 'transaction.reference',
@@ -436,6 +592,7 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
                 'transaction.id as transaction_id',
                 'transaction.public_id as subject_public_id',
                 'transaction.provider_code',
+                'transaction.provider_transaction_id',
                 'transaction.amount_irr',
                 'transaction.currency',
                 'transaction.reference',
@@ -513,7 +670,7 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
             $row->reference === null ? null : $this->boundedReference((string) $row->reference),
             (int) $row->amount_irr,
             (string) $row->currency,
-            str_starts_with((string) $row->provider_code, 'manual-receipt'),
+            $this->c2cPrivateEvidenceAvailable($row),
             (int) $row->candidate_count,
             $candidates,
             null,
@@ -533,7 +690,7 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
             $row->masked_code === null ? null : $this->boundedReference((string) $row->masked_code),
             (int) $row->claimed_face_value,
             (string) $row->claimed_currency,
-            $row->private_image_reference !== null,
+            $this->isTelegramPrivateMediaReference($row->private_image_reference),
             1,
             [],
             null,
@@ -558,7 +715,7 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
             $reference,
             (int) $row->amount_irr,
             'IRR',
-            $row->private_evidence_reference !== null,
+            $this->isTelegramPrivateMediaReference($row->private_evidence_reference),
             1,
             [],
             (int) $row->minimum_confirmations,
