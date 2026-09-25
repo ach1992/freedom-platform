@@ -79,6 +79,7 @@ return [
                 'not_available' => 'در دسترس نیست',
                 'yes' => 'بله',
                 'no' => 'خیر',
+                'evidence_caption' => 'مدرک محافظت‌شده :kind برای بررسی :review (ارسال :submission).',
                 'kinds' => [
                     'c2c' => 'کارت‌به‌کارت',
                     'gift_card' => 'گیفت‌کارت',
@@ -87,6 +88,7 @@ return [
                 'buttons' => [
                     'open' => 'بازکردن بررسی #:number',
                     'refresh' => 'تازه‌سازی',
+                    'evidence' => 'مشاهده مدرک خصوصی',
                     'approve' => 'تأیید با مدرک',
                     'approve_candidate' => 'تأیید کاندید #:number',
                     'reject' => 'رد',

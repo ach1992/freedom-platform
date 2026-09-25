@@ -22,6 +22,8 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
 
     private const ACTION_REJECT = 'navigation.admin.payment_reviews.reject';
 
+    private const ACTION_EVIDENCE = 'navigation.admin.payment_reviews.evidence';
+
     private const ACTION_REFRESH = 'navigation.admin.payment_reviews.refresh';
 
     private const ACTION_BACK = 'navigation.back';
@@ -36,6 +38,7 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
         private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $presentations,
         private TelegramConfidentialDeliveryQueue $delivery,
+        private TelegramDeliveryQueueService $protectedDelivery,
         private TelegramInteractionSessionService $sessions,
         private TelegramInteractionCallbackService $callbacks,
         private TelegramAlternativePaymentReview $reviews,
@@ -125,6 +128,11 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
         if ($action->kind === TelegramInteractionActionKind::Callback) {
             if ($action->callbackAction === self::ACTION_BACK && $action->callbackPayload === []) {
                 $this->returnList($action);
+
+                return;
+            }
+            if ($action->callbackAction === self::ACTION_EVIDENCE && $action->callbackPayload === []) {
+                $this->deliverEvidence($action, $kind, $reviewPublicId);
 
                 return;
             }
@@ -296,6 +304,47 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
 
         $this->assertActor($action, $session->userId);
         $this->renderDetail($action, $session->version, $case);
+    }
+
+    private function deliverEvidence(
+        TelegramInteractionAction $action,
+        string $kind,
+        string $reviewPublicId,
+    ): void {
+        try {
+            $case = $this->reviews->find($action->userId, $kind, $reviewPublicId);
+        } catch (AuthorizationException) {
+            $this->navigation->showAdminControl($action);
+
+            return;
+        } catch (DomainException) {
+            $this->returnList($action);
+
+            return;
+        }
+
+        if (! $case->privateEvidenceAvailable) {
+            $this->renderDetail($action, $action->sessionVersion, $case, true);
+
+            return;
+        }
+
+        $reference = TelegramProtectedPresentationReference::paymentReviewEvidence(
+            $kind,
+            $reviewPublicId,
+            $this->locale($action->userId),
+        );
+        $key = 'tg-admin-payment-review-evidence:'.hash(
+            'sha256',
+            $action->requestKey.':'.$reference->durableText(),
+        );
+        $this->protectedDelivery->queueProtectedReference(
+            TelegramDeliveryAction::Send,
+            $action->telegramUserId,
+            $reference,
+            $key,
+            hash('sha256', $key),
+        );
     }
 
     private function beginInput(
@@ -518,6 +567,21 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
         }
 
         $rows = [];
+        if ($case->privateEvidenceAvailable) {
+            $evidence = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                self::ACTION_EVIDENCE,
+                [],
+                'tg-admin-payment-review-evidence:'.hash('sha256', $action->requestKey.':'.$case->reviewPublicId),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation($key.'buttons.evidence', $locale),
+                $evidence->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
         if ($case->kind === 'c2c') {
             foreach ($case->candidateReservationPublicIds as $offset => $reservationPublicId) {
                 $approve = $this->callbacks->issue(
