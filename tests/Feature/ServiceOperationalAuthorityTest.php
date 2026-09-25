@@ -7,6 +7,21 @@ namespace Tests\Feature;
 use App\Modules\AccessControl\Application\AccessChangeContext;
 use App\Modules\AccessControl\Application\AdministratorAccessService;
 use App\Modules\AccessControl\Domain\PermissionEffect;
+use App\Modules\Catalog\Application\CatalogChangeContext;
+use App\Modules\Catalog\Application\PlanOfferingRoutePolicyService;
+use App\Modules\Catalog\Application\PlanOfferingService;
+use App\Modules\Catalog\Domain\OfferingOperationCode;
+use App\Modules\Catalog\Domain\OfferingOperationPolicy;
+use App\Modules\Catalog\Domain\OfferingProtocolAssignment;
+use App\Modules\Catalog\Domain\PlanOfferingAudience;
+use App\Modules\Catalog\Domain\PlanOfferingDefinition;
+use App\Modules\Catalog\Domain\PlanOfferingProtocolSelectionMode;
+use App\Modules\Catalog\Domain\PlanOfferingRouteDefinition;
+use App\Modules\Catalog\Domain\PlanOfferingRoutePolicyDefinition;
+use App\Modules\Catalog\Domain\PlanOfferingRouteType;
+use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
+use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
+use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
@@ -19,6 +34,7 @@ use App\Modules\Provisioning\Application\ServiceOperationalAuthorityGuard;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
 use App\Modules\Provisioning\Application\ServiceOperationalDatabaseCapability;
 use App\Modules\Provisioning\Application\ServiceOwnershipTransferService;
+use App\Modules\Provisioning\Application\ServiceReconfigurationPreviewService;
 use App\Modules\Provisioning\Application\ServiceRepairService;
 use App\Modules\Provisioning\Application\ServiceSynchronizationService;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
@@ -591,6 +607,90 @@ final class ServiceOperationalAuthorityTest extends TestCase
         }
     }
 
+    public function test_reconfiguration_preview_is_owner_bound_policy_priced_route_reserved_and_replay_safe(): void
+    {
+        $fixture = $this->reconfigurationFixture('preview');
+        $attached = $this->attachedService($fixture, 'remote-reconfiguration-preview', 'reconfiguration-preview-user', 'reconfiguration-preview-import');
+        self::assertIsString($attached->serviceSubscriptionPublicId);
+        $servicePublicId = $attached->serviceSubscriptionPublicId;
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        self::assertNull(DB::table('service_subscriptions')->where('id', $serviceId)->value('route_selection_id'));
+
+        $service = $this->app->make(ServiceReconfigurationPreviewService::class);
+        $requestKey = 'service.reconfiguration.preview.000001';
+        $correlationId = 'service-reconfiguration-preview-correlation';
+        $first = $service->previewForSelf(
+            $fixture['user_id'],
+            $servicePublicId,
+            $fixture['offering_code'],
+            $fixture['server_code'],
+            $fixture['profile_code'],
+            $requestKey,
+            $correlationId,
+        );
+        self::assertFalse($first->replayed);
+        self::assertSame($servicePublicId, $first->servicePublicId);
+        self::assertSame($fixture['offering_code'], $first->sourceOfferingCode);
+        self::assertSame($fixture['offering_code'], $first->targetOfferingCode);
+        self::assertFalse($first->changesPlan);
+        self::assertFalse($first->changesTarget);
+        self::assertTrue($first->changesProtocol);
+        self::assertSame(0, $first->priceDifferenceIrr);
+        self::assertSame(50_000, $first->operationFeeIrr);
+        self::assertSame(50_000, $first->totalPriceIrr);
+        self::assertTrue($first->discountEligible);
+        self::assertFalse($first->isFree());
+
+        $replay = $service->previewForSelf(
+            $fixture['user_id'],
+            $servicePublicId,
+            $fixture['offering_code'],
+            $fixture['server_code'],
+            $fixture['profile_code'],
+            $requestKey,
+            $correlationId,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($first->previewPublicId, $replay->previewPublicId);
+        self::assertSame(1, DB::table('service_reconfiguration_previews')->where('service_subscription_id', $serviceId)->count());
+
+        $stored = DB::table('service_reconfiguration_previews')
+            ->where('public_id', $first->previewPublicId)
+            ->first(['target_route_selection_id', 'capacity_reservation_id', 'state', 'request_key_hash', 'payload_hash']);
+        self::assertNotNull($stored);
+        self::assertSame('previewed', $stored->state);
+        self::assertSame(hash('sha256', $requestKey), $stored->request_key_hash);
+        self::assertSame(64, strlen((string) $stored->payload_hash));
+        self::assertSame('held', DB::table('panel_capacity_reservations')->where('id', (int) $stored->capacity_reservation_id)->value('state'));
+        self::assertSame($fixture['offering_id'], (int) DB::table('plan_offering_route_selections')
+            ->where('id', (int) $stored->target_route_selection_id)->value('plan_offering_id'));
+
+        $otherUser = $this->benefitUser();
+        try {
+            $service->previewForSelf(
+                $otherUser,
+                $servicePublicId,
+                $fixture['offering_code'],
+                $fixture['server_code'],
+                $fixture['profile_code'],
+                'service.reconfiguration.preview.cross-owner',
+                'service-reconfiguration-cross-owner',
+            );
+            self::fail('Cross-owner Service reconfiguration preview must fail closed.');
+        } catch (DomainException) {
+            // Expected owner fence.
+        }
+
+        try {
+            DB::table('service_reconfiguration_previews')->where('public_id', $first->previewPublicId)->update([
+                'total_price_irr' => 1,
+            ]);
+            self::fail('Service reconfiguration preview must be immutable outside its authority.');
+        } catch (QueryException) {
+            // Expected immutable evidence guard.
+        }
+    }
+
     public function test_resumable_batch_grants_preserve_success_across_partial_failure_without_financial_authority(): void
     {
         $offering = $this->activeBenefitOffering('batch-grant');
@@ -1133,6 +1233,189 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $ambiguous = $projection->searchForSelf($fixture['user_id'], $fixture['user_id'], 'shared-search-user');
         self::assertSame(TelegramOwnedServiceSearchResult::AMBIGUOUS, $ambiguous->status);
         self::assertNull($ambiguous->selectionToken);
+    }
+
+    /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter,offering_code:string,server_code:string,profile_code:string} */
+    private function reconfigurationFixture(string $suffix): array
+    {
+        $seed = $this->benefitOffering('service-reconfiguration-seed-'.$suffix, 'panel.example.com');
+        $ownerId = $this->benefitOwner();
+        $userId = $this->benefitUser();
+        $seedOffering = DB::table('plan_offerings')->where('id', $seed['id'])->first([
+            'product_id', 'sales_server_id', 'panel_service_target_id',
+        ]);
+        self::assertNotNull($seedOffering);
+        $targetId = (int) $seedOffering->panel_service_target_id;
+        $serverId = (int) $seedOffering->sales_server_id;
+        $profileId = (int) DB::table('plan_offering_protocol_profiles')
+            ->where('plan_offering_id', $seed['id'])
+            ->where('is_default', true)
+            ->value('panel_protocol_profile_id');
+        $tagId = (int) DB::table('plan_offering_tags')->where('plan_offering_id', $seed['id'])->value('customer_tag_id');
+        self::assertGreaterThan(0, $profileId);
+        self::assertGreaterThan(0, $tagId);
+        $offeringCode = 'svc-reconfig-'.substr(hash('sha256', $suffix), 0, 18);
+        $definition = new PlanOfferingDefinition(
+            $offeringCode,
+            (int) $seedOffering->product_id,
+            null,
+            $serverId,
+            $targetId,
+            new PlanOfferingServiceMode('shared', 'Shared', 'Shared'),
+            PlanOfferingAudience::Both,
+            PlanOfferingServerSelectionMode::Customer,
+            PlanOfferingProtocolSelectionMode::Customer,
+            PlanOfferingTagMatchMode::All,
+            1_000_000,
+            30,
+            null,
+            2,
+            0,
+            1,
+            1,
+            true,
+            false,
+            false,
+            false,
+            ['normal'],
+            [$tagId],
+            [new OfferingProtocolAssignment($profileId, true, true)],
+            ['create_service', 'fetch_status'],
+            [new OfferingOperationPolicy(
+                OfferingOperationCode::ChangeProtocol,
+                true,
+                true,
+                50_000,
+                true,
+                null,
+            )],
+            [],
+        );
+        $catalog = $this->app->make(PlanOfferingService::class);
+        $created = $catalog->create(
+            $definition,
+            new CatalogChangeContext(
+                'service-reconfiguration-offering-'.substr(hash('sha256', $suffix), 0, 24),
+                'service-reconfiguration-offering-correlation-'.substr(hash('sha256', $suffix), 0, 16),
+                'service_reconfiguration_test',
+                'Create a Service reconfiguration test offering.',
+                $ownerId,
+            ),
+        );
+        $offeringId = $created->targetId;
+        $this->app->make(PlanOfferingRoutePolicyService::class)->create(
+            $offeringId,
+            new PlanOfferingRoutePolicyDefinition([
+                new PlanOfferingRouteDefinition(
+                    $serverId,
+                    $targetId,
+                    PlanOfferingRouteType::Primary,
+                    0,
+                    true,
+                    null,
+                    null,
+                ),
+            ]),
+            new CatalogChangeContext(
+                'service-reconfiguration-route-'.substr(hash('sha256', $suffix), 0, 24),
+                'service-reconfiguration-route-correlation-'.substr(hash('sha256', $suffix), 0, 16),
+                'service_reconfiguration_test',
+                'Create a Service reconfiguration route policy.',
+                $ownerId,
+            ),
+        );
+
+        $now = now('UTC');
+        $connectionId = (int) DB::table('panel_service_targets')->where('id', $targetId)->value('panel_connection_id');
+        DB::table('panel_connections')->where('id', $connectionId)->update([
+            'encrypted_credentials' => Crypt::encryptString(json_encode(['token' => 'service-reconfiguration-test'], JSON_THROW_ON_ERROR)),
+            'base_url' => 'https://panel.example.com',
+            'state' => 'active',
+            'last_test_status' => 'success',
+            'last_panel_version' => 'reconfiguration-test-1.0.0',
+            'last_capabilities_hash' => hash('sha256', 'service-reconfiguration-capabilities:'.$suffix),
+            'last_tested_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $connectionVersion = (int) DB::table('panel_connections')->where('id', $connectionId)->value('version');
+        $evidenceHash = hash('sha256', 'service-reconfiguration-evidence:'.$suffix);
+        DB::table('panel_target_capabilities')->where('panel_service_target_id', $targetId)->update([
+            'verification_status' => 'verified',
+            'evidence_hash' => $evidenceHash,
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('panel_service_targets')->where('id', $targetId)->update([
+            'state' => 'active',
+            'capability_status' => 'verified',
+            'capability_evidence_hash' => $evidenceHash,
+            'capability_verified_at' => $now,
+            'verified_connection_version' => $connectionVersion,
+            'updated_at' => $now,
+        ]);
+        DB::table('sales_servers')->where('id', $serverId)->update([
+            'state' => 'active',
+            'visibility' => 'listed',
+            'updated_at' => $now,
+        ]);
+        if (! DB::table('panel_target_capacities')->where('panel_service_target_id', $targetId)->exists()) {
+            DB::table('panel_target_capacities')->insert([
+                'panel_service_target_id' => $targetId,
+                'hard_limit' => 10,
+                'held_units' => 0,
+                'committed_units' => 0,
+                'state' => 'enabled',
+                'version' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+        if (! DB::table('customer_tag_assignments')->where('user_id', $userId)->where('tag_id', $tagId)->exists()) {
+            DB::table('customer_tag_assignments')->insert([
+                'user_id' => $userId,
+                'tag_id' => $tagId,
+                'assigned_by_administrator_id' => $ownerId,
+                'assigned_at' => $now,
+                'removed_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+        $version = (int) DB::table('plan_offerings')->where('id', $offeringId)->value('version');
+        $catalog->activate(
+            $offeringId,
+            $version,
+            new CatalogChangeContext(
+                'service-reconfiguration-activate-'.substr(hash('sha256', $suffix), 0, 24),
+                'service-reconfiguration-activate-correlation-'.substr(hash('sha256', $suffix), 0, 16),
+                'service_reconfiguration_test',
+                'Activate the verified Service reconfiguration test offering.',
+                $ownerId,
+            ),
+        );
+
+        $adapter = new ServiceOperationalPanelAdapter;
+        $this->app->instance(
+            PanelAdapterRegistry::class,
+            new PanelAdapterRegistry(
+                [new ServiceOperationalPanelAdapterFactory($adapter)],
+                $this->app->make(PanelCredentialPolicy::class),
+            ),
+        );
+        $this->app->forgetInstance(ProvisioningPanelAdapterResolver::class);
+        $this->app->forgetInstance(ServiceImportService::class);
+        $this->app->forgetInstance(ServiceReconfigurationPreviewService::class);
+
+        return [
+            'owner_id' => $ownerId,
+            'user_id' => $userId,
+            'offering_id' => $offeringId,
+            'target_id' => $targetId,
+            'adapter' => $adapter,
+            'offering_code' => $offeringCode,
+            'server_code' => (string) DB::table('sales_servers')->where('id', $serverId)->value('code'),
+            'profile_code' => (string) DB::table('panel_protocol_profiles')->where('id', $profileId)->value('code'),
+        ];
     }
 
     /** @return array{owner_id:int,user_id:int,offering_id:int,target_id:int,adapter:ServiceOperationalPanelAdapter} */
