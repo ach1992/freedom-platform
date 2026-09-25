@@ -11,6 +11,7 @@ enum TelegramMenuRegisteredAction: string
     case Purchase = 'purchase';
     case Trial = 'trial';
     case MyServices = 'my_services';
+    case NotificationPreferences = 'notification_preferences';
     case ClientGuides = 'client_guides';
     case Support = 'support';
     case ExternalSupport = 'external_support';

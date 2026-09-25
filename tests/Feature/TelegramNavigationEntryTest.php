@@ -26,6 +26,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramServiceAutoRenewPolicyManager;
+use App\Modules\Telegram\Application\Contracts\TelegramServiceNotificationPreferenceManager;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
@@ -111,6 +112,9 @@ use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
 use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
 use App\Modules\Telegram\Application\TelegramServiceAutoRenewPolicyResult;
 use App\Modules\Telegram\Application\TelegramServiceAutoRenewPolicySnapshot;
+use App\Modules\Telegram\Application\TelegramServiceNotificationPreferenceOption;
+use App\Modules\Telegram\Application\TelegramServiceNotificationPreferenceResult;
+use App\Modules\Telegram\Application\TelegramServiceNotificationPreferenceSnapshot;
 use App\Modules\Telegram\Application\TelegramSourceMessageMode;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
@@ -1154,6 +1158,52 @@ final class TelegramNavigationOwnedServiceSearchProjection implements TelegramOw
             'ambiguous-search' => TelegramOwnedServiceSearchResult::ambiguous(),
             default => TelegramOwnedServiceSearchResult::notFound(),
         };
+    }
+}
+
+final class TelegramNavigationServiceNotificationPreferenceManager implements TelegramServiceNotificationPreferenceManager
+{
+    /** @var list<array{actorUserId:int,servicePublicId:?string,notificationType:string,thresholdCode:string,enabled:bool,requestKey:string,correlationId:string}> */
+    public array $configureCalls = [];
+
+    /** @var array<string,bool> */
+    private array $states = [
+        'expiry|*' => true,
+        'expiry|expiry_7d' => true,
+    ];
+
+    public function snapshotForSelf(int $actorUserId, ?string $servicePublicId): TelegramServiceNotificationPreferenceSnapshot
+    {
+        $options = [];
+        foreach ($this->states as $key => $enabled) {
+            [$type, $threshold] = explode('|', $key, 2);
+            $options[] = new TelegramServiceNotificationPreferenceOption($type, $threshold, $enabled);
+        }
+
+        return new TelegramServiceNotificationPreferenceSnapshot($servicePublicId, $options);
+    }
+
+    public function configureForSelf(
+        int $actorUserId,
+        ?string $servicePublicId,
+        string $notificationType,
+        string $thresholdCode,
+        bool $enabled,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramServiceNotificationPreferenceResult {
+        $this->configureCalls[] = compact(
+            'actorUserId', 'servicePublicId', 'notificationType', 'thresholdCode', 'enabled', 'requestKey', 'correlationId',
+        );
+        $this->states[$notificationType.'|'.$thresholdCode] = $enabled;
+
+        return new TelegramServiceNotificationPreferenceResult($notificationType, $thresholdCode, $enabled, 2, false);
+    }
+
+    /** @return array{actorUserId:int,servicePublicId:?string,notificationType:string,thresholdCode:string,enabled:bool,requestKey:string,correlationId:string}|null */
+    public function lastConfigureCall(): ?array
+    {
+        return $this->configureCalls === [] ? null : $this->configureCalls[array_key_last($this->configureCalls)];
     }
 }
 
@@ -2735,6 +2785,59 @@ SQL);
         self::assertSame($outboxCount, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
     }
 
+    public function test_global_notification_preferences_are_reachable_toggle_only_once_and_keep_scope_free_of_service_identity(): void
+    {
+        $telegramUserId = 9647;
+        $preferences = new TelegramNavigationServiceNotificationPreferenceManager;
+        $this->app->instance(TelegramServiceNotificationPreferenceManager::class, $preferences);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+
+        $this->accept($this->payload(6470, $telegramUserId, 'navigation_notifications', 'en', '/start'));
+        $processor->process('123456789', 6470);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id']);
+        self::assertNotNull($account);
+
+        $entry = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.notifications')
+            ->orderByDesc('id')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($entry);
+        self::assertSame('{}', (string) $entry->action_payload);
+        $entryToken = $this->app->make(StringEncrypter::class)->decryptString((string) $entry->token_ciphertext);
+        $this->accept($this->callbackPayload(6471, $telegramUserId, 'navigation_notifications', 'en', $entryToken));
+        $processor->process('123456789', 6471);
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('service_notification_preferences', (string) $session->state);
+        self::assertStringContainsString('"scope":"global"', (string) $session->payload);
+        self::assertStringNotContainsString('service_selection', (string) $session->payload);
+
+        $toggle = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.notifications.toggle')
+            ->orderBy('id')
+            ->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($toggle);
+        self::assertStringContainsString('"enabled":false', (string) $toggle->action_payload);
+        $toggleToken = $this->app->make(StringEncrypter::class)->decryptString((string) $toggle->token_ciphertext);
+        $this->accept($this->callbackPayload(6472, $telegramUserId, 'navigation_notifications', 'en', $toggleToken));
+        $processor->process('123456789', 6472);
+
+        self::assertCount(1, $preferences->configureCalls);
+        $call = $preferences->lastConfigureCall();
+        self::assertNotNull($call);
+        self::assertNull($call['servicePublicId']);
+        self::assertSame('expiry', $call['notificationType']);
+        self::assertFalse($call['enabled']);
+        self::assertStringStartsWith('tg-notify-pref-', $call['requestKey']);
+
+        $this->accept($this->callbackPayload(6473, $telegramUserId, 'navigation_notifications', 'en', $toggleToken));
+        $processor->process('123456789', 6473);
+        self::assertCount(1, $preferences->configureCalls, 'A completed preference toggle callback must not write twice.');
+    }
+
     public function test_my_services_auto_renew_delegates_only_after_confirmation_and_completed_callback_does_not_repeat_configuration(): void
     {
         $selectionToken = str_repeat('c', 40);
@@ -2811,6 +2914,14 @@ SQL);
         self::assertNotNull($detail);
         $this->accept($this->callbackPayload(6482, $telegramUserId, 'navigation_service_auto_renew', 'fa', $this->app->make(StringEncrypter::class)->decryptString((string) $detail->token_ciphertext)));
         $processor->process('123456789', 6482);
+
+        $notificationEntry = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.notifications')
+            ->orderByDesc('id')
+            ->first(['action_payload']);
+        self::assertNotNull($notificationEntry);
+        self::assertStringContainsString($selectionToken, (string) $notificationEntry->action_payload);
+        self::assertStringNotContainsString($servicePublicId, (string) $notificationEntry->action_payload);
 
         $entry = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.service.auto_renew')->orderByDesc('id')->first(['action_payload', 'token_ciphertext']);
         self::assertNotNull($entry);

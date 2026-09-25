@@ -3276,6 +3276,18 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $rows = [];
+        $notificationPreferences = $this->callbacks->issue(
+            $session->publicId,
+            $session->version,
+            TelegramServiceNotificationPreferenceNavigationHandler::ACTION_SERVICE_ENTRY,
+            ['service_selection' => $selectionToken],
+            'nav-service-detail-notifications:'.hash('sha256', $action->requestKey),
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.notifications.service_button', $locale),
+            $notificationPreferences->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
         if ($detail->autoRenewAvailable) {
             $autoRenew = $this->callbacks->issue(
                 $session->publicId,
@@ -3880,6 +3892,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $services->publicId,
             TelegramInlineButtonStyle::Primary,
         )];
+        if ($customer->accountStatus === 'active' && in_array($customer->accountType, ['customer', 'agent'], true)) {
+            $notifications = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramServiceNotificationPreferenceNavigationHandler::ACTION_GLOBAL_ENTRY,
+                [],
+                'nav-home-notifications:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.notification_preferences', $locale),
+                $notifications->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
         $guides = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
@@ -4179,6 +4205,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'purchase' => self::ACTION_PURCHASE_CATALOG,
             'trial' => self::ACTION_TRIAL,
             'my_services' => self::ACTION_MY_SERVICES,
+            'notification_preferences' => TelegramServiceNotificationPreferenceNavigationHandler::ACTION_GLOBAL_ENTRY,
             'client_guides' => TelegramClientGuideNavigationHandler::ACTION_ENTRY,
             'support' => self::ACTION_SUPPORT,
             'agent' => self::ACTION_AGENT,
@@ -4226,6 +4253,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return true;
         }
 
+        if ($registered === TelegramMenuRegisteredAction::NotificationPreferences) {
+            return $customer->accountStatus === 'active'
+                && in_array($customer->accountType, ['customer', 'agent'], true);
+        }
+
         if ($registered === TelegramMenuRegisteredAction::WalletTransfer) {
             return $customer->accountType === 'customer'
                 && $customer->accountStatus === 'active'
@@ -4267,6 +4299,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             TelegramMenuRegisteredAction::Purchase => 'telegram.navigation.buttons.buy_service',
             TelegramMenuRegisteredAction::Trial => 'telegram.navigation.buttons.trial_service',
             TelegramMenuRegisteredAction::MyServices => 'telegram.navigation.buttons.my_services',
+            TelegramMenuRegisteredAction::NotificationPreferences => 'telegram.navigation.buttons.notification_preferences',
             TelegramMenuRegisteredAction::ClientGuides => 'telegram.navigation.buttons.client_guides',
             TelegramMenuRegisteredAction::Support => 'telegram.navigation.buttons.support',
             TelegramMenuRegisteredAction::ExternalSupport => 'telegram.navigation.buttons.external_support',

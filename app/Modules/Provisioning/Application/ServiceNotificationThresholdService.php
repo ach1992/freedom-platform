@@ -38,6 +38,7 @@ final readonly class ServiceNotificationThresholdService
         private WalletHoldService $wallet,
         private ServiceDeliveryAttemptQueueService $delivery,
         private AdministratorPermissionAuthorizer $authorizer,
+        private ServiceNotificationPreferenceResolver $preferences,
     ) {}
 
     /** @requirement SVC-013 SVC-014 WAL-002 ARCH-004 DAT-003 DAT-004 QUA-004 */
@@ -62,11 +63,22 @@ final readonly class ServiceNotificationThresholdService
                     : [];
                 $activeEpisodes = [];
                 foreach ($specs as $spec) {
+                    // A durable source episode stays active even when the user disables future
+                    // notifications. Preference changes stop new state creation but do not race
+                    // or rewrite an already-triggered delivery/outbox episode.
+                    $activeEpisodes[] = $spec['episode'];
+                    if (! $this->preferences->allows(
+                        (int) $service->user_id,
+                        (int) $service->id,
+                        $spec['type']->value,
+                        $spec['threshold'],
+                    )) {
+                        continue;
+                    }
                     $result = $this->ensureTriggered($service, $spec);
                     if ($result === null) {
                         continue;
                     }
-                    $activeEpisodes[] = $spec['episode'];
                     [, $created] = $result;
                     if ($created) {
                         $triggered++;

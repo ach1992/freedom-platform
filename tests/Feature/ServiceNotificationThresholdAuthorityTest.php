@@ -14,6 +14,8 @@ use App\Modules\Provisioning\Application\ProvisioningPanelAdapterResolver;
 use App\Modules\Provisioning\Application\ServiceImportService;
 use App\Modules\Provisioning\Application\ServiceNotificationCandidateInvalidatedException;
 use App\Modules\Provisioning\Application\ServiceNotificationDatabaseAuthority;
+use App\Modules\Provisioning\Application\ServiceNotificationPreferenceResolver;
+use App\Modules\Provisioning\Application\ServiceNotificationPreferenceService;
 use App\Modules\Provisioning\Application\ServiceNotificationSourceAuthority;
 use App\Modules\Provisioning\Application\ServiceNotificationThresholdService;
 use App\Modules\Provisioning\Application\ServiceOperationalContext;
@@ -578,6 +580,103 @@ SQL,
             self::fail('Changed expiry source must be rejected at the provider source boundary.');
         } catch (ServiceNotificationCandidateInvalidatedException) {
             self::assertTrue(true);
+        }
+    }
+
+    public function test_notification_preferences_are_owner_bound_versioned_precedence_aware_and_gate_new_episodes(): void
+    {
+        $fixture = $this->fixture('preference-authority');
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->snapshot(
+                'notification-preference-authority',
+                'notification-preference-authority-user',
+                $this->clock->value->modify('+1 day'),
+            ),
+            'preference-authority',
+        );
+        self::assertSame(1, $this->app->make(ServiceSynchronizationService::class)->syncOne($servicePublicId)->processed);
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        $preferences = $this->app->make(ServiceNotificationPreferenceService::class);
+        $resolver = $this->app->make(ServiceNotificationPreferenceResolver::class);
+
+        $globalRequest = 'notification.preference.global.expiry.000001';
+        $global = $preferences->configureForSelf(
+            $globalRequest,
+            $fixture['user_id'],
+            null,
+            'expiry',
+            '*',
+            false,
+            'notification-pref-global-correlation',
+        );
+        self::assertFalse($global->enabled);
+        self::assertFalse($global->replayed);
+        self::assertFalse($resolver->allows($fixture['user_id'], $serviceId, 'expiry', 'expiry_1d'));
+
+        $blocked = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(0, $blocked->triggered);
+        self::assertSame(0, DB::table('service_notification_states')->where('service_subscription_id', $serviceId)->count());
+
+        $serviceRequest = 'notification.preference.service.expiry.000001';
+        $specific = $preferences->configureForSelf(
+            $serviceRequest,
+            $fixture['user_id'],
+            $servicePublicId,
+            'expiry',
+            'expiry_1d',
+            true,
+            'notification-pref-service-correlation',
+        );
+        self::assertTrue($specific->enabled);
+        self::assertFalse($specific->replayed);
+        self::assertTrue($resolver->allows($fixture['user_id'], $serviceId, 'expiry', 'expiry_1d'));
+        self::assertFalse($resolver->allows($fixture['user_id'], $serviceId, 'expiry', 'expiry_3d'));
+
+        $allowed = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(1, $allowed->triggered);
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'expiry')
+            ->where('threshold_code', 'expiry_1d')
+            ->count());
+
+        $replayed = $preferences->configureForSelf(
+            $serviceRequest,
+            $fixture['user_id'],
+            $servicePublicId,
+            'expiry',
+            'expiry_1d',
+            true,
+            'notification-pref-service-correlation',
+        );
+        self::assertTrue($replayed->replayed);
+        self::assertSame($specific->preferencePublicId, $replayed->preferencePublicId);
+        self::assertSame(1, DB::table('service_notification_preference_histories')
+            ->where('request_key_hash', hash('sha256', $serviceRequest))->count());
+
+        try {
+            $preferences->configureForSelf(
+                $serviceRequest,
+                $fixture['user_id'],
+                $servicePublicId,
+                'expiry',
+                'expiry_1d',
+                false,
+                'notification-pref-service-correlation',
+            );
+            self::fail('Reusing a Service notification preference request key with a different payload must fail closed.');
+        } catch (DomainException) {
+            // Expected fail-closed request-key conflict.
+        }
+
+        try {
+            DB::table('service_notification_preferences')
+                ->where('public_id', $specific->preferencePublicId)
+                ->update(['enabled' => false, 'updated_at' => now('UTC')]);
+            self::fail('Direct Service notification preference mutation must be blocked by database authority.');
+        } catch (QueryException) {
+            // Expected database guard rejection.
         }
     }
 

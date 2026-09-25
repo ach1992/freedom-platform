@@ -15,6 +15,7 @@ return [
             'buy_service' => 'Buy Service',
             'trial_service' => 'Trial Service',
             'my_services' => 'My Services',
+            'notification_preferences' => 'Notification Settings',
             'client_guides' => 'Apps & Guides',
             'support' => 'Support',
             'external_support' => 'External Support',
@@ -29,6 +30,35 @@ return [
             'submenu' => 'Menu: :title
 
 Choose an option below.',
+        ],
+        'notifications' => [
+            'global_title' => "Notification Settings — page :page of :pages\n\n✓ is enabled and ○ is disabled. Each option is independent; per-Service settings override global settings.",
+            'service_title' => "Notifications for this Service — page :page of :pages\n\n✓ is enabled and ○ is disabled. These settings apply only to this Service and override global settings.",
+            'service_button' => 'Service Notifications',
+            'type' => [
+                'expiry' => 'All expiry notifications',
+                'usage' => 'All usage notifications',
+                'low_balance' => 'All low-balance notifications',
+                'renewal_failure' => 'All auto-renew failure notifications',
+                'service_state' => 'All Service state notifications',
+                'sync_issue' => 'All synchronization issue notifications',
+            ],
+            'threshold' => [
+                'expiry_7d' => 'Expiry within 7 days',
+                'expiry_3d' => 'Expiry within 3 days',
+                'expiry_1d' => 'Expiry within 1 day',
+                'expiry_due' => 'Expiry reached',
+                'usage_20pct' => '20% data remaining',
+                'usage_10pct' => '10% data remaining',
+                'usage_exhausted' => 'Data exhausted',
+                'low_balance' => 'Low renewal wallet balance',
+                'renewal_insufficient_wallet' => 'Renewal: insufficient wallet',
+                'renewal_price_change_blocked' => 'Renewal: price change blocked',
+                'renewal_failure' => 'Renewal: final failure',
+                'state_suspended' => 'Service suspended',
+                'state_deleted' => 'Service deleted / retired',
+                'sync_issue' => 'Synchronization issue affecting Service',
+            ],
         ],
         'referral' => [
             'view' => 'Invite Friends
