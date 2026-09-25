@@ -24,7 +24,7 @@ use RuntimeException;
 /**
  * @phpstan-type NotificationServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type NotificationSpec array{type:ServiceNotificationType,threshold:string,cycle:string,episode:string,source_type:string,source_id:?int,message:string}
- * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type NotificationStateRow object{id:int|string,public_id:string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,expiry_snapshot_max_age_seconds:int|string|null,sync_snapshot_max_age_seconds:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  * @phpstan-type AutoRenewAttemptAuthorityRow object{id:int|string,service_subscription_id:int|string,state:string}
  * @phpstan-type DeliveryEffectRow object{state:string,completed_at:?string,retry_after_seconds:int|string|null}
  */
@@ -238,14 +238,22 @@ final readonly class ServiceNotificationThresholdService
      */
     private function notificationSpecs(object $service): array
     {
-        $specs = [];
-        $expiry = $this->expirySpec($service);
-        if ($expiry !== null) {
-            $specs[] = $expiry;
+        $state = $this->serviceStateSpec($service);
+        if ($service->lifecycle_state === 'retired') {
+            return $state === null ? [] : [$state];
         }
-        $lowBalance = $this->lowBalanceSpec($service);
-        if ($lowBalance !== null) {
-            $specs[] = $lowBalance;
+
+        $specs = [];
+        foreach ([
+            $state,
+            $this->expirySpec($service),
+            $this->usageSpec($service),
+            $this->lowBalanceSpec($service),
+            $this->syncIssueSpec($service),
+        ] as $spec) {
+            if ($spec !== null) {
+                $specs[] = $spec;
+            }
         }
 
         return [...$specs, ...$this->renewalFailureSpecs($service)];
@@ -320,6 +328,200 @@ final readonly class ServiceNotificationThresholdService
                 ? 'Service expiry warning: your service has reached its recorded expiry time.'
                 : 'Service expiry warning: your service expires within '.$selectedDays.' day'.($selectedDays === 1 ? '' : 's').'.',
         ];
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
+    private function usageSpec(object $service): ?array
+    {
+        /** @var object{id:int|string,remote_disposition:string,remote_data_limit_bytes:int|string|null,remote_used_bytes:int|string|null,observed_at:string}|null $snapshot */
+        $snapshot = $this->database->connection()->table('service_sync_snapshots')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+            ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+            ->where('local_mutation_generation', (int) $service->mutation_generation)
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->first(['id', 'remote_disposition', 'remote_data_limit_bytes', 'remote_used_bytes', 'observed_at']);
+        if ($snapshot === null
+            || $snapshot->remote_disposition !== 'present'
+            || $snapshot->remote_data_limit_bytes === null
+            || $snapshot->remote_used_bytes === null
+            || (int) $snapshot->remote_data_limit_bytes < 1
+            || (int) $snapshot->remote_used_bytes < 0
+            || ! ServiceNotificationSyncFreshnessPolicy::isFresh(
+                $snapshot->observed_at,
+                $this->clock->now(),
+                ServiceNotificationSyncFreshnessPolicy::configuredMaxAgeSeconds(),
+            )) {
+            return null;
+        }
+
+        return $this->usageSpecFromSnapshot(
+            $service,
+            (int) $snapshot->id,
+            (int) $snapshot->remote_data_limit_bytes,
+            (int) $snapshot->remote_used_bytes,
+        );
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
+    private function usageSpecFromSnapshot(object $service, int $snapshotId, int $limitBytes, int $usedBytes): ?array
+    {
+        if ($limitBytes < 1 || $usedBytes < 0) {
+            return null;
+        }
+        $remainingBytes = max(0, $limitBytes - min($usedBytes, $limitBytes));
+        $selected = null;
+        foreach ($this->usageThresholdPercentages() as $percentage) {
+            if (($percentage === 0 && $remainingBytes === 0)
+                || ($percentage > 0 && ($remainingBytes / $limitBytes) <= ($percentage / 100))) {
+                $selected = $percentage;
+                break;
+            }
+        }
+        if ($selected === null) {
+            return null;
+        }
+
+        $threshold = $selected === 0 ? 'usage_exhausted' : 'usage_'.$selected.'pct';
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-usage-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) $limitBytes,
+        ]));
+
+        return [
+            'type' => ServiceNotificationType::Usage,
+            'threshold' => $threshold,
+            'cycle' => $cycle,
+            'episode' => $this->episodeKey($service, ServiceNotificationType::Usage, $threshold, $cycle),
+            'source_type' => 'service_sync_snapshot',
+            'source_id' => $snapshotId,
+            'message' => match ($selected) {
+                0 => 'Service data warning: the recorded data allowance is exhausted.',
+                10 => 'Service data warning: 10% or less of the recorded data allowance remains.',
+                20 => 'Service data warning: 20% or less of the recorded data allowance remains.',
+                default => throw new RuntimeException('Configured Service usage threshold is unsupported.'),
+            },
+        ];
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
+    private function serviceStateSpec(object $service): ?array
+    {
+        $operationType = match ($service->lifecycle_state) {
+            'suspended' => 'suspend',
+            'retired' => 'delete',
+            default => null,
+        };
+        if ($operationType === null) {
+            return null;
+        }
+        if (($operationType === 'suspend' && $service->remote_deleted_at !== null)
+            || ($operationType === 'delete' && $service->remote_deleted_at === null)) {
+            return null;
+        }
+
+        /** @var object{id:int|string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}|null $operation */
+        $operation = $this->database->connection()->table('provisioning_operations')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('operation_type', $operationType)
+            ->where('state', 'succeeded')
+            ->where('operation_generation', (int) $service->mutation_generation)
+            ->where('target_remote_identity_generation', (int) $service->remote_identity_generation)
+            ->where('target_lifecycle_version', max(0, (int) $service->lifecycle_version - 1))
+            ->orderByDesc('id')
+            ->first(['id', 'operation_generation', 'target_remote_identity_generation', 'target_lifecycle_version']);
+        if ($operation === null || (int) $service->lifecycle_version !== (int) $operation->target_lifecycle_version + 1) {
+            return null;
+        }
+
+        $threshold = $operationType === 'delete' ? 'state_deleted' : 'state_suspended';
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-state-cycle-v1',
+            (string) $service->id,
+            (string) $operation->id,
+            (string) $operation->operation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+
+        return [
+            'type' => ServiceNotificationType::ServiceState,
+            'threshold' => $threshold,
+            'cycle' => $cycle,
+            'episode' => $this->episodeKey($service, ServiceNotificationType::ServiceState, $threshold, $cycle),
+            'source_type' => 'provisioning_operation',
+            'source_id' => (int) $operation->id,
+            'message' => $operationType === 'delete'
+                ? 'Service status update: this service has been deleted or retired.'
+                : 'Service status update: this service has been suspended.',
+        ];
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @return NotificationSpec|null
+     */
+    private function syncIssueSpec(object $service): ?array
+    {
+        /** @var object{id:int|string,anomaly_key:string,classification:string,severity:string,state:string}|null $anomaly */
+        $anomaly = $this->database->connection()->table('service_sync_anomalies')
+            ->where('service_subscription_id', (int) $service->id)
+            ->whereIn('severity', ['warning', 'critical'])
+            ->whereIn('state', ['open', 'manual_review', 'action_requested'])
+            ->orderByRaw("CASE severity WHEN 'critical' THEN 0 ELSE 1 END")
+            ->orderByDesc('last_detected_at')
+            ->orderByDesc('id')
+            ->first(['id', 'anomaly_key', 'classification', 'severity', 'state']);
+        if ($anomaly === null || ! $this->syncAnomalyMatchesService($service, $anomaly->anomaly_key, $anomaly->classification)) {
+            return null;
+        }
+
+        $threshold = 'sync_issue';
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-sync-issue-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+
+        return [
+            'type' => ServiceNotificationType::SyncIssue,
+            'threshold' => $threshold,
+            'cycle' => $cycle,
+            'episode' => $this->episodeKey($service, ServiceNotificationType::SyncIssue, $threshold, $cycle),
+            'source_type' => 'service_sync_anomaly',
+            'source_id' => (int) $anomaly->id,
+            'message' => 'Service synchronization warning: a panel synchronization issue is affecting this service.',
+        ];
+    }
+
+    /** @param NotificationServiceRow $service */
+    private function syncAnomalyMatchesService(object $service, string $anomalyKey, string $classification): bool
+    {
+        $expected = hash('sha256', implode('|', [
+            'service-sync-anomaly-v1',
+            (string) $service->id,
+            $classification,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+
+        return hash_equals($expected, $anomalyKey);
     }
 
     /**
@@ -550,6 +752,9 @@ final readonly class ServiceNotificationThresholdService
         $expirySnapshotMaxAgeSeconds = $spec['type'] === ServiceNotificationType::Expiry
             ? ServiceNotificationExpiryFreshnessPolicy::configuredMaxAgeSeconds()
             : null;
+        $syncSnapshotMaxAgeSeconds = $spec['type'] === ServiceNotificationType::Usage
+            ? ServiceNotificationSyncFreshnessPolicy::configuredMaxAgeSeconds()
+            : null;
         ServiceNotificationDatabaseAuthority::create(
             $connection,
             (int) $service->id,
@@ -564,6 +769,7 @@ final readonly class ServiceNotificationThresholdService
             $maxRetries,
             $lowBalanceThresholdIrr,
             $expirySnapshotMaxAgeSeconds,
+            $syncSnapshotMaxAgeSeconds,
         );
         try {
             $stateId = (int) $connection->table('service_notification_states')->insertGetId([
@@ -577,6 +783,7 @@ final readonly class ServiceNotificationThresholdService
                 'source_id' => $spec['source_id'],
                 'low_balance_threshold_irr' => $lowBalanceThresholdIrr,
                 'expiry_snapshot_max_age_seconds' => $expirySnapshotMaxAgeSeconds,
+                'sync_snapshot_max_age_seconds' => $syncSnapshotMaxAgeSeconds,
                 'max_retries' => $maxRetries,
                 'state' => ServiceNotificationState::Triggered->value,
                 'latest_delivery_attempt_id' => null,
@@ -637,6 +844,31 @@ final readonly class ServiceNotificationThresholdService
                 return false;
             }
             $current = $this->expirySpecFromSnapshot($service, (int) $snapshot->id, $snapshot->remote_expires_at);
+
+            return $current !== null && $this->sameSpecIdentity($current, $spec);
+        }
+
+        if ($spec['type'] === ServiceNotificationType::Usage) {
+            if ($spec['source_type'] !== 'service_sync_snapshot' || $spec['source_id'] === null) {
+                return false;
+            }
+            $current = $this->usageSpec($service);
+
+            return $current !== null && $this->sameSpecIdentity($current, $spec);
+        }
+        if ($spec['type'] === ServiceNotificationType::ServiceState) {
+            if ($spec['source_type'] !== 'provisioning_operation' || $spec['source_id'] === null) {
+                return false;
+            }
+            $current = $this->serviceStateSpec($service);
+
+            return $current !== null && $this->sameSpecIdentity($current, $spec);
+        }
+        if ($spec['type'] === ServiceNotificationType::SyncIssue) {
+            if ($spec['source_type'] !== 'service_sync_anomaly' || $spec['source_id'] === null) {
+                return false;
+            }
+            $current = $this->syncIssueSpec($service);
 
             return $current !== null && $this->sameSpecIdentity($current, $spec);
         }
@@ -921,6 +1153,12 @@ final readonly class ServiceNotificationThresholdService
                 'expiry_7d' => 'Service expiry warning: your service expires within 7 days.',
                 default => throw new RuntimeException('Stored Service expiry notification threshold is invalid.'),
             },
+            ServiceNotificationType::Usage => match ($state->threshold_code) {
+                'usage_exhausted' => 'Service data warning: the recorded data allowance is exhausted.',
+                'usage_10pct' => 'Service data warning: 10% or less of the recorded data allowance remains.',
+                'usage_20pct' => 'Service data warning: 20% or less of the recorded data allowance remains.',
+                default => throw new RuntimeException('Stored Service usage notification threshold is invalid.'),
+            },
             ServiceNotificationType::LowBalance => 'Wallet balance warning: your available wallet balance is below the configured renewal threshold.',
             ServiceNotificationType::RenewalFailure => match ($state->threshold_code) {
                 'renewal_insufficient_wallet' => 'Automatic renewal needs attention because the available wallet balance is insufficient.',
@@ -928,6 +1166,12 @@ final readonly class ServiceNotificationThresholdService
                 'renewal_failure' => 'Automatic renewal failed and needs attention.',
                 default => throw new RuntimeException('Stored auto-renew notification threshold is invalid.'),
             },
+            ServiceNotificationType::ServiceState => match ($state->threshold_code) {
+                'state_suspended' => 'Service status update: this service has been suspended.',
+                'state_deleted' => 'Service status update: this service has been deleted or retired.',
+                default => throw new RuntimeException('Stored Service state notification threshold is invalid.'),
+            },
+            ServiceNotificationType::SyncIssue => 'Service synchronization warning: a panel synchronization issue is affecting this service.',
         };
     }
 
@@ -1471,8 +1715,17 @@ final readonly class ServiceNotificationThresholdService
      */
     private function canExpireTriggeredState(Connection $connection, object $service, object $state): bool
     {
-        if ($state->notification_type !== ServiceNotificationType::Expiry->value
-            || ! $this->canExpireExpirySource($connection, $service, $state)) {
+        $type = ServiceNotificationType::tryFrom($state->notification_type)
+            ?? throw new RuntimeException('Stored Service notification type is invalid.');
+        $sourceExpired = match ($type) {
+            ServiceNotificationType::Expiry => $this->canExpireExpirySource($connection, $service, $state),
+            ServiceNotificationType::Usage => $this->canExpireUsageSource($connection, $service, $state),
+            ServiceNotificationType::ServiceState => $this->canExpireServiceStateSource($connection, $service, $state),
+            ServiceNotificationType::SyncIssue => $this->canExpireSyncIssueSource($connection, $service, $state),
+            ServiceNotificationType::LowBalance,
+            ServiceNotificationType::RenewalFailure => false,
+        };
+        if (! $sourceExpired) {
             return false;
         }
 
@@ -1532,6 +1785,142 @@ final readonly class ServiceNotificationThresholdService
             'expiry_due' => false,
             default => throw new RuntimeException('Stored Service expiry notification threshold is invalid.'),
         };
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireUsageSource(Connection $connection, object $service, object $state): bool
+    {
+        if ($state->source_type !== 'service_sync_snapshot') {
+            throw new RuntimeException('Stored Service usage notification source type is invalid.');
+        }
+        if ($state->sync_snapshot_max_age_seconds === null
+            || $service->provisioned_at === null
+            || $service->remote_deleted_at !== null
+            || ! in_array($service->lifecycle_state, ['active', 'suspended'], true)) {
+            return true;
+        }
+        $maxAge = ServiceNotificationSyncFreshnessPolicy::storedMaxAgeSeconds($state->sync_snapshot_max_age_seconds);
+        /** @var object{remote_disposition:string,remote_data_limit_bytes:int|string|null,remote_used_bytes:int|string|null,observed_at:string}|null $snapshot */
+        $snapshot = $connection->table('service_sync_snapshots')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+            ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+            ->where('local_mutation_generation', (int) $service->mutation_generation)
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->first(['remote_disposition', 'remote_data_limit_bytes', 'remote_used_bytes', 'observed_at']);
+        if ($snapshot === null
+            || $snapshot->remote_disposition !== 'present'
+            || $snapshot->remote_data_limit_bytes === null
+            || $snapshot->remote_used_bytes === null
+            || (int) $snapshot->remote_data_limit_bytes < 1
+            || ! ServiceNotificationSyncFreshnessPolicy::isFresh($snapshot->observed_at, $this->clock->now(), $maxAge)) {
+            return true;
+        }
+        $limit = (int) $snapshot->remote_data_limit_bytes;
+        $used = max(0, (int) $snapshot->remote_used_bytes);
+        $remaining = max(0, $limit - min($used, $limit));
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-usage-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) $limit,
+        ]));
+        if (! hash_equals($state->cycle_key_hash, $cycle)) {
+            return true;
+        }
+        $ratio = $remaining / $limit;
+
+        return match ($state->threshold_code) {
+            'usage_20pct' => $ratio > 0.20 || $ratio <= 0.10,
+            'usage_10pct' => $ratio > 0.10 || $remaining === 0,
+            'usage_exhausted' => $remaining !== 0,
+            default => throw new RuntimeException('Stored Service usage notification threshold is invalid.'),
+        };
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireServiceStateSource(Connection $connection, object $service, object $state): bool
+    {
+        if ($state->source_type !== 'provisioning_operation' || $state->source_id === null) {
+            throw new RuntimeException('Stored Service state notification source type is invalid.');
+        }
+        /** @var object{operation_type:string,state:string,service_subscription_id:int|string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}|null $operation */
+        $operation = $connection->table('provisioning_operations')
+            ->where('id', (int) $state->source_id)
+            ->first([
+                'operation_type', 'state', 'service_subscription_id', 'operation_generation',
+                'target_remote_identity_generation', 'target_lifecycle_version',
+            ]);
+        if ($operation === null
+            || $operation->state !== 'succeeded'
+            || (int) $operation->service_subscription_id !== (int) $service->id
+            || (int) $operation->operation_generation !== (int) $service->mutation_generation
+            || (int) $operation->target_remote_identity_generation !== (int) $service->remote_identity_generation
+            || (int) $operation->target_lifecycle_version + 1 !== (int) $service->lifecycle_version) {
+            return true;
+        }
+        $expected = match ($state->threshold_code) {
+            'state_suspended' => $operation->operation_type === 'suspend'
+                && $service->lifecycle_state === 'suspended'
+                && $service->remote_deleted_at === null,
+            'state_deleted' => $operation->operation_type === 'delete'
+                && $service->lifecycle_state === 'retired'
+                && $service->remote_deleted_at !== null,
+            default => throw new RuntimeException('Stored Service state notification threshold is invalid.'),
+        };
+        if (! $expected) {
+            return true;
+        }
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-state-cycle-v1',
+            (string) $service->id,
+            (string) $state->source_id,
+            (string) $operation->operation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+
+        return ! hash_equals($state->cycle_key_hash, $cycle);
+    }
+
+    /**
+     * @param  NotificationServiceRow  $service
+     * @param  NotificationStateRow  $state
+     */
+    private function canExpireSyncIssueSource(Connection $connection, object $service, object $state): bool
+    {
+        if ($state->source_type !== 'service_sync_anomaly' || $state->source_id === null) {
+            throw new RuntimeException('Stored Service sync issue notification source type is invalid.');
+        }
+        /** @var object{service_subscription_id:int|string,anomaly_key:string,classification:string,severity:string,state:string}|null $anomaly */
+        $anomaly = $connection->table('service_sync_anomalies')
+            ->where('id', (int) $state->source_id)
+            ->first(['service_subscription_id', 'anomaly_key', 'classification', 'severity', 'state']);
+        if ($anomaly === null
+            || (int) $anomaly->service_subscription_id !== (int) $service->id
+            || ! in_array($anomaly->severity, ['warning', 'critical'], true)
+            || ! in_array($anomaly->state, ['open', 'manual_review', 'action_requested'], true)
+            || ! $this->syncAnomalyMatchesService($service, $anomaly->anomaly_key, $anomaly->classification)) {
+            return true;
+        }
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-sync-issue-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+
+        return $state->threshold_code !== 'sync_issue' || ! hash_equals($state->cycle_key_hash, $cycle);
     }
 
     /**
@@ -1645,7 +2034,9 @@ final readonly class ServiceNotificationThresholdService
     private function validateConfiguration(): void
     {
         $this->expiryThresholdDays();
+        $this->usageThresholdPercentages();
         ServiceNotificationExpiryFreshnessPolicy::configuredMaxAgeSeconds();
+        ServiceNotificationSyncFreshnessPolicy::configuredMaxAgeSeconds();
         $this->boundedConfigInt('service_notifications.low_balance_irr', 0, 0, PHP_INT_MAX);
         foreach (ServiceNotificationType::cases() as $type) {
             $this->maxRetries($type);
@@ -1665,6 +2056,27 @@ final readonly class ServiceNotificationThresholdService
             $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 365]]);
             if ($validated === false || ! in_array((int) $validated, [0, 1, 3, 7], true)) {
                 throw new DomainException('Service notification expiry thresholds must be selected from 0, 1, 3, or 7 days.');
+            }
+            $thresholds[] = (int) $validated;
+        }
+        $thresholds = array_values(array_unique($thresholds));
+        sort($thresholds, SORT_NUMERIC);
+
+        return $thresholds;
+    }
+
+    /** @return list<int> */
+    private function usageThresholdPercentages(): array
+    {
+        $raw = config('service_notifications.usage_threshold_percentages', [20, 10, 0]);
+        if (! is_array($raw)) {
+            throw new DomainException('Service notification usage thresholds must be an array.');
+        }
+        $thresholds = [];
+        foreach ($raw as $value) {
+            $validated = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 100]]);
+            if ($validated === false || ! in_array((int) $validated, [0, 10, 20], true)) {
+                throw new DomainException('Service notification usage thresholds must be selected from 0, 10, or 20 percent.');
             }
             $thresholds[] = (int) $validated;
         }
@@ -1813,6 +2225,29 @@ final readonly class ServiceNotificationThresholdService
                         ->whereNotNull('remote_service_id')
                         ->whereNull('remote_deleted_at')
                         ->whereIn('lifecycle_state', ['active', 'suspended']);
+                })->orWhere(function (Builder $retired): void {
+                    $retired->whereNotNull('provisioned_at')
+                        ->whereNotNull('service_target_id')
+                        ->whereNotNull('remote_service_id')
+                        ->whereNotNull('remote_deleted_at')
+                        ->where('lifecycle_state', 'retired')
+                        ->whereExists(function (Builder $operation): void {
+                            $operation->selectRaw('1')
+                                ->from('provisioning_operations as state_operation')
+                                ->whereColumn('state_operation.service_subscription_id', 'service_subscriptions.id')
+                                ->where('state_operation.operation_type', 'delete')
+                                ->where('state_operation.state', 'succeeded')
+                                ->whereColumn('state_operation.operation_generation', 'service_subscriptions.mutation_generation')
+                                ->whereColumn('state_operation.target_remote_identity_generation', 'service_subscriptions.remote_identity_generation')
+                                ->whereRaw('state_operation.target_lifecycle_version + 1 = service_subscriptions.lifecycle_version');
+                        })
+                        ->whereNotExists(function (Builder $notified): void {
+                            $notified->selectRaw('1')
+                                ->from('service_notification_states as deleted_notification')
+                                ->whereColumn('deleted_notification.service_subscription_id', 'service_subscriptions.id')
+                                ->where('deleted_notification.notification_type', ServiceNotificationType::ServiceState->value)
+                                ->where('deleted_notification.threshold_code', 'state_deleted');
+                        });
                 })->orWhereExists(function (Builder $triggered): void {
                     $triggered->selectRaw('1')
                         ->from('service_notification_states as notification_state')
@@ -1825,13 +2260,18 @@ final readonly class ServiceNotificationThresholdService
     /** @param  NotificationServiceRow  $service */
     private function isThresholdEligible(object $service): bool
     {
-        return $service->provisioned_at !== null
+        $hasProvisionedIdentity = $service->provisioned_at !== null
             && $service->service_target_id !== null
             && (int) $service->service_target_id > 0
             && is_string($service->remote_service_id)
-            && $service->remote_service_id !== ''
-            && $service->remote_deleted_at === null
-            && in_array($service->lifecycle_state, ['active', 'suspended'], true);
+            && $service->remote_service_id !== '';
+        if (! $hasProvisionedIdentity) {
+            return false;
+        }
+
+        return ($service->remote_deleted_at === null
+                && in_array($service->lifecycle_state, ['active', 'suspended'], true))
+            || ($service->remote_deleted_at !== null && $service->lifecycle_state === 'retired');
     }
 
     /** @return list<string> */
@@ -1839,7 +2279,8 @@ final readonly class ServiceNotificationThresholdService
     {
         return [
             'id', 'public_id', 'service_subscription_id', 'episode_key_hash', 'notification_type',
-            'threshold_code', 'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'max_retries', 'state',
+            'threshold_code', 'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr',
+            'expiry_snapshot_max_age_seconds', 'sync_snapshot_max_age_seconds', 'max_retries', 'state',
             'latest_delivery_attempt_id', 'latest_retry_ordinal', 'next_retry_at',
         ];
     }

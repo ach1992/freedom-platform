@@ -524,12 +524,73 @@ final class ServiceNotificationBatchFairnessTest extends TestCase
 
         $reconciled = $notifications->processBatch(1);
         self::assertSame(1, $reconciled->candidates);
-        self::assertSame(0, $reconciled->triggered);
+        self::assertSame(1, $reconciled->triggered);
         self::assertSame(1, $reconciled->expired);
+        self::assertSame(1, $reconciled->queued);
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
         self::assertSame('expired', DB::table('service_notification_states')
-            ->where('service_subscription_id', (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id'))
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'low_balance')
             ->value('state'));
-        self::assertSame(1, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+        $deleted = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'service_state')
+            ->where('threshold_code', 'state_deleted')
+            ->first(['state', 'source_type', 'source_id', 'latest_delivery_attempt_id']);
+        self::assertNotNull($deleted);
+        self::assertSame('triggered', $deleted->state);
+        self::assertSame('provisioning_operation', $deleted->source_type);
+        self::assertNotNull($deleted->source_id);
+        self::assertNotNull($deleted->latest_delivery_attempt_id);
+        self::assertSame(2, DB::table('service_delivery_attempts')->where('purpose', 'notification')->count());
+    }
+
+    public function test_successful_suspend_operation_creates_one_source_bound_service_state_notification(): void
+    {
+        $fixture = $this->fixture();
+        $servicePublicId = $this->attachService($fixture, 1);
+        $provider = new ServiceDeliveryEffectTestDoubles(
+            'https://subscription.example.test/notification-suspend-state',
+            new ProtectedTelegramSendResult(ProtectedTelegramSendOutcome::Success, 'unused_notification_sender', messageId: 1),
+        );
+        $this->app->instance(
+            PanelAdapterRegistry::class,
+            new PanelAdapterRegistry([$provider], $this->app->make(PanelCredentialPolicy::class)),
+        );
+        $this->app->forgetInstance(ProvisioningPanelAdapterResolver::class);
+        $this->app->forgetInstance(ServiceMutationExecutor::class);
+
+        $mutation = $this->app->make(ServiceMutationQueueService::class)->queue(
+            $servicePublicId,
+            ServiceMutationType::Suspend,
+            'notification-suspend-state-request',
+            'notification-suspend-state-correlation',
+        );
+        $this->app->make(ServiceMutationExecutor::class)->execute($mutation->operationPublicId);
+        self::assertSame('suspended', DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('lifecycle_state'));
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(1, $receipt->triggered);
+        self::assertSame(1, $receipt->queued);
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        $state = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'service_state')
+            ->where('threshold_code', 'state_suspended')
+            ->first(['state', 'source_type', 'source_id', 'latest_delivery_attempt_id']);
+        self::assertNotNull($state);
+        self::assertSame('triggered', $state->state);
+        self::assertSame('provisioning_operation', $state->source_type);
+        self::assertNotNull($state->source_id);
+        self::assertNotNull($state->latest_delivery_attempt_id);
+
+        $again = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(0, $again->triggered);
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'service_state')
+            ->where('threshold_code', 'state_suspended')
+            ->count());
     }
 
     public function test_temporary_delivery_blocker_is_isolated_per_service_in_batch(): void

@@ -18,7 +18,7 @@ use Throwable;
 /**
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type DeliveryAttemptRow object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,request_key_hash:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,outbox_event_id:string}
- * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,expiry_snapshot_max_age_seconds:int|string|null,sync_snapshot_max_age_seconds:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
  */
 final readonly class ServiceDeliveryAttemptQueueService
 {
@@ -138,7 +138,8 @@ final readonly class ServiceDeliveryAttemptQueueService
                 ->lockForUpdate()
                 ->first([
                     'id', 'service_subscription_id', 'episode_key_hash', 'notification_type', 'threshold_code',
-                    'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr', 'max_retries', 'state', 'latest_delivery_attempt_id',
+                    'cycle_key_hash', 'source_type', 'source_id', 'low_balance_threshold_irr',
+                    'expiry_snapshot_max_age_seconds', 'sync_snapshot_max_age_seconds', 'max_retries', 'state', 'latest_delivery_attempt_id',
                     'latest_retry_ordinal', 'next_retry_at',
                 ]);
             if ($notification === null) {
@@ -181,7 +182,7 @@ final readonly class ServiceDeliveryAttemptQueueService
             $this->assertNotificationRetryReady($connection, $notification, $retryOrdinal);
 
             try {
-                $this->assertServiceReadyForDelivery($connection, $service);
+                $this->assertNotificationServiceReadyForDelivery($connection, $service, $notification);
             } catch (ServiceDeliveryTemporarilyBlockedException $exception) {
                 throw $exception;
             } catch (DomainException $exception) {
@@ -401,6 +402,49 @@ final readonly class ServiceDeliveryAttemptQueueService
             ->first(['state', 'completed_at']);
         if ($effect === null || $effect->state !== 'failed_final' || $effect->completed_at === null) {
             throw new DomainException('Service notification retry requires one completed failed delivery effect.');
+        }
+    }
+
+    /**
+     * @param  ServiceRow  $service
+     * @param  NotificationStateRow  $notification
+     */
+    private function assertNotificationServiceReadyForDelivery(
+        Connection $connection,
+        object $service,
+        object $notification,
+    ): void {
+        $retiredStateNotification = $notification->notification_type === 'service_state'
+            && $notification->threshold_code === 'state_deleted'
+            && $notification->source_type === 'provisioning_operation';
+        if (! $retiredStateNotification) {
+            $this->assertServiceReadyForDelivery($connection, $service);
+
+            return;
+        }
+        if ($service->lifecycle_state !== 'retired'
+            || $service->remote_deleted_at === null
+            || $service->provisioned_at === null
+            || $service->service_target_id === null
+            || (int) $service->service_target_id < 1
+            || ! is_string($service->remote_service_id)
+            || $service->remote_service_id === ''
+            || $this->positiveDatabaseInt($service->remote_identity_generation, 'Service remote identity generation') < 1) {
+            throw new DomainException('Retired Service notification is stale for current Service authority.');
+        }
+        $blockingDelivery = $connection->table('service_delivery_effects')
+            ->where('blocking_service_subscription_id', (int) $service->id)
+            ->first(['id']);
+        if ($blockingDelivery !== null) {
+            throw new ServiceDeliveryTemporarilyBlockedException('Service notification is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
+        }
+        $activeMutation = $connection->table('provisioning_operations')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('operation_type', '<>', 'initial_provision')
+            ->whereNotIn('state', self::TERMINAL_MUTATION_STATES)
+            ->first(['id']);
+        if ($activeMutation !== null) {
+            throw new ServiceDeliveryTemporarilyBlockedException('Service notification is blocked by an unresolved Service mutation.');
         }
     }
 

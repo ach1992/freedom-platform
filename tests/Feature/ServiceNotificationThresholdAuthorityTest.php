@@ -583,6 +583,130 @@ SQL,
         }
     }
 
+    public function test_usage_notifications_advance_thresholds_once_within_the_current_sync_cycle(): void
+    {
+        $fixture = $this->fixture('usage-thresholds');
+        $remoteId = 'notification-usage-thresholds';
+        $username = 'notification-usage-thresholds-user';
+        $expiresAt = $this->clock->value->modify('+30 days');
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->usageSnapshot($remoteId, $username, 10_000, 8_500, $expiresAt),
+            'usage-thresholds',
+        );
+        $sync = $this->app->make(ServiceSynchronizationService::class);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        $notifications = $this->app->make(ServiceNotificationThresholdService::class);
+
+        $twenty = $notifications->processBatch(1);
+        self::assertSame(1, $twenty->triggered);
+        $twentyState = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'usage')
+            ->where('threshold_code', 'usage_20pct')
+            ->first(['id', 'state', 'cycle_key_hash', 'source_type', 'source_id', 'sync_snapshot_max_age_seconds']);
+        self::assertNotNull($twentyState);
+        self::assertSame('triggered', $twentyState->state);
+        self::assertSame('service_sync_snapshot', $twentyState->source_type);
+        self::assertNotNull($twentyState->source_id);
+        self::assertGreaterThanOrEqual(60, (int) $twentyState->sync_snapshot_max_age_seconds);
+
+        $fixture['adapter']->seed($this->usageSnapshot($remoteId, $username, 10_000, 9_500, $expiresAt));
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+        $ten = $notifications->processBatch(1);
+        self::assertSame(1, $ten->triggered);
+        self::assertSame(1, $ten->expired);
+        self::assertSame('expired', DB::table('service_notification_states')->where('id', (int) $twentyState->id)->value('state'));
+        $tenState = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'usage')
+            ->where('threshold_code', 'usage_10pct')
+            ->first(['id', 'state', 'cycle_key_hash']);
+        self::assertNotNull($tenState);
+        self::assertSame('triggered', $tenState->state);
+        self::assertSame($twentyState->cycle_key_hash, $tenState->cycle_key_hash);
+
+        $fixture['adapter']->seed($this->usageSnapshot($remoteId, $username, 10_000, 10_000, $expiresAt));
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+        $exhausted = $notifications->processBatch(1);
+        self::assertSame(1, $exhausted->triggered);
+        self::assertSame(1, $exhausted->expired);
+        self::assertSame('expired', DB::table('service_notification_states')->where('id', (int) $tenState->id)->value('state'));
+        $exhaustedState = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'usage')
+            ->where('threshold_code', 'usage_exhausted')
+            ->first(['state', 'cycle_key_hash']);
+        self::assertNotNull($exhaustedState);
+        self::assertSame('triggered', $exhaustedState->state);
+        self::assertSame($twentyState->cycle_key_hash, $exhaustedState->cycle_key_hash);
+
+        $replayed = $notifications->processBatch(1);
+        self::assertSame(0, $replayed->triggered);
+        self::assertSame(3, DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'usage')
+            ->count());
+    }
+
+    public function test_customer_impacting_sync_anomaly_creates_one_source_bound_notification_episode(): void
+    {
+        $fixture = $this->fixture('sync-issue');
+        $remoteId = 'notification-sync-issue';
+        $username = 'notification-sync-issue-user';
+        $expiresAt = $this->clock->value->modify('+30 days');
+        $servicePublicId = $this->attachService(
+            $fixture,
+            $this->usageSnapshot($remoteId, $username, 10_000, 0, $expiresAt),
+            'sync-issue',
+        );
+        $sync = $this->app->make(ServiceSynchronizationService::class);
+        self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
+
+        $fixture['adapter']->seed(new RemoteServiceSnapshot(
+            $remoteId,
+            $username,
+            PanelServiceStatus::Suspended,
+            10_000,
+            0,
+            $expiresAt,
+            hash('sha256', 'sync-issue-suspended'),
+            hash('sha256', 'equivalence:'.$remoteId.':'.$username),
+        ));
+        $mismatch = $sync->syncOne($servicePublicId);
+        self::assertSame(1, $mismatch->processed);
+        self::assertGreaterThanOrEqual(1, $mismatch->anomalies);
+
+        $serviceId = (int) DB::table('service_subscriptions')->where('public_id', $servicePublicId)->value('id');
+        $anomaly = DB::table('service_sync_anomalies')
+            ->where('service_subscription_id', $serviceId)
+            ->where('classification', 'lifecycle_mismatch')
+            ->first(['id', 'severity', 'state', 'anomaly_key']);
+        self::assertNotNull($anomaly);
+        self::assertSame('warning', $anomaly->severity);
+        self::assertSame('open', $anomaly->state);
+
+        $receipt = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(1, $receipt->triggered);
+        $state = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'sync_issue')
+            ->where('threshold_code', 'sync_issue')
+            ->first(['state', 'source_type', 'source_id', 'cycle_key_hash']);
+        self::assertNotNull($state);
+        self::assertSame('triggered', $state->state);
+        self::assertSame('service_sync_anomaly', $state->source_type);
+        self::assertSame((int) $anomaly->id, (int) $state->source_id);
+
+        $again = $this->app->make(ServiceNotificationThresholdService::class)->processBatch(1);
+        self::assertSame(0, $again->triggered);
+        self::assertSame(1, DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'sync_issue')
+            ->count());
+    }
+
     public function test_notification_preferences_are_owner_bound_versioned_precedence_aware_and_gate_new_episodes(): void
     {
         $fixture = $this->fixture('preference-authority');
@@ -744,6 +868,25 @@ SQL,
         self::assertNotNull($attached->serviceSubscriptionPublicId);
 
         return $attached->serviceSubscriptionPublicId;
+    }
+
+    private function usageSnapshot(
+        string $remoteId,
+        string $username,
+        int $dataLimitBytes,
+        int $usedBytes,
+        DateTimeImmutable $expiresAt,
+    ): RemoteServiceSnapshot {
+        return new RemoteServiceSnapshot(
+            $remoteId,
+            $username,
+            PanelServiceStatus::Active,
+            $dataLimitBytes,
+            $usedBytes,
+            $expiresAt,
+            hash('sha256', implode('|', [$remoteId, $username, (string) $dataLimitBytes, (string) $usedBytes, $expiresAt->format(DATE_ATOM)])),
+            hash('sha256', 'equivalence:'.$remoteId.':'.$username),
+        );
     }
 
     private function snapshot(string $remoteId, string $username, DateTimeImmutable $expiresAt): RemoteServiceSnapshot
