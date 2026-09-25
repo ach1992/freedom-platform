@@ -34,6 +34,7 @@ trait QuoteServiceSupport
         DateTimeImmutable $expiresAt,
         ?QuoteAgentPricingContext $agentPricingContext,
         ?ServicePackageQuoteContext $servicePackageContext,
+        ?ServiceReconfigurationQuoteContext $serviceReconfigurationContext,
     ): string {
         $payload = [
             'user_id' => $userId,
@@ -53,6 +54,9 @@ trait QuoteServiceSupport
         if ($servicePackageContext !== null) {
             $payload['service_public_id'] = $servicePackageContext->servicePublicId;
             $payload['service_package_code'] = $servicePackageContext->packageCode;
+        }
+        if ($serviceReconfigurationContext !== null) {
+            $payload['service_reconfiguration_preview_public_id'] = $serviceReconfigurationContext->previewPublicId;
         }
 
         return hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR));

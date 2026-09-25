@@ -160,7 +160,7 @@ trait QuoteServiceServicePackages
             QuoteAction::Renew, QuoteAction::AddDays => ['update_expiry'],
             QuoteAction::AddData => ['add_data_allowance'],
             QuoteAction::AddDataDays => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
-            QuoteAction::Purchase => throw new RuntimeException('Purchase is not a Service package action.'),
+            QuoteAction::Purchase, QuoteAction::Reconfigure => throw new RuntimeException('Quote action is not a Service package action.'),
         };
     }
 }

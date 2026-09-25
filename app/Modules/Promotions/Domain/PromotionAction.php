@@ -11,4 +11,5 @@ enum PromotionAction: string
     case AddData = 'add_data';
     case AddDays = 'add_days';
     case AddDataDays = 'add_data_days';
+    case Reconfigure = 'reconfigure';
 }

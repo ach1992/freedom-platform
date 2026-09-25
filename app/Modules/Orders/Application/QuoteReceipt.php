@@ -34,6 +34,7 @@ final readonly class QuoteReceipt
         public string $configurationSnapshotHash,
         public ?QuoteAgentPricingSnapshot $agentPricing,
         public ?ServicePackageQuoteSnapshot $servicePackage,
+        public ?ServiceReconfigurationQuoteSnapshot $serviceReconfiguration,
         public DateTimeImmutable $validFrom,
         public DateTimeImmutable $expiresAt,
         public bool $replayed,

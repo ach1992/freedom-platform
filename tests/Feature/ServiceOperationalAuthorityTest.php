@@ -22,6 +22,11 @@ use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
+use App\Modules\Orders\Application\QuotePricingInput;
+use App\Modules\Orders\Application\QuoteService;
+use App\Modules\Orders\Application\ServiceReconfigurationQuoteContext;
+use App\Modules\Orders\Domain\QuoteAction;
+use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Panels\Application\Contracts\PanelServiceStatus;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\PanelAdapterRegistry;
@@ -653,6 +658,78 @@ final class ServiceOperationalAuthorityTest extends TestCase
         self::assertTrue($replay->replayed);
         self::assertSame($first->previewPublicId, $replay->previewPublicId);
         self::assertSame(1, DB::table('service_reconfiguration_previews')->where('service_subscription_id', $serviceId)->count());
+
+        $quoteKey = 'service.reconfiguration.quote.000001';
+        $quote = $this->app->make(QuoteService::class)->create(
+            $quoteKey,
+            $fixture['user_id'],
+            $fixture['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $first->expiresAt->modify('-1 minute'),
+            ),
+            'service-reconfiguration-quote-correlation',
+            null,
+            null,
+            new ServiceReconfigurationQuoteContext($first->previewPublicId),
+        );
+        self::assertFalse($quote->replayed);
+        self::assertSame(QuoteAction::Reconfigure, $quote->action);
+        self::assertSame(50_000, $quote->basePriceIrr);
+        self::assertSame(50_000, $quote->finalPriceIrr);
+        self::assertNull($quote->servicePackage);
+        self::assertNotNull($quote->serviceReconfiguration);
+        self::assertSame($first->previewPublicId, $quote->serviceReconfiguration->previewPublicId);
+        self::assertSame($servicePublicId, $quote->serviceReconfiguration->serviceSubscriptionPublicId);
+        self::assertSame(50_000, $quote->serviceReconfiguration->operationFeeIrr);
+        self::assertTrue($quote->serviceReconfiguration->changesProtocol);
+
+        $quoteReplay = $this->app->make(QuoteService::class)->create(
+            $quoteKey,
+            $fixture['user_id'],
+            $fixture['offering_id'],
+            new QuotePricingInput(
+                QuoteOverrideSource::None,
+                null,
+                null,
+                null,
+                0,
+                $first->expiresAt->modify('-1 minute'),
+            ),
+            'service-reconfiguration-quote-correlation',
+            null,
+            null,
+            new ServiceReconfigurationQuoteContext($first->previewPublicId),
+        );
+        self::assertTrue($quoteReplay->replayed);
+        self::assertSame($quote->quotePublicId, $quoteReplay->quotePublicId);
+
+        try {
+            $this->app->make(QuoteService::class)->create(
+                'service.reconfiguration.quote.000002',
+                $fixture['user_id'],
+                $fixture['offering_id'],
+                new QuotePricingInput(
+                    QuoteOverrideSource::None,
+                    null,
+                    null,
+                    null,
+                    0,
+                    $first->expiresAt->modify('-2 minutes'),
+                ),
+                'service-reconfiguration-quote-second',
+                null,
+                null,
+                new ServiceReconfigurationQuoteContext($first->previewPublicId),
+            );
+            self::fail('One Service reconfiguration preview must not bind to multiple Quotes.');
+        } catch (QueryException) {
+            // Expected unique preview-to-Quote binding.
+        }
 
         $stored = DB::table('service_reconfiguration_previews')
             ->where('public_id', $first->previewPublicId)
