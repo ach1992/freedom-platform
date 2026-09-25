@@ -19,6 +19,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceAutoRenewManager;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceLifecycleExecutor;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
@@ -89,6 +90,9 @@ use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
 use App\Modules\Telegram\Application\TelegramOwnedServiceAction;
+use App\Modules\Telegram\Application\TelegramOwnedServiceAutoRenewPackage;
+use App\Modules\Telegram\Application\TelegramOwnedServiceAutoRenewResult;
+use App\Modules\Telegram\Application\TelegramOwnedServiceAutoRenewSnapshot;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDeliveryResendStatus;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
 use App\Modules\Telegram\Application\TelegramOwnedServiceLifecycleResult;
@@ -1147,6 +1151,50 @@ final class TelegramNavigationOwnedServiceSearchProjection implements TelegramOw
             'ambiguous-search' => TelegramOwnedServiceSearchResult::ambiguous(),
             default => TelegramOwnedServiceSearchResult::notFound(),
         };
+    }
+}
+
+final class TelegramNavigationOwnedServiceAutoRenewManager implements TelegramOwnedServiceAutoRenewManager
+{
+    /** @var list<array{actorUserId:int,servicePublicId:string,packageCode:string,enabled:bool,requestKey:string,correlationId:string}> */
+    public array $configureCalls = [];
+
+    public bool $enabled = false;
+
+    public function snapshotForSelf(int $actorUserId, string $servicePublicId): TelegramOwnedServiceAutoRenewSnapshot
+    {
+        $package = new TelegramOwnedServiceAutoRenewPackage('renew-30', 'تمدید ۳۰ روزه', '30-day renewal', 900_000, 30);
+
+        return new TelegramOwnedServiceAutoRenewSnapshot(
+            $servicePublicId,
+            $this->enabled,
+            $this->enabled ? $package->code : null,
+            $this->enabled ? $package->priceIrr : null,
+            $this->enabled ? 1 : null,
+            [$package],
+        );
+    }
+
+    public function configureForSelf(
+        int $actorUserId,
+        string $servicePublicId,
+        string $packageCode,
+        bool $enabled,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramOwnedServiceAutoRenewResult {
+        $this->configureCalls[] = compact(
+            'actorUserId', 'servicePublicId', 'packageCode', 'enabled', 'requestKey', 'correlationId',
+        );
+        $this->enabled = $enabled;
+
+        return new TelegramOwnedServiceAutoRenewResult($enabled, $packageCode, 900_000, 1, false);
+    }
+
+    /** @return array{actorUserId:int,servicePublicId:string,packageCode:string,enabled:bool,requestKey:string,correlationId:string}|null */
+    public function lastConfigureCall(): ?array
+    {
+        return $this->configureCalls === [] ? null : $this->configureCalls[array_key_last($this->configureCalls)];
     }
 }
 
@@ -2636,6 +2684,116 @@ SQL);
         self::assertSame($backCallbackCount, DB::table('telegram_interaction_callbacks')->where('telegram_interaction_session_id', $sessionId)->where('action', 'navigation.back')->count());
         self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
         self::assertSame($outboxCount, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
+    }
+
+    public function test_my_services_auto_renew_delegates_only_after_confirmation_and_completed_callback_does_not_repeat_configuration(): void
+    {
+        $selectionToken = str_repeat('c', 40);
+        $servicePublicId = '01J22222222222222222222222';
+        $projection = new class($selectionToken, $servicePublicId) implements TelegramOwnedServiceProjection
+        {
+            public function __construct(
+                private readonly string $selectionToken,
+                private readonly string $servicePublicId,
+            ) {}
+
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                return new TelegramOwnedServicePage([
+                    new TelegramOwnedServiceListItem(
+                        $this->selectionToken,
+                        $this->servicePublicId,
+                        'active',
+                        'پلن تمدید',
+                        'Renewal plan',
+                        'سرور تمدید',
+                        'Renewal server',
+                        '2026-09-01 04:00:00.000000',
+                    ),
+                ], 1, 1, 1);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                if ($actorUserId !== $subjectUserId || $selectionToken !== $this->selectionToken) {
+                    throw new AuthorizationException('Auto-renew test Service is unavailable.');
+                }
+
+                return new TelegramOwnedServiceDetail(
+                    $this->servicePublicId,
+                    'active',
+                    'پلن تمدید',
+                    'Renewal plan',
+                    'سرور تمدید',
+                    'Renewal server',
+                    '2026-09-01 04:00:00.000000',
+                    'current',
+                    'present',
+                    'active',
+                    10 * 1024 * 1024 * 1024,
+                    3 * 1024 * 1024 * 1024,
+                    '2026-10-01 04:00:00.000000',
+                    '2026-09-01 04:05:00.000000',
+                    [TelegramOwnedServiceAction::Renew],
+                    true,
+                );
+            }
+
+            public function searchForSelf(int $actorUserId, int $subjectUserId, string $searchTerm): TelegramOwnedServiceSearchResult
+            {
+                return TelegramOwnedServiceSearchResult::notFound();
+            }
+        };
+        $autoRenew = new TelegramNavigationOwnedServiceAutoRenewManager;
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+        $this->app->instance(TelegramOwnedServiceAutoRenewManager::class, $autoRenew);
+
+        $telegramUserId = 9648;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(6480, $telegramUserId, 'navigation_service_auto_renew', 'fa', '/start'));
+        $processor->process('123456789', 6480);
+
+        $services = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.my_services')->orderByDesc('id')->first(['token_ciphertext']);
+        self::assertNotNull($services);
+        $this->accept($this->callbackPayload(6481, $telegramUserId, 'navigation_service_auto_renew', 'fa', $this->app->make(StringEncrypter::class)->decryptString((string) $services->token_ciphertext)));
+        $processor->process('123456789', 6481);
+
+        $detail = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.service.'.$selectionToken)->orderByDesc('id')->first(['token_ciphertext']);
+        self::assertNotNull($detail);
+        $this->accept($this->callbackPayload(6482, $telegramUserId, 'navigation_service_auto_renew', 'fa', $this->app->make(StringEncrypter::class)->decryptString((string) $detail->token_ciphertext)));
+        $processor->process('123456789', 6482);
+
+        $entry = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.service.auto_renew')->orderByDesc('id')->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($entry);
+        self::assertStringContainsString($selectionToken, (string) $entry->action_payload);
+        self::assertStringNotContainsString($servicePublicId, (string) $entry->action_payload);
+        $this->accept($this->callbackPayload(6483, $telegramUserId, 'navigation_service_auto_renew', 'fa', $this->app->make(StringEncrypter::class)->decryptString((string) $entry->token_ciphertext)));
+        $processor->process('123456789', 6483);
+        self::assertSame([], $autoRenew->configureCalls);
+
+        $package = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.service.auto_renew.select')->orderByDesc('id')->first(['token_ciphertext']);
+        self::assertNotNull($package);
+        $this->accept($this->callbackPayload(6484, $telegramUserId, 'navigation_service_auto_renew', 'fa', $this->app->make(StringEncrypter::class)->decryptString((string) $package->token_ciphertext)));
+        $processor->process('123456789', 6484);
+        self::assertSame([], $autoRenew->configureCalls, 'Selecting an auto-renew package must only open confirmation.');
+
+        $confirm = DB::table('telegram_interaction_callbacks')->where('action', 'navigation.service.auto_renew.confirm')->orderByDesc('id')->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($confirm);
+        self::assertSame('{}', (string) $confirm->action_payload);
+        $confirmToken = $this->app->make(StringEncrypter::class)->decryptString((string) $confirm->token_ciphertext);
+        $this->accept($this->callbackPayload(6485, $telegramUserId, 'navigation_service_auto_renew', 'fa', $confirmToken));
+        $processor->process('123456789', 6485);
+        self::assertCount(1, $autoRenew->configureCalls);
+        $configureCall = $autoRenew->lastConfigureCall();
+        self::assertNotNull($configureCall);
+        self::assertSame($servicePublicId, $configureCall['servicePublicId']);
+        self::assertSame('renew-30', $configureCall['packageCode']);
+        self::assertTrue($configureCall['enabled']);
+        self::assertStringStartsWith('tg-service-auto-', $configureCall['requestKey']);
+
+        $this->accept($this->callbackPayload(6486, $telegramUserId, 'navigation_service_auto_renew', 'fa', $confirmToken));
+        $processor->process('123456789', 6486);
+        self::assertCount(1, $autoRenew->configureCalls, 'A completed auto-renew confirmation callback must not configure twice.');
     }
 
     public function test_my_services_lifecycle_action_requires_confirmation_and_completed_callback_replays_without_second_execution(): void

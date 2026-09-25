@@ -3261,6 +3261,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $rows = [];
+        if ($detail->autoRenewAvailable) {
+            $autoRenew = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                TelegramServiceAutoRenewNavigationHandler::ACTION_ENTRY,
+                ['service_selection' => $selectionToken],
+                'nav-service-detail-auto-renew:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.auto_renew.button', $locale),
+                $autoRenew->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
         foreach ($detail->allowedActions as $serviceAction) {
             if (! $serviceAction->isLifecycleAction()) {
                 continue;

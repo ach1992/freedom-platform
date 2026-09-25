@@ -443,6 +443,20 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
             'not_available' => 'Not available',
             'allowed_actions_none' => 'None currently available',
             'allowed_actions_separator' => ', ',
+            'auto_renew' => [
+                'button' => 'Auto-renew',
+                'overview' => "Auto-renew\n\nStatus: :status\n:notice\nChoose a renewal package. The accepted price is calculated through the same canonical pricing path when the setting is saved.",
+                'enabled' => 'Enabled — package :package — accepted price :price IRR',
+                'disabled' => 'Disabled',
+                'stale' => 'The Service state or selected package changed; current information was reloaded.',
+                'package_button' => ':name — :price IRR',
+                'disable_button' => 'Disable auto-renew',
+                'confirm_enable' => "Confirm auto-renew with package “:name”?\nCurrent package price: :price IRR. The accepted price and price-change policy are versioned by the canonical authority.",
+                'confirm_disable' => "Confirm disabling auto-renew for package “:name”?\nFuture automatic renewals stop while prior history is preserved.",
+                'confirm_button' => 'Confirm auto-renew',
+                'result_enabled' => 'Auto-renew is enabled. Package: :package — accepted price: :price IRR.',
+                'result_disabled' => 'Auto-renew is disabled. Recorded package: :package.',
+            ],
             'lifecycle' => [
                 'button' => [
                     'reset_usage' => 'Reset usage',
