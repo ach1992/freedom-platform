@@ -273,8 +273,8 @@ final class TelegramServiceProvider extends ServiceProvider
             fn (Application $application): TelegramRequiredChannelService => new TelegramRequiredChannelService(
                 $application->make(DatabaseManager::class),
                 $application->make(StringEncrypter::class),
-                $application->make(TelegramMembershipLookup::class),
-                $application->make(TelegramRuntime::class),
+                fn (): TelegramMembershipLookup => $application->make(TelegramMembershipLookup::class),
+                fn (): TelegramRuntime => $application->make(TelegramRuntime::class),
                 $application->make(TelegramConfigurationMutationExecutor::class),
                 $application->make(TelegramConfigurationMutationAudit::class),
                 $application->make(Clock::class),

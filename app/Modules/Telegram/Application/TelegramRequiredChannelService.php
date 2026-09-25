@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Shared\Application\Clock;
+use Closure;
 use DomainException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\Connection;
@@ -18,11 +19,15 @@ final readonly class TelegramRequiredChannelService
 {
     private const TARGET_TYPE = 'telegram_required_channel';
 
+    /**
+     * @param  Closure(): TelegramMembershipLookup  $membershipLookup
+     * @param  Closure(): TelegramRuntime  $runtime
+     */
     public function __construct(
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
-        private TelegramMembershipLookup $membershipLookup,
-        private TelegramRuntime $runtime,
+        private Closure $membershipLookup,
+        private Closure $runtime,
         private TelegramConfigurationMutationExecutor $executor,
         private TelegramConfigurationMutationAudit $audit,
         private Clock $clock,
@@ -189,7 +194,7 @@ final readonly class TelegramRequiredChannelService
 
         $botId = $this->configuredBotId();
         $chatId = (int) $preflight->telegram_chat_id;
-        $evidence = $this->membershipLookup->lookup($chatId, $botId);
+        $evidence = ($this->membershipLookup)()->lookup($chatId, $botId);
         if ($evidence->evidence !== TelegramMembershipEvidence::Member
             || ! in_array($evidence->resultCode, ['telegram_membership_creator', 'telegram_membership_administrator'], true)
         ) {
@@ -362,10 +367,11 @@ final readonly class TelegramRequiredChannelService
 
     private function configuredBotId(): int
     {
-        if (preg_match('/\A[1-9][0-9]{0,18}\z/', $this->runtime->botId()) !== 1) {
+        $botIdValue = ($this->runtime)()->botId();
+        if (preg_match('/\A[1-9][0-9]{0,18}\z/', $botIdValue) !== 1) {
             throw new RuntimeException('Telegram bot identity is unavailable for membership verification.');
         }
-        $botId = (int) $this->runtime->botId();
+        $botId = (int) $botIdValue;
         if ($botId < 1) {
             throw new RuntimeException('Telegram bot identity is unavailable for membership verification.');
         }

@@ -836,10 +836,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             if ($action->callbackAction === self::ACTION_SERVICE_RESEND) {
                 $selectionToken = $this->serviceSelectionToken($action->callbackPayload);
                 $page = $this->pageFromPayload($action->sessionPayload);
-                if (! $this->serviceMembershipAllows($action, $selectionToken, $page)) {
-                    return;
-                }
-                $this->resendServiceDelivery($action, $selectionToken);
+                $this->resendServiceDelivery($action, $selectionToken, $page);
 
                 return;
             }
@@ -3173,42 +3170,6 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->transitionToServiceDetail($action, $detail, $selectionToken, $page, $locale);
     }
 
-    private function serviceMembershipAllows(
-        TelegramInteractionAction $action,
-        string $selectionToken,
-        int $page,
-    ): bool {
-        $locale = $this->localeForActor($action->userId);
-        try {
-            $membership = $this->actionMembership->forSelf(
-                $action->userId,
-                $action->userId,
-                'service_view',
-                $locale,
-            );
-            if (! $membership->allowsAction()) {
-                $this->showServiceMembershipGate($action, $selectionToken, $page, $membership, $locale);
-
-                return false;
-            }
-            $this->database->connection()->transaction(function ($connection) use ($action, $membership): void {
-                $this->actionMembership->assertCurrentForUpdate(
-                    $connection,
-                    $action->userId,
-                    $action->userId,
-                    'service_view',
-                    $membership,
-                );
-            }, 3);
-
-            return true;
-        } catch (TelegramActionMembershipChanged|AuthorizationException|\DomainException|RuntimeException) {
-            $this->showServiceMembershipGate($action, $selectionToken, $page, null, $locale);
-
-            return false;
-        }
-    }
-
     private function showServiceMembershipGate(
         TelegramInteractionAction $action,
         string $selectionToken,
@@ -3329,25 +3290,67 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
     }
 
-    private function resendServiceDelivery(TelegramInteractionAction $action, string $selectionToken): void
-    {
+    private function resendServiceDelivery(
+        TelegramInteractionAction $action,
+        string $selectionToken,
+        int $page,
+    ): void {
         $locale = $this->localeForActor($action->userId);
-
         try {
-            $detail = $this->services->detailForSelf($action->userId, $action->userId, $selectionToken);
-        } catch (AuthorizationException) {
-            $this->renderServiceResendResult($action, TelegramOwnedServiceDeliveryResendStatus::Unavailable, $locale);
+            $membership = $this->actionMembership->forSelf(
+                $action->userId,
+                $action->userId,
+                'service_view',
+                $locale,
+            );
+        } catch (\DomainException|RuntimeException) {
+            $this->showServiceMembershipGate($action, $selectionToken, $page, null, $locale);
+
+            return;
+        }
+        if (! $membership->allowsAction()) {
+            $this->showServiceMembershipGate($action, $selectionToken, $page, $membership, $locale);
 
             return;
         }
 
         $callbackPublicId = $this->callbackPublicId($action);
-        $status = $this->serviceDeliveryResender->resendForSelf(
-            $action->userId,
-            $detail->publicId,
-            'telegram-service-resend:'.$callbackPublicId,
-            'telegram-resend:'.$callbackPublicId,
-        );
+        try {
+            $status = $this->database->connection()->transaction(function ($connection) use (
+                $action,
+                $selectionToken,
+                $membership,
+                $callbackPublicId,
+            ): TelegramOwnedServiceDeliveryResendStatus {
+                $this->actionMembership->assertCurrentForUpdate(
+                    $connection,
+                    $action->userId,
+                    $action->userId,
+                    'service_view',
+                    $membership,
+                );
+                $detail = $this->services->detailForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $selectionToken,
+                );
+
+                return $this->serviceDeliveryResender->resendForSelf(
+                    $action->userId,
+                    $detail->publicId,
+                    'telegram-service-resend:'.$callbackPublicId,
+                    'telegram-resend:'.$callbackPublicId,
+                );
+            }, 3);
+        } catch (TelegramActionMembershipChanged|\DomainException|RuntimeException) {
+            $this->showServiceMembershipGate($action, $selectionToken, $page, null, $locale);
+
+            return;
+        } catch (AuthorizationException) {
+            $this->renderServiceResendResult($action, TelegramOwnedServiceDeliveryResendStatus::Unavailable, $locale);
+
+            return;
+        }
 
         $this->renderServiceResendResult($action, $status, $locale);
     }
