@@ -172,6 +172,9 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
             );
             $type = $this->configuredType($connection, $typeCode, $typeConfigurationHash, true);
             $this->assertEvidenceMode((string) $type->submission_mode, $code, $privateImageReference);
+            if ($code === null) {
+                $this->assertImageEvidenceVerificationPolicy($type, $claimedFaceValue);
+            }
 
             $submission = $this->submissions->submit(
                 'telegram-gift-card-submission:'.$orderPublicId,
@@ -281,7 +284,8 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
             $query->lockForUpdate();
         }
         $type = $query->first([
-            'type_code', 'brand', 'region', 'face_currency', 'submission_mode', 'verification_mode', 'active',
+            'type_code', 'brand', 'region', 'face_currency', 'submission_mode', 'verification_mode',
+            'manual_approval_limit_face_value', 'active',
         ]);
         if ($type === null || ! (bool) $type->active) {
             throw new AuthorizationException('Telegram Gift Card type is unavailable.');
@@ -304,6 +308,25 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
         if (! $valid) {
             throw new AuthorizationException('Telegram Gift Card evidence does not satisfy the configured submission mode.');
         }
+    }
+
+    private function assertImageEvidenceVerificationPolicy(stdClass $type, int $claimedFaceValue): void
+    {
+        $verificationMode = (string) $type->verification_mode;
+        if ($verificationMode === 'manual_only'
+            || in_array($verificationMode, ['automatic_then_manual', 'manual_fallback_on_provider_failure'], true)) {
+            return;
+        }
+
+        if ($verificationMode === 'automatic_with_manual_approval_above_limit'
+            && $type->manual_approval_limit_face_value !== null
+            && $claimedFaceValue > (int) $type->manual_approval_limit_face_value) {
+            return;
+        }
+
+        throw new AuthorizationException(
+            'Telegram Gift Card image evidence is unavailable for the configured verification policy.',
+        );
     }
 
     private function assertSelf(int $actorUserId, int $subjectUserId): void

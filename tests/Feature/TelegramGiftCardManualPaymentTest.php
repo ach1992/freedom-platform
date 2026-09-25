@@ -21,6 +21,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -201,6 +202,96 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $purchase['order_public_id'])->value('state'));
     }
 
+    public function test_image_submission_preserves_configured_verification_policy_matrix(): void
+    {
+        $cases = [
+            ['automatic_only', 'image_only', null, false],
+            ['automatic_only', 'either', null, false],
+            ['automatic_then_manual', 'image_only', null, true],
+            ['manual_fallback_on_provider_failure', 'image_only', null, true],
+            ['automatic_with_manual_approval_above_limit', 'image_only', 2_000_000, false],
+            ['automatic_with_manual_approval_above_limit', 'image_only', 500_000, true],
+        ];
+        $service = $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class);
+
+        foreach ($cases as $offset => [$verificationMode, $submissionMode, $manualLimit, $manualExpected]) {
+            $suffix = 'image-policy-'.$offset;
+            $type = $this->registerType(
+                'tg-image-policy-'.$offset,
+                $submissionMode,
+                $verificationMode,
+                $manualLimit,
+            );
+            $purchase = $this->purchase($suffix);
+            $before = [
+                'submissions' => DB::table('gift_card_submissions')->count(),
+                'reviews' => DB::table('gift_card_reviews')->count(),
+                'events' => DB::table('gift_card_provider_events')->count(),
+                'settlements' => DB::table('purchase_settlements')->count(),
+            ];
+            $privateReference = 'telegram-private-media:'.strtoupper((string) Str::ulid());
+
+            if (! $manualExpected) {
+                try {
+                    $service->submitEvidenceForSelf(
+                        $purchase['user_id'],
+                        $purchase['user_id'],
+                        $purchase['order_public_id'],
+                        $purchase['quote_public_id'],
+                        $purchase['quote_configuration_hash'],
+                        $purchase['decision_public_id'],
+                        $purchase['decision_configuration_hash'],
+                        $type->typeCode,
+                        $type->configurationHash,
+                        $purchase['amount'],
+                        null,
+                        $privateReference,
+                        'tg-image-file-'.$offset,
+                        'tg-image-unique-'.$offset,
+                        hash('sha256', 'tg-image-content-'.$offset),
+                        hash('sha256', 'tg-image-policy-operation-'.$offset),
+                    );
+                    self::fail('Expected unsupported image/verification policy combination to fail closed.');
+                } catch (AuthorizationException) {
+                    self::assertTrue(true);
+                }
+
+                self::assertSame($before['submissions'], DB::table('gift_card_submissions')->count());
+                self::assertSame($before['reviews'], DB::table('gift_card_reviews')->count());
+                self::assertSame($before['events'], DB::table('gift_card_provider_events')->count());
+                self::assertSame($before['settlements'], DB::table('purchase_settlements')->count());
+
+                continue;
+            }
+
+            $submission = $service->submitEvidenceForSelf(
+                $purchase['user_id'],
+                $purchase['user_id'],
+                $purchase['order_public_id'],
+                $purchase['quote_public_id'],
+                $purchase['quote_configuration_hash'],
+                $purchase['decision_public_id'],
+                $purchase['decision_configuration_hash'],
+                $type->typeCode,
+                $type->configurationHash,
+                $purchase['amount'],
+                null,
+                $privateReference,
+                'tg-image-file-'.$offset,
+                'tg-image-unique-'.$offset,
+                hash('sha256', 'tg-image-content-'.$offset),
+                hash('sha256', 'tg-image-policy-operation-'.$offset),
+            );
+
+            self::assertSame('pending_manual_review', $submission->state);
+            self::assertNotNull($submission->reviewPublicId);
+            self::assertSame($before['submissions'] + 1, DB::table('gift_card_submissions')->count());
+            self::assertSame($before['reviews'] + 1, DB::table('gift_card_reviews')->count());
+            self::assertSame($before['events'], DB::table('gift_card_provider_events')->count());
+            self::assertSame($before['settlements'], DB::table('purchase_settlements')->count());
+        }
+    }
+
     public function test_changed_quote_or_decision_fails_closed_before_gift_card_state_is_created(): void
     {
         $type = $this->registerType('tg-stale-checkout', 'code_only', 'manual_only');
@@ -354,8 +445,12 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         ];
     }
 
-    private function registerType(string $typeCode, string $submissionMode, string $verificationMode): GiftCardTypeReceipt
-    {
+    private function registerType(
+        string $typeCode,
+        string $submissionMode,
+        string $verificationMode,
+        ?int $manualApprovalLimitFaceValue = null,
+    ): GiftCardTypeReceipt {
         return $this->app->make(GiftCardTypeService::class)->register(
             $typeCode,
             'Steam Gift Card '.$typeCode,
@@ -364,7 +459,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
             'IRR',
             $submissionMode,
             $verificationMode,
-            null,
+            $manualApprovalLimitFaceValue,
             'fake_gift_card',
         );
     }
