@@ -471,6 +471,7 @@ final readonly class AlternativePaymentReviewService implements TelegramAlternat
         return strtoupper($matches[1]);
     }
 
+    /** @param C2cReviewRow $row */
     private function c2cPrivateEvidenceAvailable(object $row): bool
     {
         $submissionPublicId = $this->c2cManualSubmissionPublicId(
