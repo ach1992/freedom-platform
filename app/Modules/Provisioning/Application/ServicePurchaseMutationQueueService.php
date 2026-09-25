@@ -38,6 +38,15 @@ final readonly class ServicePurchaseMutationQueueService
         private OutboxPublisher $outbox,
     ) {}
 
+    public static function canonicalRequestKeyForSettlement(string $purchaseSettlementPublicId): string
+    {
+        if (! Str::isUlid($purchaseSettlementPublicId)) {
+            throw new DomainException('Purchase settlement public ID is invalid.');
+        }
+
+        return 'service-paid-mutation:'.strtoupper($purchaseSettlementPublicId);
+    }
+
     /** @requirement BUY-002 PAY-002 SVC-003 SVC-004 PRV-002 PRV-003 DAT-003 SEC-002 QUA-004 */
     public function queueFromSettlement(
         string $purchaseSettlementPublicId,

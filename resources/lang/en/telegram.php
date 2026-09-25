@@ -496,6 +496,20 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                 'result_enabled' => 'Auto-renew is enabled. Package: :package — accepted price: :price IRR.',
                 'result_disabled' => 'Auto-renew is disabled. Recorded package: :package.',
             ],
+            'reconfiguration' => [
+                'button' => 'Change plan / server / protocol',
+                'offering_list' => "Change Service\n\nChoose the target plan. :notice",
+                'offering_button' => ':name — :price IRR',
+                'route_list' => 'Choose the target server. Only compatible, active routes with capacity are shown.',
+                'route_auto' => 'Select server automatically',
+                'protocol_list' => 'Choose the target protocol.',
+                'preview' => "Service change preview\n\nCurrent plan: :source_plan\nTarget plan: :target_plan\nTarget server: :server\nTarget protocol: :protocol\nPrice difference: :difference IRR\nOperation fee: :fee IRR\nTotal: :total IRR",
+                'confirm_paid' => 'Continue to payment',
+                'confirm_free' => 'Confirm free change',
+                'stale' => 'The selected option is no longer valid; current options were reloaded.',
+                'unavailable' => 'This change is no longer allowed by the current Service state, policy, capacity, or Panel capability.',
+                'payment_quote' => "Service change payment\n\nQuote: :quote_id\nTarget plan: :plan\nTotal: :final_price :currency\nExpires: :expires_at",
+            ],
             'lifecycle' => [
                 'button' => [
                     'reset_usage' => 'Reset usage',

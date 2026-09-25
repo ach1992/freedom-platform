@@ -22,6 +22,7 @@ final readonly class TelegramOwnedServiceAllowedActionResolver
         'add_data' => ['add_data_allowance'],
         'add_days' => ['update_expiry'],
         'add_data_days' => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
+        'reconfigure' => ['reconfigure_service'],
         'reset_usage' => ['reset_usage'],
         'suspend' => ['suspend'],
         'activate' => ['activate'],

@@ -180,15 +180,39 @@ BEGIN
        )
        OR (NEW.changes_plan = 1 AND NOT EXISTS (
             SELECT 1 FROM plan_offering_operations p
-            WHERE p.plan_offering_id = NEW.source_plan_offering_id AND p.operation_code = 'change_plan' AND p.customer_enabled = 1
+            WHERE p.plan_offering_id = NEW.source_plan_offering_id
+              AND p.operation_code = 'change_plan'
+              AND p.customer_enabled = 1
+              AND (p.required_capability_code IS NULL OR EXISTS (
+                  SELECT 1 FROM panel_target_capabilities capability_row
+                  WHERE capability_row.panel_service_target_id = NEW.source_service_target_id
+                    AND BINARY capability_row.capability_code = BINARY p.required_capability_code
+                    AND capability_row.verification_status = 'verified'
+              ))
        ))
        OR (NEW.changes_target = 1 AND NOT EXISTS (
             SELECT 1 FROM plan_offering_operations p
-            WHERE p.plan_offering_id = NEW.source_plan_offering_id AND p.operation_code = 'change_location' AND p.customer_enabled = 1
+            WHERE p.plan_offering_id = NEW.source_plan_offering_id
+              AND p.operation_code = 'change_location'
+              AND p.customer_enabled = 1
+              AND (p.required_capability_code IS NULL OR EXISTS (
+                  SELECT 1 FROM panel_target_capabilities capability_row
+                  WHERE capability_row.panel_service_target_id = NEW.source_service_target_id
+                    AND BINARY capability_row.capability_code = BINARY p.required_capability_code
+                    AND capability_row.verification_status = 'verified'
+              ))
        ))
        OR (NEW.changes_protocol = 1 AND NOT EXISTS (
             SELECT 1 FROM plan_offering_operations p
-            WHERE p.plan_offering_id = NEW.source_plan_offering_id AND p.operation_code = 'change_protocol' AND p.customer_enabled = 1
+            WHERE p.plan_offering_id = NEW.source_plan_offering_id
+              AND p.operation_code = 'change_protocol'
+              AND p.customer_enabled = 1
+              AND (p.required_capability_code IS NULL OR EXISTS (
+                  SELECT 1 FROM panel_target_capabilities capability_row
+                  WHERE capability_row.panel_service_target_id = NEW.source_service_target_id
+                    AND BINARY capability_row.capability_code = BINARY p.required_capability_code
+                    AND capability_row.verification_status = 'verified'
+              ))
        ))
        OR BINARY NEW.request_key_hash <> BINARY COALESCE(@app_service_reconfiguration_request_hash, '')
        OR BINARY NEW.payload_hash <> BINARY COALESCE(@app_service_reconfiguration_payload_hash, '')

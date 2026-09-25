@@ -139,6 +139,7 @@ final readonly class ServiceReconfigurationPreviewService
 
         [$fee, $discountEligible] = $this->operationPolicy(
             (int) $baseline->source_plan_offering_id,
+            (int) $baseline->service_target_id,
             $changesPlan,
             $changesTarget,
             $changesProtocol,
@@ -319,7 +320,13 @@ final readonly class ServiceReconfigurationPreviewService
     }
 
     /** @return array{int,bool} */
-    private function operationPolicy(int $sourceOfferingId, bool $changesPlan, bool $changesTarget, bool $changesProtocol): array
+    private function operationPolicy(
+        int $sourceOfferingId,
+        int $sourceServiceTargetId,
+        bool $changesPlan,
+        bool $changesTarget,
+        bool $changesProtocol,
+    ): array
     {
         $codes = [];
         if ($changesPlan) {
@@ -335,13 +342,23 @@ final readonly class ServiceReconfigurationPreviewService
             ->where('plan_offering_id', $sourceOfferingId)
             ->whereIn('operation_code', $codes)
             ->where('customer_enabled', true)
-            ->get(['operation_code', 'price_irr', 'discount_eligible']);
+            ->get(['operation_code', 'price_irr', 'discount_eligible', 'required_capability_code']);
         if ($rows->count() !== count($codes)) {
             throw new DomainException('Current Plan Offering does not allow the requested Service reconfiguration.');
         }
         $fee = 0;
         $discountEligible = true;
         foreach ($rows as $row) {
+            $requiredCapability = $row->required_capability_code;
+            if ($requiredCapability !== null
+                && (! is_string($requiredCapability)
+                    || ! $this->database->connection()->table('panel_target_capabilities')
+                        ->where('panel_service_target_id', $sourceServiceTargetId)
+                        ->where('capability_code', $requiredCapability)
+                        ->where('verification_status', 'verified')
+                        ->exists())) {
+                throw new DomainException('Current Service target does not satisfy the requested reconfiguration capability policy.');
+            }
             $fee += (int) $row->price_irr;
             $discountEligible = $discountEligible && (bool) $row->discount_eligible;
         }

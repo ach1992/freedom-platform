@@ -1818,7 +1818,9 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $requestKey,
     ): void {
         $rows = [];
-        if (! $this->purchaseQuoteHasDiscount($state) && $preview->accountType === 'customer') {
+        if ($preview->quoteAction === 'purchase'
+            && ! $this->purchaseQuoteHasDiscount($state)
+            && $preview->accountType === 'customer') {
             $discount = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
@@ -3148,6 +3150,46 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->showServiceDetailForPage($action, $selectionToken, $page);
     }
 
+    public function showPreparedServiceReconfigurationQuote(
+        TelegramInteractionAction $action,
+        string $returnServiceSelection,
+        int $servicePage,
+        string $offeringSelection,
+        TelegramCustomerPurchaseQuotePreview $preview,
+    ): void {
+        if ($servicePage < 1
+            || preg_match('/\A[0-9a-f]{40}\z/', $returnServiceSelection) !== 1
+            || preg_match('/\A[0-9a-f]{40}\z/', $offeringSelection) !== 1
+            || $preview->quoteAction !== 'reconfigure'
+            || $preview->finalPriceIrr < 1) {
+            throw new RuntimeException('Prepared Service reconfiguration Quote handoff is invalid.');
+        }
+        $state = [
+            'page' => $servicePage,
+            'offering_selection' => $offeringSelection,
+            'quote_public_id' => $preview->quotePublicId,
+            'quote_configuration_hash' => $preview->configurationSnapshotHash,
+            'purchase_origin' => 'service_reconfiguration',
+            'return_service_selection' => $returnServiceSelection,
+        ];
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_QUOTE,
+            $state,
+            'nav-service-reconfigure-quote-handoff:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseQuote(
+            $action,
+            $session->version,
+            $preview,
+            $state,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
     private function showServiceDetailForPage(
         TelegramInteractionAction $action,
         string $selectionToken,
@@ -3299,6 +3341,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.services.auto_renew.button', $locale),
                 $autoRenew->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+        if (in_array(TelegramOwnedServiceAction::Reconfigure, $detail->allowedActions, true)) {
+            $reconfigure = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                TelegramServiceReconfigurationNavigationHandler::ACTION_ENTRY,
+                ['service_selection' => $selectionToken],
+                'nav-service-detail-reconfigure:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.reconfiguration.button', $locale),
+                $reconfigure->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }
@@ -3544,6 +3600,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function returnPurchaseOffering(TelegramInteractionAction $action): void
     {
         $state = $this->purchaseQuoteStateFromPayload($action->sessionPayload);
+        if (($state['purchase_origin'] ?? null) === 'service_reconfiguration') {
+            $this->showOwnedServiceDetailForPage(
+                $action,
+                $state['return_service_selection'],
+                $state['page'],
+            );
+
+            return;
+        }
         try {
             $offering = $this->purchaseCatalog->offeringForSelf(
                 $action->userId,
@@ -3687,6 +3752,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function returnPurchaseOfferingFromPaymentMethods(TelegramInteractionAction $action): void
     {
         $state = $this->purchasePaymentMethodsStateFromPayload($action->sessionPayload);
+        if (($state['purchase_origin'] ?? null) === 'service_reconfiguration') {
+            $this->showOwnedServiceDetailForPage(
+                $action,
+                $state['return_service_selection'],
+                $state['page'],
+            );
+
+            return;
+        }
         try {
             $offering = $this->purchaseCatalog->offeringForSelf(
                 $action->userId,
@@ -4642,6 +4716,16 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private function purchaseQuoteText(TelegramCustomerPurchaseQuotePreview $preview, string $locale): string
     {
+        if ($preview->quoteAction === 'reconfigure') {
+            return $this->translation('telegram.navigation.services.reconfiguration.payment_quote', $locale, [
+                'quote_id' => $preview->quotePublicId,
+                'plan' => $this->purchasePlanLabel($preview->offering, $locale),
+                'final_price' => $this->formatIrr($preview->finalPriceIrr),
+                'currency' => $preview->currency,
+                'expires_at' => $this->formatBusinessDateTime($preview->expiresAt),
+            ]);
+        }
+
         return $this->translation('telegram.navigation.purchase.quote', $locale, [
             'quote_id' => $preview->quotePublicId,
             'plan' => $this->purchasePlanLabel($preview->offering, $locale),
@@ -5004,7 +5088,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'quote_configuration_hash',
             'quote_public_id',
         ];
-        if (! in_array($keys, [$baseKeys, $discountedKeys], true)
+        $serviceReconfigurationKeys = [
+            'offering_selection',
+            'page',
+            'purchase_origin',
+            'quote_configuration_hash',
+            'quote_public_id',
+            'return_service_selection',
+        ];
+        if (! in_array($keys, [$baseKeys, $discountedKeys, $serviceReconfigurationKeys], true)
             || ! is_int($payload['page'] ?? null)
             || $payload['page'] < 1
             || ! is_string($payload['offering_selection'] ?? null)
@@ -5014,6 +5106,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             || ! is_string($payload['quote_configuration_hash'] ?? null)
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1) {
             throw new RuntimeException('Telegram purchase Quote state is invalid.');
+        }
+        if ($keys === $serviceReconfigurationKeys
+            && (($payload['purchase_origin'] ?? null) !== 'service_reconfiguration'
+                || ! is_string($payload['return_service_selection'] ?? null)
+                || preg_match('/\A[0-9a-f]{40}\z/', $payload['return_service_selection']) !== 1)) {
+            throw new RuntimeException('Telegram Service reconfiguration purchase origin is invalid.');
         }
         if ($keys === $discountedKeys
             && (! is_string($payload['discount_consumption_public_id'] ?? null)

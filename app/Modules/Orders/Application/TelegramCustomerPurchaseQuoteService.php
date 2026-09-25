@@ -138,29 +138,55 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 throw $exception;
             }
             if ($quote->accountType === 'agent') {
-                if ($quote->action !== QuoteAction::Purchase) {
-                    throw new AuthorizationException('Telegram purchase Quote preview is unavailable.');
-                }
                 try {
-                    $quote = $this->quotes->create(
-                        $quote->quoteKey,
-                        $subjectUserId,
-                        $quote->planOfferingId,
-                        new QuotePricingInput(
-                            QuoteOverrideSource::None,
+                    if ($quote->action === QuoteAction::Purchase) {
+                        $quote = $this->quotes->create(
+                            $quote->quoteKey,
+                            $subjectUserId,
+                            $quote->planOfferingId,
+                            new QuotePricingInput(
+                                QuoteOverrideSource::None,
+                                null,
+                                null,
+                                $quote->discountReferenceCode,
+                                $quote->discountIrr,
+                                $quote->expiresAt,
+                            ),
+                            'tg-purchase-preview:'.$quote->quotePublicId,
+                            new QuoteAgentPricingContext($actorUserId, AgentPricingAction::Purchase),
+                        );
+                    } elseif ($quote->action === QuoteAction::Reconfigure && $quote->serviceReconfiguration !== null) {
+                        $quote = $this->quotes->create(
+                            $quote->quoteKey,
+                            $subjectUserId,
+                            $quote->planOfferingId,
+                            new QuotePricingInput(
+                                QuoteOverrideSource::None,
+                                null,
+                                null,
+                                $quote->discountReferenceCode,
+                                $quote->discountIrr,
+                                $quote->expiresAt,
+                            ),
+                            'tg-purchase-preview:'.$quote->quotePublicId,
+                            new QuoteAgentPricingContext($actorUserId, AgentPricingAction::Reconfigure),
                             null,
-                            null,
-                            $quote->discountReferenceCode,
-                            $quote->discountIrr,
-                            $quote->expiresAt,
-                        ),
-                        'tg-purchase-preview:'.$quote->quotePublicId,
-                        new QuoteAgentPricingContext($actorUserId, AgentPricingAction::Purchase),
-                    );
+                            new ServiceReconfigurationQuoteContext($quote->serviceReconfiguration->previewPublicId),
+                        );
+                    } else {
+                        throw new AuthorizationException('Telegram purchase Quote preview is unavailable.');
+                    }
                 } catch (\DomainException|AuthorizationException $exception) {
                     throw new AuthorizationException('Telegram purchase Quote preview is unavailable.', previous: $exception);
                 }
             }
+            $commercialBindingMatches = ($quote->action === QuoteAction::Purchase
+                    && $quote->serviceReconfiguration === null
+                    && $quote->basePriceIrr === $offeringIdentity['base_price_irr']
+                    && $quote->basePriceIrr === $offering->basePriceIrr)
+                || ($quote->action === QuoteAction::Reconfigure
+                    && $quote->serviceReconfiguration !== null
+                    && $quote->basePriceIrr === $quote->serviceReconfiguration->totalPriceIrr);
             if ($quote->userId !== $subjectUserId
                 || $quote->accountType !== $offering->accountType
                 || ! $this->pricingBindingMatchesAccountType($quote)
@@ -168,8 +194,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 || ! hash_equals($quote->offeringCode, $offering->offeringCode)
                 || $quote->offeringVersion !== $offeringIdentity['version']
                 || ! hash_equals($quote->offeringConfigurationHash, $offeringIdentity['configuration_hash'])
-                || $quote->basePriceIrr !== $offeringIdentity['base_price_irr']
-                || $quote->basePriceIrr !== $offering->basePriceIrr
+                || ! $commercialBindingMatches
                 || $quote->currency !== 'IRR') {
                 throw new AuthorizationException('Telegram purchase Quote preview is unavailable.');
             }
@@ -187,6 +212,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $quote->expiresAt,
                 true,
                 $quote->accountType,
+                $quote->action->value,
             );
         }, 3);
     }
@@ -287,6 +313,7 @@ final readonly class TelegramCustomerPurchaseQuoteService implements TelegramCus
                 $quote->expiresAt,
                 $quote->replayed,
                 $quote->accountType,
+                $quote->action->value,
             );
         }, 3);
     }

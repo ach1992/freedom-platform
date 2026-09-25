@@ -54,6 +54,7 @@ use App\Modules\Provisioning\Application\TelegramOwnedServiceAutoRenewService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceLifecycleService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
+use App\Modules\Provisioning\Application\TelegramOwnedServiceReconfigurationService;
 use App\Modules\Provisioning\Application\TelegramServiceAutoRenewPolicyService;
 use App\Modules\Provisioning\Application\TelegramServiceNotificationPreferenceService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
@@ -83,6 +84,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceAutoRenewMana
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceLifecycleExecutor;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceReconfigurationManager;
 use App\Modules\Telegram\Application\Contracts\TelegramServiceAutoRenewPolicyManager;
 use App\Modules\Telegram\Application\Contracts\TelegramServiceNotificationPreferenceManager;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjection;
@@ -147,6 +149,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramSupportOwnedOrderProjection::class, TelegramSupportOwnedOrderProjectionService::class);
         $this->app->bind(TelegramSupportOwnedPaymentIntentProjection::class, TelegramSupportOwnedPaymentIntentProjectionService::class);
         $this->app->bind(TelegramOwnedServiceProjection::class, TelegramOwnedServiceProjectionService::class);
+        $this->app->bind(TelegramOwnedServiceReconfigurationManager::class, TelegramOwnedServiceReconfigurationService::class);
         $this->app->bind(TelegramSupportOwnedServiceReferenceResolver::class, TelegramOwnedServiceProjectionService::class);
         $this->app->bind(TelegramOwnedServiceAutoRenewManager::class, TelegramOwnedServiceAutoRenewService::class);
         $this->app->bind(TelegramOwnedServiceDeliveryResender::class, TelegramOwnedServiceDeliveryResendService::class);

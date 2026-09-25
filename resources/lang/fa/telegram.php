@@ -496,6 +496,20 @@ return [
                 'result_enabled' => 'تمدید خودکار فعال شد. بسته: :package — قیمت پذیرفته‌شده: :price ریال.',
                 'result_disabled' => 'تمدید خودکار غیرفعال شد. بسته ثبت‌شده: :package.',
             ],
+            'reconfiguration' => [
+                'button' => 'تغییر پلن / سرور / پروتکل',
+                'offering_list' => "تغییر سرویس\n\nپلن مقصد را انتخاب کنید. :notice",
+                'offering_button' => ':name — :price ریال',
+                'route_list' => 'سرور مقصد را انتخاب کنید. فقط مقصدهای سازگار، فعال و دارای ظرفیت نمایش داده می‌شوند.',
+                'route_auto' => 'انتخاب خودکار سرور',
+                'protocol_list' => 'پروتکل مقصد را انتخاب کنید.',
+                'preview' => "پیش‌نمایش تغییر سرویس\n\nپلن فعلی: :source_plan\nپلن مقصد: :target_plan\nسرور مقصد: :server\nپروتکل مقصد: :protocol\nاختلاف قیمت: :difference ریال\nهزینه عملیات: :fee ریال\nمبلغ نهایی: :total ریال",
+                'confirm_paid' => 'ادامه به پرداخت',
+                'confirm_free' => 'تأیید تغییر رایگان',
+                'stale' => 'گزینه انتخابی دیگر معتبر نیست؛ گزینه‌های فعلی دوباره بارگذاری شدند.',
+                'unavailable' => 'این تغییر دیگر با وضعیت، سیاست، ظرفیت یا قابلیت فعلی سرویس مجاز نیست.',
+                'payment_quote' => "پرداخت تغییر سرویس\n\nشناسه پیش‌فاکتور: :quote_id\nپلن مقصد: :plan\nمبلغ نهایی: :final_price :currency\nاعتبار تا: :expires_at",
+            ],
             'lifecycle' => [
                 'button' => [
                     'reset_usage' => 'بازنشانی مصرف',

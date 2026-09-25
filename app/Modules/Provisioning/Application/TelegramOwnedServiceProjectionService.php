@@ -304,11 +304,12 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             static fn (TelegramOwnedServiceAction $action): string => $action->value,
             TelegramOwnedServiceAction::ordered(),
         );
+        $reconfigurationCodes = ['change_plan', 'change_location', 'change_protocol'];
 
         $policies = [];
         $policyRows = $connection->table('plan_offering_operations')
             ->where('plan_offering_id', $planOfferingId)
-            ->whereIn('operation_code', $actionCodes)
+            ->whereIn('operation_code', array_values(array_unique([...$actionCodes, ...$reconfigurationCodes])))
             ->get(['operation_code', 'customer_enabled', 'required_capability_code']);
         foreach ($policyRows as $policy) {
             $operationCode = $this->databaseString($policy->operation_code ?? null, 'Service operation policy code');
@@ -336,6 +337,23 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             ->pluck('capability_code') as $capabilityCode) {
             $verifiedCapabilities[] = $this->databaseString($capabilityCode, 'Service target capability');
         }
+        $verifiedCapabilitySet = array_fill_keys($verifiedCapabilities, true);
+        $reconfigurationAllowed = false;
+        foreach ($reconfigurationCodes as $code) {
+            $policy = $policies[$code] ?? null;
+            if ($policy === null || ! $policy['customer_enabled']) {
+                continue;
+            }
+            $required = $policy['required_capability_code'];
+            if ($required === null || isset($verifiedCapabilitySet[$required])) {
+                $reconfigurationAllowed = true;
+                break;
+            }
+        }
+        $policies[TelegramOwnedServiceAction::Reconfigure->value] = [
+            'customer_enabled' => $reconfigurationAllowed,
+            'required_capability_code' => null,
+        ];
 
         return $this->allowedActionResolver->resolve(
             $lifecycleState,

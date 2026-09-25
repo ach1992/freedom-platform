@@ -78,6 +78,7 @@ use App\Modules\Telegram\Application\TelegramRequiredChannelService;
 use App\Modules\Telegram\Application\TelegramServiceAutoRenewNavigationHandler;
 use App\Modules\Telegram\Application\TelegramServiceAutoRenewPolicyNavigationHandler;
 use App\Modules\Telegram\Application\TelegramServiceLifecycleNavigationHandler;
+use App\Modules\Telegram\Application\TelegramServiceReconfigurationNavigationHandler;
 use App\Modules\Telegram\Application\TelegramServiceNotificationPreferenceNavigationHandler;
 use App\Modules\Telegram\Application\TelegramSourceMessageInteractionGateway;
 use App\Modules\Telegram\Application\TelegramSourceMessageReferenceDeliveryOutboxHandler;
@@ -192,6 +193,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramServiceAutoRenewNavigationHandler::class);
         $this->app->singleton(TelegramServiceAutoRenewPolicyNavigationHandler::class);
         $this->app->singleton(TelegramServiceLifecycleNavigationHandler::class);
+        $this->app->singleton(TelegramServiceReconfigurationNavigationHandler::class);
         $this->app->singleton(TelegramServiceNotificationPreferenceNavigationHandler::class);
         $this->app->singleton(TelegramAgentBulkPurchaseNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);

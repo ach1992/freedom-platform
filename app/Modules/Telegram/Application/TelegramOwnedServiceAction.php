@@ -10,6 +10,7 @@ enum TelegramOwnedServiceAction: string
     case AddData = 'add_data';
     case AddDays = 'add_days';
     case AddDataDays = 'add_data_days';
+    case Reconfigure = 'reconfigure';
     case ResetUsage = 'reset_usage';
     case Suspend = 'suspend';
     case Activate = 'activate';
@@ -33,6 +34,7 @@ enum TelegramOwnedServiceAction: string
             self::AddData,
             self::AddDays,
             self::AddDataDays,
+            self::Reconfigure,
             self::ResetUsage,
             self::Suspend,
             self::Activate,
