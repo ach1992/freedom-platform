@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -11,9 +12,10 @@ use RuntimeException;
 
 final readonly class TelegramActionMembershipService
 {
+    /** @param Closure(): TelegramChannelMembershipEvaluator $evaluator */
     public function __construct(
         private DatabaseManager $database,
-        private TelegramChannelMembershipEvaluator $evaluator,
+        private Closure $evaluator,
         private TelegramActionMembershipRevalidator $revalidator,
     ) {}
 
@@ -34,7 +36,7 @@ final readonly class TelegramActionMembershipService
             throw new RuntimeException('Telegram action membership provider verification must run outside a database transaction.');
         }
 
-        $evaluation = $this->evaluator->evaluate(new TelegramChannelMembershipResolutionRequest(
+        $evaluation = ($this->evaluator)()->evaluate(new TelegramChannelMembershipResolutionRequest(
             $subjectUserId,
             $action,
             null,

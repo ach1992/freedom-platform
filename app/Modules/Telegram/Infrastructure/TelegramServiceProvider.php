@@ -27,6 +27,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
+use App\Modules\Telegram\Application\TelegramActionMembershipRevalidator;
+use App\Modules\Telegram\Application\TelegramActionMembershipService;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorAccessNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
@@ -301,6 +303,14 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramChannelMembershipRuleResolver::class),
                 $application->make(TelegramMembershipLookup::class),
                 $application->make(ProtectedTelegramDeliveryRuntime::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramActionMembershipService::class,
+            fn (Application $application): TelegramActionMembershipService => new TelegramActionMembershipService(
+                $application->make(DatabaseManager::class),
+                fn (): TelegramChannelMembershipEvaluator => $application->make(TelegramChannelMembershipEvaluator::class),
+                $application->make(TelegramActionMembershipRevalidator::class),
             ),
         );
         $this->app->singleton(
