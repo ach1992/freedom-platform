@@ -12,9 +12,9 @@ use App\Modules\Payments\GiftCard\Application\GiftCardTypeReceipt;
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
 use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
-use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -511,8 +511,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         string $submissionMode,
         string $verificationMode,
         ?int $manualApprovalLimitFaceValue = null,
-    ): GiftCardTypeReceipt
-    {
+    ): GiftCardTypeReceipt {
         return $this->app->make(GiftCardTypeService::class)->register(
             $typeCode,
             'Steam Gift Card '.$typeCode,
