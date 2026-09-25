@@ -23,6 +23,7 @@ final readonly class TelegramCustomerPurchaseCardToCardReceiptSubmissionService 
         private DatabaseManager $database,
         private PurchaseOrderService $purchaseOrders,
         private CardToCardManualSubmissionService $manualSubmissions,
+        private CardToCardManualReviewQueueService $manualReviews,
     ) {}
 
     /** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
@@ -101,6 +102,17 @@ final readonly class TelegramCustomerPurchaseCardToCardReceiptSubmissionService 
             || ! hash_equals(strtoupper($submission->paymentIntentPublicId), strtoupper($row->payment_intent_public_id))
             || $submission->claimedAmountIrr !== (int) $row->payable_amount_irr) {
             throw new RuntimeException('Telegram card-to-card receipt result conflicts with current payment authority.');
+        }
+
+        $review = $this->manualReviews->queue(
+            $submission->publicId,
+            'tg-c2c-review:'.substr($operationKey, 0, 40),
+        );
+        if ($review->reviewPublicId === null
+            || $review->reservationPublicId !== null
+            || $review->outcome !== 'review_pending:manual_required'
+            || $review->candidateCount !== 1) {
+            throw new RuntimeException('Telegram card-to-card receipt did not enter the canonical manual-review queue.');
         }
 
         return new TelegramCustomerPurchaseCardToCardSubmission(

@@ -5,8 +5,13 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseGiftCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseUsdtPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardSubmission;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseGiftCardSubmission;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseUsdtInstructions;
+use App\Modules\Telegram\Application\TelegramCustomerPurchaseUsdtSubmission;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
@@ -99,7 +104,176 @@ final class TelegramPrivateMediaDispatchSubmission implements TelegramCustomerPu
     }
 }
 
-/** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
+final class TelegramPrivateMediaGiftCardPayment implements TelegramCustomerPurchaseGiftCardPayment
+{
+    /** @var list<array<string,mixed>> */
+    public array $evidenceCalls = [];
+
+    public ?string $submissionPublicId = null;
+
+    private ?string $paymentIntentPublicId = null;
+
+    private ?string $reviewPublicId = null;
+
+    public function availableTypesForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+    ): array {
+        return [];
+    }
+
+    public function submitCodeForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $typeCode,
+        string $typeConfigurationHash,
+        int $claimedFaceValue,
+        string $code,
+        string $operationKey,
+    ): TelegramCustomerPurchaseGiftCardSubmission {
+        throw new RuntimeException('Private-media Gift Card fake expects evidence submission.');
+    }
+
+    public function submitEvidenceForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $typeCode,
+        string $typeConfigurationHash,
+        int $claimedFaceValue,
+        ?string $code,
+        ?string $privateImageReference,
+        ?string $telegramFileId,
+        ?string $telegramFileUniqueId,
+        ?string $imageContentHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseGiftCardSubmission {
+        if ($actorUserId !== $subjectUserId
+            || $privateImageReference === null
+            || $imageContentHash === null
+            || $telegramFileId !== null
+            || $telegramFileUniqueId !== null
+            || preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
+            throw new RuntimeException('Unexpected Gift Card private-media authority.');
+        }
+
+        $this->evidenceCalls[] = compact(
+            'actorUserId',
+            'subjectUserId',
+            'orderPublicId',
+            'quotePublicId',
+            'typeCode',
+            'claimedFaceValue',
+            'code',
+            'privateImageReference',
+            'imageContentHash',
+            'operationKey',
+        );
+        $replayed = $this->submissionPublicId !== null;
+        $this->submissionPublicId ??= strtoupper((string) Str::ulid());
+        $this->paymentIntentPublicId ??= strtoupper((string) Str::ulid());
+        $this->reviewPublicId ??= strtoupper((string) Str::ulid());
+
+        return new TelegramCustomerPurchaseGiftCardSubmission(
+            $this->submissionPublicId,
+            $this->paymentIntentPublicId,
+            $this->reviewPublicId,
+            $typeCode,
+            $code === null ? '' : 'GIFT********1234',
+            $claimedFaceValue,
+            'IRR',
+            'pending_manual_review',
+            $replayed,
+        );
+    }
+}
+
+final class TelegramPrivateMediaUsdtPayment implements TelegramCustomerPurchaseUsdtPayment
+{
+    /** @var list<array<string,mixed>> */
+    public array $submitCalls = [];
+
+    public ?string $submissionPublicId = null;
+
+    private ?string $paymentIntentPublicId = null;
+
+    public function prepareForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseUsdtInstructions {
+        throw new RuntimeException('Private-media USDT fake expects an already prepared authority.');
+    }
+
+    public function submitTxidForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $authorityPublicId,
+        string $txid,
+        string $operationKey,
+        ?string $privateEvidenceReference = null,
+        ?string $evidenceContentHash = null,
+    ): TelegramCustomerPurchaseUsdtSubmission {
+        if ($actorUserId !== $subjectUserId
+            || ! Str::isUlid($authorityPublicId)
+            || preg_match('/\A0x[a-f0-9]{64}\z/', $txid) !== 1
+            || $privateEvidenceReference === null
+            || $evidenceContentHash === null
+            || preg_match('/\A[0-9a-f]{64}\z/', $operationKey) !== 1) {
+            throw new RuntimeException('Unexpected USDT private-media authority.');
+        }
+
+        $this->submitCalls[] = compact(
+            'actorUserId',
+            'subjectUserId',
+            'orderPublicId',
+            'quotePublicId',
+            'authorityPublicId',
+            'txid',
+            'privateEvidenceReference',
+            'evidenceContentHash',
+            'operationKey',
+        );
+        $replayed = $this->submissionPublicId !== null;
+        $this->submissionPublicId ??= strtoupper((string) Str::ulid());
+        $this->paymentIntentPublicId ??= strtoupper((string) Str::ulid());
+
+        return new TelegramCustomerPurchaseUsdtSubmission(
+            $this->submissionPublicId,
+            strtoupper($authorityPublicId),
+            $this->paymentIntentPublicId,
+            strtolower($txid),
+            'pending_manual_review',
+            $replayed,
+        );
+    }
+}
+
+/** @requirement BUY-003 PAY-002 PAY-003 C2C-002 C2C-004 GFT-002 GFT-004 USDT-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-003 SEC-009 QUA-001 QUA-004 */
 final class TelegramPrivateMediaDispatchTest extends TestCase
 {
     use DatabaseTruncation;
@@ -144,6 +318,169 @@ final class TelegramPrivateMediaDispatchTest extends TestCase
         } finally {
             parent::tearDown();
         }
+    }
+
+    public function test_gift_card_private_image_is_reference_bound_replay_safe_and_never_leaks_private_evidence(): void
+    {
+        $telegramUserId = 9841;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $this->moveToGiftCardEvidence($accountId, $sessionPublicId, 'image_only');
+
+        $png = $this->onePixelPng();
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($png);
+        $giftCards = new TelegramPrivateMediaGiftCardPayment;
+        $this->bindAlternativePaymentMediaDependencies($fetcher, $giftCards, new TelegramPrivateMediaUsdtPayment);
+
+        $fileId = 'gift-private-image-file';
+        $fileUniqueId = 'gift-private-image-unique';
+        $payload = $this->photoPayload(89101, $telegramUserId, $fileId, $fileUniqueId, strlen($png));
+        $this->accept($payload);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 89101);
+        $processor->process('123456789', 89101);
+
+        self::assertSame(1, $fetcher->calls);
+        self::assertCount(1, $giftCards->evidenceCalls);
+        $call = $giftCards->evidenceCalls[0];
+        self::assertNull($call['code']);
+        self::assertSame(hash('sha256', $png), $call['imageContentHash']);
+        self::assertMatchesRegularExpression(
+            '/\Atelegram-private-media:[0-9A-HJKMNP-TV-Z]{26}\z/',
+            (string) $call['privateImageReference'],
+        );
+
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('purchase_gift_card_submitted', $active->state);
+        $durablePayload = json_encode($active->payload, JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString((string) $call['privateImageReference'], $durablePayload);
+        self::assertStringNotContainsString((string) $call['imageContentHash'], $durablePayload);
+        self::assertStringNotContainsString($fileId, $durablePayload);
+        self::assertStringNotContainsString($fileUniqueId, $durablePayload);
+
+        $media = DB::table('telegram_private_media')->where('update_id', 89101)->first();
+        self::assertNotNull($media);
+        self::assertSame('associated', $media->state);
+        self::assertSame('gift_card_submission', $media->association_type);
+        self::assertSame($giftCards->submissionPublicId, $media->association_public_id);
+
+        $durable = $this->durableOrdinaryTelegramEvidence();
+        self::assertStringNotContainsString((string) $call['privateImageReference'], $durable);
+        self::assertStringNotContainsString((string) $call['imageContentHash'], $durable);
+        self::assertStringNotContainsString($fileId, $durable);
+        self::assertStringNotContainsString($fileUniqueId, $durable);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+    }
+
+    public function test_gift_card_both_mode_keeps_caption_code_transient_while_binding_private_image(): void
+    {
+        $telegramUserId = 9843;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $this->moveToGiftCardEvidence($accountId, $sessionPublicId, 'both');
+
+        $png = $this->onePixelPng();
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($png);
+        $giftCards = new TelegramPrivateMediaGiftCardPayment;
+        $this->bindAlternativePaymentMediaDependencies($fetcher, $giftCards, new TelegramPrivateMediaUsdtPayment);
+
+        $rawCode = 'GIFT-BOTH-SECRET-1234';
+        $fileId = 'gift-both-private-image-file';
+        $fileUniqueId = 'gift-both-private-image-unique';
+        $payload = $this->photoPayload(89103, $telegramUserId, $fileId, $fileUniqueId, strlen($png));
+        $payload['message']['caption'] = $rawCode;
+        $this->accept($payload);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 89103);
+        $processor->process('123456789', 89103);
+
+        self::assertSame(1, $fetcher->calls);
+        self::assertCount(1, $giftCards->evidenceCalls);
+        $call = $giftCards->evidenceCalls[0];
+        self::assertSame($rawCode, $call['code']);
+        self::assertSame(hash('sha256', $png), $call['imageContentHash']);
+        self::assertMatchesRegularExpression(
+            '/\Atelegram-private-media:[0-9A-HJKMNP-TV-Z]{26}\z/',
+            (string) $call['privateImageReference'],
+        );
+
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('purchase_gift_card_submitted', $active->state);
+        $durablePayload = json_encode($active->payload, JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('GIFT********1234', $durablePayload);
+        self::assertStringNotContainsString($rawCode, $durablePayload);
+        self::assertStringNotContainsString((string) $call['privateImageReference'], $durablePayload);
+        self::assertStringNotContainsString((string) $call['imageContentHash'], $durablePayload);
+
+        $media = DB::table('telegram_private_media')->where('update_id', 89103)->first();
+        self::assertNotNull($media);
+        self::assertSame('associated', $media->state);
+        self::assertSame('gift_card_submission', $media->association_type);
+        self::assertSame($giftCards->submissionPublicId, $media->association_public_id);
+
+        $durable = $this->durableOrdinaryTelegramEvidence();
+        self::assertStringNotContainsString($rawCode, $durable);
+        self::assertStringNotContainsString((string) $call['privateImageReference'], $durable);
+        self::assertStringNotContainsString((string) $call['imageContentHash'], $durable);
+        self::assertStringNotContainsString($fileId, $durable);
+        self::assertStringNotContainsString($fileUniqueId, $durable);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+    }
+
+    public function test_usdt_private_screenshot_binds_txid_without_leaking_full_txid_or_private_reference(): void
+    {
+        $telegramUserId = 9842;
+        [, $accountId, $sessionPublicId] = $this->startActor($telegramUserId);
+        $authorityPublicId = strtoupper((string) Str::ulid());
+        $this->moveToUsdtEvidence($accountId, $sessionPublicId, $authorityPublicId);
+
+        $png = $this->onePixelPng();
+        $fetcher = new TelegramPrivateMediaDispatchFetcher($png);
+        $usdt = new TelegramPrivateMediaUsdtPayment;
+        $this->bindAlternativePaymentMediaDependencies($fetcher, new TelegramPrivateMediaGiftCardPayment, $usdt);
+
+        $txid = '0x'.str_repeat('ab', 32);
+        $fileId = 'usdt-private-image-file';
+        $fileUniqueId = 'usdt-private-image-unique';
+        $payload = $this->photoPayload(89102, $telegramUserId, $fileId, $fileUniqueId, strlen($png));
+        $payload['message']['caption'] = strtoupper($txid);
+        $this->accept($payload);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 89102);
+        $processor->process('123456789', 89102);
+
+        self::assertSame(1, $fetcher->calls);
+        self::assertCount(1, $usdt->submitCalls);
+        $call = $usdt->submitCalls[0];
+        self::assertSame($txid, $call['txid']);
+        self::assertSame(hash('sha256', $png), $call['evidenceContentHash']);
+        self::assertMatchesRegularExpression(
+            '/\Atelegram-private-media:[0-9A-HJKMNP-TV-Z]{26}\z/',
+            (string) $call['privateEvidenceReference'],
+        );
+
+        $active = $this->app->make(TelegramInteractionSessionService::class)->activeForAccount($accountId);
+        self::assertNotNull($active);
+        self::assertSame('purchase_usdt_submitted', $active->state);
+        $durablePayload = json_encode($active->payload, JSON_THROW_ON_ERROR);
+        self::assertSame('0xabababab…abababab', $active->payload['masked_txid'] ?? null);
+        self::assertStringNotContainsString($txid, $durablePayload);
+        self::assertStringNotContainsString((string) $call['privateEvidenceReference'], $durablePayload);
+        self::assertStringNotContainsString((string) $call['evidenceContentHash'], $durablePayload);
+
+        $media = DB::table('telegram_private_media')->where('update_id', 89102)->first();
+        self::assertNotNull($media);
+        self::assertSame('associated', $media->state);
+        self::assertSame('usdt_txid_submission', $media->association_type);
+        self::assertSame($usdt->submissionPublicId, $media->association_public_id);
+
+        $durable = $this->durableOrdinaryTelegramEvidence();
+        self::assertStringNotContainsString($txid, $durable);
+        self::assertStringNotContainsString((string) $call['privateEvidenceReference'], $durable);
+        self::assertStringNotContainsString((string) $call['evidenceContentHash'], $durable);
+        self::assertStringNotContainsString($fileId, $durable);
+        self::assertStringNotContainsString($fileUniqueId, $durable);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 
     public function test_private_photo_is_bound_to_active_c2c_session_and_replay_creates_one_pending_submission(): void
@@ -739,6 +1076,90 @@ SQL);
     ): void {
         $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
         $this->app->instance(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, $submission);
+        foreach ([
+            TelegramPrivateMediaIngestor::class,
+            TelegramPrivateMediaInteractionGateway::class,
+            TelegramInteractionDispatcher::class,
+            TelegramUpdateProcessor::class,
+        ] as $service) {
+            $this->app->forgetInstance($service);
+        }
+    }
+
+    private function moveToGiftCardEvidence(
+        int $accountId,
+        string $sessionPublicId,
+        string $submissionMode,
+    ): void {
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $active = $sessions->activeForAccount($accountId);
+        self::assertNotNull($active);
+        $sessions->transition(
+            $sessionPublicId,
+            $active->version,
+            'purchase_gift_card_evidence_input',
+            [
+                'payment_method_code' => 'gift_card',
+                'order_public_id' => strtoupper((string) Str::ulid()),
+                'quote_public_id' => strtoupper((string) Str::ulid()),
+                'quote_configuration_hash' => str_repeat('a', 64),
+                'payment_decision_public_id' => strtoupper((string) Str::ulid()),
+                'payment_decision_configuration_hash' => str_repeat('b', 64),
+                'gift_card_type_code' => 'steam-private',
+                'gift_card_type_configuration_hash' => str_repeat('c', 64),
+                'gift_card_face_currency' => 'IRR',
+                'gift_card_claimed_face_value' => 1_250_000,
+                'gift_card_submission_mode' => $submissionMode,
+                'gift_card_verification_mode' => 'manual_only',
+            ],
+            'private-media-test-to-gift:'.hash('sha256', $sessionPublicId),
+        );
+    }
+
+    private function moveToUsdtEvidence(
+        int $accountId,
+        string $sessionPublicId,
+        string $authorityPublicId,
+    ): void {
+        $sessions = $this->app->make(TelegramInteractionSessionService::class);
+        $active = $sessions->activeForAccount($accountId);
+        self::assertNotNull($active);
+        $sessions->transition(
+            $sessionPublicId,
+            $active->version,
+            'purchase_usdt_txid_input',
+            [
+                'payment_method_code' => 'usdt_bep20',
+                'order_public_id' => strtoupper((string) Str::ulid()),
+                'quote_public_id' => strtoupper((string) Str::ulid()),
+                'quote_configuration_hash' => str_repeat('d', 64),
+                'payment_decision_public_id' => strtoupper((string) Str::ulid()),
+                'payment_decision_configuration_hash' => str_repeat('e', 64),
+                'usdt_authority_public_id' => strtoupper($authorityPublicId),
+                'usdt_network' => 'BEP20',
+                'usdt_exact_amount' => '1.250000',
+                'usdt_destination_address' => '0x'.str_repeat('f', 40),
+                'usdt_expires_at' => '2026-09-25T00:00:00+00:00',
+            ],
+            'private-media-test-to-usdt:'.hash('sha256', $sessionPublicId),
+        );
+    }
+
+    private function bindAlternativePaymentMediaDependencies(
+        TelegramPrivateMediaFetcher $fetcher,
+        TelegramCustomerPurchaseGiftCardPayment $giftCards,
+        TelegramCustomerPurchaseUsdtPayment $usdt,
+    ): void {
+        $this->app->instance(TelegramPrivateMediaFetcher::class, $fetcher);
+        $this->app->instance(TelegramCustomerPurchaseGiftCardPayment::class, $giftCards);
+        $this->app->instance(TelegramCustomerPurchaseUsdtPayment::class, $usdt);
+        $this->app->instance(
+            TelegramCustomerPurchaseCardToCardReceiptSubmission::class,
+            new TelegramPrivateMediaDispatchSubmission(
+                strtoupper((string) Str::ulid()),
+                strtoupper((string) Str::ulid()),
+            ),
+        );
         foreach ([
             TelegramPrivateMediaIngestor::class,
             TelegramPrivateMediaInteractionGateway::class,

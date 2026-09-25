@@ -34,4 +34,23 @@ interface TelegramCustomerPurchaseGiftCardPayment
         string $code,
         string $operationKey,
     ): TelegramCustomerPurchaseGiftCardSubmission;
+
+    public function submitEvidenceForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $typeCode,
+        string $typeConfigurationHash,
+        int $claimedFaceValue,
+        ?string $code,
+        ?string $privateImageReference,
+        ?string $telegramFileId,
+        ?string $telegramFileUniqueId,
+        ?string $imageContentHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseGiftCardSubmission;
 }

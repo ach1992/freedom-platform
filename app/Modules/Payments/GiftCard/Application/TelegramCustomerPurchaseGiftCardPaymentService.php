@@ -64,11 +64,10 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
 
             return array_values($connection->table('gift_card_types')
                 ->where('active', true)
-                ->where('verification_mode', 'manual_only')
-                ->whereIn('submission_mode', ['code_only', 'either'])
                 ->orderBy('type_code')
                 ->get([
-                    'type_code', 'display_name', 'brand', 'region', 'face_currency', 'configuration_hash',
+                    'type_code', 'display_name', 'brand', 'region', 'face_currency',
+                    'submission_mode', 'verification_mode', 'configuration_hash',
                 ])
                 ->map(static fn (stdClass $row): TelegramCustomerPurchaseGiftCardType => new TelegramCustomerPurchaseGiftCardType(
                     (string) $row->type_code,
@@ -76,13 +75,14 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                     (string) $row->brand,
                     $row->region === null ? null : (string) $row->region,
                     (string) $row->face_currency,
+                    (string) $row->submission_mode,
+                    (string) $row->verification_mode,
                     strtolower((string) $row->configuration_hash),
                 ))
                 ->all());
         }, 3);
     }
 
-    /** @requirement BUY-001 BUY-003 PAY-001 PAY-002 PRO-001 GFT-001 GFT-002 GFT-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
     public function submitCodeForSelf(
         int $actorUserId,
         int $subjectUserId,
@@ -97,13 +97,50 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
         string $code,
         string $operationKey,
     ): TelegramCustomerPurchaseGiftCardSubmission {
+        return $this->submitEvidenceForSelf(
+            $actorUserId,
+            $subjectUserId,
+            $orderPublicId,
+            $quotePublicId,
+            $quoteConfigurationHash,
+            $decisionPublicId,
+            $decisionConfigurationHash,
+            $typeCode,
+            $typeConfigurationHash,
+            $claimedFaceValue,
+            $code,
+            null,
+            null,
+            null,
+            null,
+            $operationKey,
+        );
+    }
+
+    /** @requirement BUY-001 BUY-003 PAY-001 PAY-002 PAY-003 PRO-001 GFT-001 GFT-002 GFT-003 GFT-004 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
+    public function submitEvidenceForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $orderPublicId,
+        string $quotePublicId,
+        string $quoteConfigurationHash,
+        string $decisionPublicId,
+        string $decisionConfigurationHash,
+        string $typeCode,
+        string $typeConfigurationHash,
+        int $claimedFaceValue,
+        ?string $code,
+        ?string $privateImageReference,
+        ?string $telegramFileId,
+        ?string $telegramFileUniqueId,
+        ?string $imageContentHash,
+        string $operationKey,
+    ): TelegramCustomerPurchaseGiftCardSubmission {
         $this->assertSelf($actorUserId, $subjectUserId);
         $this->assertOperationKey($operationKey);
-        if ($claimedFaceValue < 1) {
-            throw new AuthorizationException('Telegram Gift Card face value is unavailable.');
-        }
-        if (preg_match('/\A[0-9a-f]{64}\z/', $typeConfigurationHash) !== 1) {
-            throw new AuthorizationException('Telegram Gift Card type configuration is unavailable.');
+        if ($claimedFaceValue < 1
+            || preg_match('/\A[0-9a-f]{64}\z/', $typeConfigurationHash) !== 1) {
+            throw new AuthorizationException('Telegram Gift Card evidence authority is unavailable.');
         }
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
@@ -118,6 +155,10 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
             $typeConfigurationHash,
             $claimedFaceValue,
             $code,
+            $privateImageReference,
+            $telegramFileId,
+            $telegramFileUniqueId,
+            $imageContentHash,
             $operationKey,
         ): TelegramCustomerPurchaseGiftCardSubmission {
             $this->authorizeCheckout(
@@ -129,7 +170,11 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                 $decisionPublicId,
                 $decisionConfigurationHash,
             );
-            $type = $this->manualCodeType($connection, $typeCode, $typeConfigurationHash, true);
+            $type = $this->configuredType($connection, $typeCode, $typeConfigurationHash, true);
+            $this->assertEvidenceMode((string) $type->submission_mode, $code, $privateImageReference);
+            if ($code === null) {
+                $this->assertImageEvidenceVerificationPolicy($type, $claimedFaceValue);
+            }
 
             $submission = $this->submissions->submit(
                 'telegram-gift-card-submission:'.$orderPublicId,
@@ -143,34 +188,52 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
                 (string) $type->brand,
                 $type->region === null ? null : (string) $type->region,
                 $code,
-                null,
-                null,
-                null,
-                null,
+                $privateImageReference,
+                $telegramFileId,
+                $telegramFileUniqueId,
+                $imageContentHash,
                 $this->correlationId('submit', $operationKey),
             );
-            $processed = $this->payments->routeManualOnly(
-                $submission->publicId,
-                $this->correlationId('review', $operationKey),
-            );
-            if ($processed->state !== 'pending_manual_review'
-                || $processed->reviewPublicId === null
-                || $processed->redemptionPublicId !== null
-                || $processed->purchaseSettlementPublicId !== null
-                || ! hash_equals($submission->publicId, $processed->submissionPublicId)) {
-                throw new RuntimeException('Telegram Gift Card manual-review result is inconsistent.');
+
+            $processed = null;
+            if ($type->verification_mode === 'manual_only') {
+                $processed = $this->payments->routeManualOnly(
+                    $submission->publicId,
+                    $this->correlationId('review', $operationKey),
+                );
+            } elseif ($code === null) {
+                // The current Generic REST provider deliberately never exports private image
+                // content. Image-only evidence therefore enters the canonical human review
+                // authority instead of pretending OCR/image presence is financial proof.
+                $processed = $this->payments->routeManualReview(
+                    $submission->publicId,
+                    'private_image_requires_manual_review',
+                    $this->correlationId('image-review', $operationKey),
+                );
+            }
+
+            $state = $processed->state ?? $submission->state;
+            $reviewPublicId = $processed?->reviewPublicId;
+            if (! in_array($state, ['submitted', 'pending_manual_review'], true)
+                || ($state === 'pending_manual_review' && $reviewPublicId === null)
+                || ($state === 'submitted' && $reviewPublicId !== null)
+                || ($processed !== null
+                    && ($processed->redemptionPublicId !== null
+                        || $processed->purchaseSettlementPublicId !== null
+                        || ! hash_equals($submission->publicId, $processed->submissionPublicId)))) {
+                throw new RuntimeException('Telegram Gift Card evidence result is inconsistent.');
             }
 
             return new TelegramCustomerPurchaseGiftCardSubmission(
                 $submission->publicId,
                 $submission->paymentIntentPublicId,
-                $processed->reviewPublicId,
+                $reviewPublicId,
                 $submission->typeCode,
                 $submission->maskedCode,
                 $submission->claimedFaceValue,
                 $submission->claimedCurrency,
-                $processed->state,
-                $submission->replayed || $processed->replayed,
+                $state,
+                $submission->replayed || ($processed->replayed ?? false),
             );
         }, 3);
     }
@@ -209,7 +272,7 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
         }
     }
 
-    private function manualCodeType(Connection $connection, string $typeCode, string $configurationHash, bool $lock): stdClass
+    private function configuredType(Connection $connection, string $typeCode, string $configurationHash, bool $lock): stdClass
     {
         if (preg_match('/\A[A-Za-z0-9:_.-]{2,64}\z/', $typeCode) !== 1) {
             throw new AuthorizationException('Telegram Gift Card type is unavailable.');
@@ -221,16 +284,49 @@ final readonly class TelegramCustomerPurchaseGiftCardPaymentService implements T
             $query->lockForUpdate();
         }
         $type = $query->first([
-            'type_code', 'brand', 'region', 'face_currency', 'submission_mode', 'verification_mode', 'active',
+            'type_code', 'brand', 'region', 'face_currency', 'submission_mode', 'verification_mode',
+            'manual_approval_limit_face_value', 'active',
         ]);
-        if ($type === null
-            || ! (bool) $type->active
-            || $type->verification_mode !== 'manual_only'
-            || ! in_array($type->submission_mode, ['code_only', 'either'], true)) {
+        if ($type === null || ! (bool) $type->active) {
             throw new AuthorizationException('Telegram Gift Card type is unavailable.');
         }
 
         return $type;
+    }
+
+    private function assertEvidenceMode(string $submissionMode, ?string $code, ?string $privateImageReference): void
+    {
+        $hasCode = is_string($code) && trim($code) !== '';
+        $hasImage = is_string($privateImageReference) && trim($privateImageReference) !== '';
+        $valid = match ($submissionMode) {
+            'image_only' => ! $hasCode && $hasImage,
+            'code_only' => $hasCode && ! $hasImage,
+            'either' => $hasCode || $hasImage,
+            'both' => $hasCode && $hasImage,
+            default => false,
+        };
+        if (! $valid) {
+            throw new AuthorizationException('Telegram Gift Card evidence does not satisfy the configured submission mode.');
+        }
+    }
+
+    private function assertImageEvidenceVerificationPolicy(stdClass $type, int $claimedFaceValue): void
+    {
+        $verificationMode = (string) $type->verification_mode;
+        if ($verificationMode === 'manual_only'
+            || in_array($verificationMode, ['automatic_then_manual', 'manual_fallback_on_provider_failure'], true)) {
+            return;
+        }
+
+        if ($verificationMode === 'automatic_with_manual_approval_above_limit'
+            && $type->manual_approval_limit_face_value !== null
+            && $claimedFaceValue > (int) $type->manual_approval_limit_face_value) {
+            return;
+        }
+
+        throw new AuthorizationException(
+            'Telegram Gift Card image evidence is unavailable for the configured verification policy.',
+        );
     }
 
     private function assertSelf(int $actorUserId, int $subjectUserId): void

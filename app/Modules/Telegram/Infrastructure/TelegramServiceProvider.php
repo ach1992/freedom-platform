@@ -10,6 +10,7 @@ use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
@@ -34,6 +35,7 @@ use App\Modules\Telegram\Application\TelegramAdministratorSearchNavigationHandle
 use App\Modules\Telegram\Application\TelegramAdministratorSearchService;
 use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAgentNavigationHandler;
+use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewNavigationHandler;
 use App\Modules\Telegram\Application\TelegramBotEntryMembershipGateHandler;
 use App\Modules\Telegram\Application\TelegramBroadcastDeliveryEffectGuard;
 use App\Modules\Telegram\Application\TelegramBroadcastNavigationHandler;
@@ -173,6 +175,7 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAdministratorAccessNavigationHandler::class);
+        $this->app->singleton(TelegramAlternativePaymentReviewNavigationHandler::class);
         $this->app->singleton(TelegramAdministratorSearchNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);
@@ -356,6 +359,7 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(SupportTicketAttachmentService::class),
                 $application->make(TelegramSupportMembershipFreshnessGuard::class),
                 $application->make(TelegramPrivateMediaDeliveryResolver::class),
+                $application->make(TelegramAlternativePaymentReview::class),
             ),
         );
         $this->app->singleton(

@@ -50,6 +50,16 @@ Schedule::command('payments:purchase-maintenance', [
     ->withoutOverlapping()
     ->onOneServer();
 
+Schedule::command('payments:alternative-maintenance', [
+    '--limit' => 50,
+    '--json' => true,
+])
+    ->name('payments.alternative-maintenance')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(10)
+    ->onOneServer()
+    ->runInBackground();
+
 Schedule::command('services:auto-renew', [
     '--limit' => config('auto_renew.batch_limit', 50),
     '--json' => true,

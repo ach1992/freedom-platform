@@ -8,6 +8,9 @@ use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\AlternativePaymentRuntimeService;
+use App\Modules\Payments\Application\Contracts\AlternativePaymentProviderResolver;
+use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionVerificationProvider;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderCapabilities;
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardProviderEvidence;
@@ -19,6 +22,8 @@ use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionReceipt;
 use App\Modules\Payments\GiftCard\Application\GiftCardSubmissionService;
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
 use App\Modules\Payments\GiftCard\Infrastructure\FakeGiftCardVerificationProvider;
+use App\Modules\Payments\Usdt\Application\Contracts\BlockchainTransactionVerificationProvider;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -216,6 +221,73 @@ final class GiftCardPaymentFlowTest extends TestCase
         config()->set('payments.gift_card.code_lookup_key', str_repeat('g', 32));
         config()->set('payments.gift_card.code_lookup_key_version', 7);
         $this->configureMethod();
+    }
+
+    public function test_runtime_service_processes_and_reconciles_configured_gift_card_provider(): void
+    {
+        $this->registerType('gift-runtime', 'automatic_only');
+        $purchase = $this->purchase('runtime-service');
+        $submission = $this->submit($purchase, 'runtime-service', 'gift-runtime', 'RUNTIME-GIFT-0001');
+        $provider = new FakeGiftCardVerificationProvider(
+            'fake_gift_card',
+            new GiftCardProviderCapabilities(true, false, true, false, true),
+        );
+        $provider->put('validate', $this->operationKey($submission->publicId, 'validate'), $this->evidence(
+            'validate',
+            'valid',
+            'runtime-validate',
+            null,
+            $purchase['amount'],
+        ));
+        $provider->put('redeem', $this->operationKey($submission->publicId, 'redeem'), $this->evidence(
+            'redeem',
+            'redeemed',
+            'runtime-redeem',
+            'runtime-redemption-tx',
+            $purchase['amount'],
+        ));
+        $provider->put('status', $this->operationKey($submission->publicId, 'status'), $this->evidence(
+            'status',
+            'redeemed',
+            'runtime-status',
+            'runtime-redemption-tx',
+            $purchase['amount'],
+        ));
+
+        $resolver = new class($provider) implements AlternativePaymentProviderResolver
+        {
+            public function __construct(private GiftCardVerificationProvider $provider) {}
+
+            public function bank(string $providerCode): ?BankTransactionVerificationProvider
+            {
+                return null;
+            }
+
+            public function giftCard(string $providerCode): ?GiftCardVerificationProvider
+            {
+                return $providerCode === 'fake_gift_card' ? $this->provider : null;
+            }
+
+            public function blockchain(string $providerCode): ?BlockchainTransactionVerificationProvider
+            {
+                return null;
+            }
+        };
+        $this->app->instance(AlternativePaymentProviderResolver::class, $resolver);
+
+        $result = $this->app->make(AlternativePaymentRuntimeService::class)->run(20);
+
+        self::assertSame(0, $result->c2cProvidersPolled);
+        self::assertSame(1, $result->giftCardSubmissionsProcessed);
+        self::assertSame(1, $result->giftCardSubmissionsReconciled);
+        self::assertSame(0, $result->failures);
+        self::assertSame('captured', DB::table('payment_intents')
+            ->where('public_id', $submission->paymentIntentPublicId)
+            ->value('state'));
+        self::assertSame(1, DB::table('gift_card_redemptions')->count());
+        self::assertSame(1, DB::table('purchase_settlements')
+            ->where('provider_code', 'gift_card')
+            ->count());
     }
 
     public function test_code_is_protected_and_authoritative_redeem_captures_once_through_common_settlement(): void
@@ -682,6 +754,52 @@ final class GiftCardPaymentFlowTest extends TestCase
 
         self::assertSame(1, DB::table('gift_card_submissions')->count());
         self::assertSame(1, DB::table('payment_intents')->where('payment_method_code', 'gift_card')->count());
+    }
+
+    public function test_telegram_review_boundary_approves_manual_gift_card_through_canonical_settlement(): void
+    {
+        $this->registerType('gift-admin-boundary', 'manual_only');
+        $purchase = $this->purchase('admin-boundary');
+        $submission = $this->submit($purchase, 'admin-boundary', 'gift-admin-boundary', 'ADMIN-BOUNDARY-GIFT-0001');
+
+        $pending = $this->app->make(GiftCardPaymentService::class)->routeManualOnly(
+            $submission->publicId,
+            $this->correlation('admin-boundary-queue'),
+        );
+        self::assertSame('pending_manual_review', $pending->state);
+        self::assertNotNull($pending->reviewPublicId);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        $administratorId = $this->ownerAdministrator();
+        $actorUserId = (int) DB::table('administrators')
+            ->where('id', $administratorId)
+            ->value('user_id');
+        self::assertGreaterThan(0, $actorUserId);
+
+        $reviews = $this->app->make(TelegramAlternativePaymentReview::class);
+        $case = $reviews->find($actorUserId, 'gift_card', $pending->reviewPublicId);
+        self::assertSame('gift_card', $case->kind);
+        self::assertSame($submission->publicId, $case->subjectPublicId);
+        self::assertSame('pending', $case->state);
+
+        $reviews->approveGiftCard(
+            $actorUserId,
+            $pending->reviewPublicId,
+            'gift-admin-redemption-0001',
+            'Administrator verified the exact external Gift Card redemption.',
+            'gift-admin-boundary-approve',
+        );
+
+        self::assertSame('captured', DB::table('payment_intents')
+            ->where('public_id', $submission->paymentIntentPublicId)
+            ->value('state'));
+        self::assertSame('approved', DB::table('gift_card_reviews')
+            ->where('public_id', $pending->reviewPublicId)
+            ->value('state'));
+        self::assertSame(1, DB::table('gift_card_redemptions')->count());
+        self::assertSame(1, DB::table('purchase_settlements')
+            ->where('provider_code', 'gift_card')
+            ->count());
     }
 
     public function test_validation_only_provider_routes_to_review_and_validity_evidence_cannot_approve_payment(): void

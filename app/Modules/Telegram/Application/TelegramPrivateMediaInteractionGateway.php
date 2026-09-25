@@ -8,6 +8,8 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Support\Application\SupportTicketAttachmentReceipt;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseGiftCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseUsdtPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Shared\Application\RestrictedValue;
 use DomainException;
@@ -26,6 +28,18 @@ final readonly class TelegramPrivateMediaInteractionGateway
 
     private const C2C_SUBMITTED_STATE = 'purchase_card_to_card_submitted';
 
+    private const GIFT_CARD_EVIDENCE_INPUT_STATE = 'purchase_gift_card_evidence_input';
+
+    private const GIFT_CARD_SUBMITTING_STATE = 'purchase_gift_card_submitting';
+
+    private const GIFT_CARD_SUBMITTED_STATE = 'purchase_gift_card_submitted';
+
+    private const USDT_TXID_INPUT_STATE = 'purchase_usdt_txid_input';
+
+    private const USDT_SUBMITTING_STATE = 'purchase_usdt_submitting';
+
+    private const USDT_SUBMITTED_STATE = 'purchase_usdt_submitted';
+
     private const SUPPORT_REPLY_STATE = 'support_reply';
 
     private const SUPPORT_QUEUE_REPLY_STATE = 'support_queue_reply';
@@ -42,7 +56,10 @@ final readonly class TelegramPrivateMediaInteractionGateway
         private TelegramPrivateMediaIngestor $media,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramCustomerPurchaseCardToCardReceiptSubmission $cardToCardSubmissions,
+        private TelegramCustomerPurchaseGiftCardPayment $giftCards,
+        private TelegramCustomerPurchaseUsdtPayment $usdt,
         private CustomerAccountSummaryService $customers,
+        private TelegramPaymentPrivateEvidenceStatusDelivery $paymentEvidenceStatus,
         private TelegramCardToCardReceiptStatusDelivery $statusDelivery,
         private SupportTicketAttachmentService $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
@@ -62,6 +79,12 @@ final readonly class TelegramPrivateMediaInteractionGateway
         }
         if ($interaction->sessionState === self::C2C_INSTRUCTIONS_STATE) {
             return $interaction->caption === null && $this->handleCardToCard($interaction);
+        }
+        if ($interaction->sessionState === self::GIFT_CARD_EVIDENCE_INPUT_STATE) {
+            return $this->handleGiftCardEvidence($interaction);
+        }
+        if ($interaction->sessionState === self::USDT_TXID_INPUT_STATE) {
+            return $this->handleUsdtEvidence($interaction);
         }
         if ($interaction->sessionState === self::SUPPORT_REPLY_STATE) {
             return $interaction->caption === null && $this->handleSupportAttachment($interaction, false);
@@ -165,6 +188,240 @@ final readonly class TelegramPrivateMediaInteractionGateway
 
         if (! Str::isUlid($submission->submissionPublicId)) {
             throw new RuntimeException('Telegram card-to-card receipt submission identity is invalid.');
+        }
+
+        return true;
+    }
+
+    private function handleGiftCardEvidence(TelegramPrivateMediaInteraction $interaction): bool
+    {
+        $state = $this->giftCardEvidenceState($interaction->sessionPayload);
+        $locale = $this->localeForActor($interaction->userId);
+        $mode = $state['gift_card_submission_mode'];
+        $caption = $interaction->caption === null ? null : trim($interaction->caption);
+
+        if ($mode === 'code_only'
+            || ($mode === 'image_only' && $caption !== null && $caption !== '')
+            || ($mode === 'both' && ($caption === null || $caption === ''))) {
+            $this->queuePaymentEvidenceStatus($interaction, $locale, 'invalid');
+
+            return true;
+        }
+
+        $code = in_array($mode, ['either', 'both'], true) && $caption !== null && $caption !== ''
+            ? $caption
+            : null;
+
+        try {
+            $media = $this->media->ingest(
+                $interaction->botId,
+                $interaction->updateId,
+                $interaction->telegramAccountId,
+                $interaction->userId,
+                $interaction->media,
+            );
+        } catch (TelegramPrivateMediaRejected $exception) {
+            $status = $exception->reasonCode === 'discarded_unassociated' ? 'unavailable' : 'invalid';
+            $this->queuePaymentEvidenceStatus($interaction, $locale, $status);
+
+            return true;
+        }
+
+        if (! TelegramPrivateMediaContentValidator::isImageMime($media->detectedMime)) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->queuePaymentEvidenceStatus($interaction, $locale, 'invalid');
+
+            return true;
+        }
+
+        $operationKey = hash('sha256', $interaction->requestKey);
+        try {
+            $submission = $this->database->connection()->transaction(function () use (
+                $interaction,
+                $state,
+                $code,
+                $media,
+                $operationKey,
+                $locale,
+            ): TelegramCustomerPurchaseGiftCardSubmission {
+                $claim = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $interaction->sessionVersion,
+                    self::GIFT_CARD_SUBMITTING_STATE,
+                    $interaction->sessionPayload,
+                    'telegram-gift-card-evidence-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($interaction, $claim->userId);
+
+                $submission = $this->giftCards->submitEvidenceForSelf(
+                    $interaction->userId,
+                    $interaction->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $state['gift_card_type_code'],
+                    $state['gift_card_type_configuration_hash'],
+                    $state['gift_card_claimed_face_value'],
+                    $code,
+                    $media->privateReference,
+                    null,
+                    null,
+                    $media->contentSha256,
+                    $operationKey,
+                );
+
+                $this->media->associate(
+                    $media,
+                    $interaction->userId,
+                    'gift_card_submission',
+                    $submission->submissionPublicId,
+                );
+
+                $safeState = [
+                    'submission_public_id' => $submission->submissionPublicId,
+                    'payment_intent_public_id' => $submission->paymentIntentPublicId,
+                    'gift_card_type_code' => $submission->typeCode,
+                    'claimed_face_value' => $submission->claimedFaceValue,
+                    'claimed_currency' => $submission->claimedCurrency,
+                    'state' => $submission->state,
+                ];
+                if ($submission->reviewPublicId !== null) {
+                    $safeState['review_public_id'] = $submission->reviewPublicId;
+                }
+                if ($submission->maskedCode !== '') {
+                    $safeState['masked_code'] = $submission->maskedCode;
+                }
+
+                $submitted = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $claim->version,
+                    self::GIFT_CARD_SUBMITTED_STATE,
+                    $safeState,
+                    'telegram-gift-card-evidence-submitted:'.$operationKey,
+                );
+                $this->assertActorBinding($interaction, $submitted->userId);
+                $this->queuePaymentEvidenceStatus($interaction, $locale, 'received');
+
+                return $submission;
+            }, 3);
+        } catch (AuthorizationException|DomainException) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->queuePaymentEvidenceStatus($interaction, $locale, 'unavailable');
+
+            return true;
+        }
+
+        if (! Str::isUlid($submission->submissionPublicId)) {
+            throw new RuntimeException('Telegram Gift Card private-evidence submission identity is invalid.');
+        }
+
+        return true;
+    }
+
+    private function handleUsdtEvidence(TelegramPrivateMediaInteraction $interaction): bool
+    {
+        $state = $this->usdtEvidenceState($interaction->sessionPayload);
+        $locale = $this->localeForActor($interaction->userId);
+        $txid = $interaction->caption === null ? '' : strtolower(trim($interaction->caption));
+        if (preg_match('/\A0x[a-f0-9]{64}\z/', $txid) !== 1) {
+            $this->queuePaymentEvidenceStatus($interaction, $locale, 'invalid');
+
+            return true;
+        }
+
+        try {
+            $media = $this->media->ingest(
+                $interaction->botId,
+                $interaction->updateId,
+                $interaction->telegramAccountId,
+                $interaction->userId,
+                $interaction->media,
+            );
+        } catch (TelegramPrivateMediaRejected $exception) {
+            $status = $exception->reasonCode === 'discarded_unassociated' ? 'unavailable' : 'invalid';
+            $this->queuePaymentEvidenceStatus($interaction, $locale, $status);
+
+            return true;
+        }
+
+        if (! TelegramPrivateMediaContentValidator::isImageMime($media->detectedMime)) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->queuePaymentEvidenceStatus($interaction, $locale, 'invalid');
+
+            return true;
+        }
+
+        $operationKey = hash('sha256', $interaction->requestKey);
+        try {
+            $submission = $this->database->connection()->transaction(function () use (
+                $interaction,
+                $state,
+                $txid,
+                $media,
+                $operationKey,
+                $locale,
+            ): TelegramCustomerPurchaseUsdtSubmission {
+                $claim = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $interaction->sessionVersion,
+                    self::USDT_SUBMITTING_STATE,
+                    $interaction->sessionPayload,
+                    'telegram-usdt-evidence-claim:'.$operationKey,
+                );
+                $this->assertActorBinding($interaction, $claim->userId);
+
+                $submission = $this->usdt->submitTxidForSelf(
+                    $interaction->userId,
+                    $interaction->userId,
+                    $state['order_public_id'],
+                    $state['quote_public_id'],
+                    $state['quote_configuration_hash'],
+                    $state['payment_decision_public_id'],
+                    $state['payment_decision_configuration_hash'],
+                    $state['usdt_authority_public_id'],
+                    $txid,
+                    $operationKey,
+                    $media->privateReference,
+                    $media->contentSha256,
+                );
+
+                $this->media->associate(
+                    $media,
+                    $interaction->userId,
+                    'usdt_txid_submission',
+                    $submission->submissionPublicId,
+                );
+
+                $safeState = [
+                    'submission_public_id' => $submission->submissionPublicId,
+                    'authority_public_id' => $submission->authorityPublicId,
+                    'payment_intent_public_id' => $submission->paymentIntentPublicId,
+                    'masked_txid' => $this->maskTxid($submission->txid),
+                    'state' => $submission->state,
+                ];
+                $submitted = $this->sessions->transition(
+                    $interaction->sessionPublicId,
+                    $claim->version,
+                    self::USDT_SUBMITTED_STATE,
+                    $safeState,
+                    'telegram-usdt-evidence-submitted:'.$operationKey,
+                );
+                $this->assertActorBinding($interaction, $submitted->userId);
+                $this->queuePaymentEvidenceStatus($interaction, $locale, 'received');
+
+                return $submission;
+            }, 3);
+        } catch (AuthorizationException|DomainException) {
+            $this->media->discardIfUnassociated($media, $interaction->userId);
+            $this->queuePaymentEvidenceStatus($interaction, $locale, 'unavailable');
+
+            return true;
+        }
+
+        if (! Str::isUlid($submission->submissionPublicId)) {
+            throw new RuntimeException('Telegram USDT private-evidence submission identity is invalid.');
         }
 
         return true;
@@ -362,6 +619,102 @@ final readonly class TelegramPrivateMediaInteractionGateway
         ];
     }
 
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array{order_public_id:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,gift_card_type_code:string,gift_card_type_configuration_hash:string,gift_card_claimed_face_value:int,gift_card_submission_mode:string}
+     */
+    private function giftCardEvidenceState(array $payload): array
+    {
+        foreach (['code', 'private_image_reference', 'image_content_hash', 'telegram_file_id', 'telegram_file_unique_id'] as $forbidden) {
+            if (array_key_exists($forbidden, $payload)) {
+                throw new RuntimeException('Telegram Gift Card private evidence leaked into durable session state.');
+            }
+        }
+
+        if (($payload['payment_method_code'] ?? null) !== 'gift_card'
+            || ! is_string($payload['order_public_id'] ?? null)
+            || ! Str::isUlid($payload['order_public_id'])
+            || ! is_string($payload['quote_public_id'] ?? null)
+            || ! Str::isUlid($payload['quote_public_id'])
+            || ! is_string($payload['quote_configuration_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1
+            || ! is_string($payload['payment_decision_public_id'] ?? null)
+            || ! Str::isUlid($payload['payment_decision_public_id'])
+            || ! is_string($payload['payment_decision_configuration_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['payment_decision_configuration_hash']) !== 1
+            || ! is_string($payload['gift_card_type_code'] ?? null)
+            || preg_match('/\A[A-Za-z0-9:_.-]{2,64}\z/', $payload['gift_card_type_code']) !== 1
+            || ! is_string($payload['gift_card_type_configuration_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['gift_card_type_configuration_hash']) !== 1
+            || ! is_int($payload['gift_card_claimed_face_value'] ?? null)
+            || $payload['gift_card_claimed_face_value'] < 1
+            || ! is_string($payload['gift_card_submission_mode'] ?? null)
+            || ! in_array($payload['gift_card_submission_mode'], ['image_only', 'code_only', 'either', 'both'], true)
+            || ! is_string($payload['gift_card_verification_mode'] ?? null)
+            || ! in_array($payload['gift_card_verification_mode'], [
+                'manual_only',
+                'automatic_only',
+                'automatic_then_manual',
+                'automatic_with_manual_approval_above_limit',
+                'manual_fallback_on_provider_failure',
+            ], true)) {
+            throw new RuntimeException('Telegram Gift Card private-evidence session state is invalid.');
+        }
+
+        return [
+            'order_public_id' => strtoupper($payload['order_public_id']),
+            'quote_public_id' => strtoupper($payload['quote_public_id']),
+            'quote_configuration_hash' => $payload['quote_configuration_hash'],
+            'payment_decision_public_id' => strtoupper($payload['payment_decision_public_id']),
+            'payment_decision_configuration_hash' => $payload['payment_decision_configuration_hash'],
+            'gift_card_type_code' => $payload['gift_card_type_code'],
+            'gift_card_type_configuration_hash' => $payload['gift_card_type_configuration_hash'],
+            'gift_card_claimed_face_value' => $payload['gift_card_claimed_face_value'],
+            'gift_card_submission_mode' => $payload['gift_card_submission_mode'],
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $payload
+     * @return array{order_public_id:string,quote_public_id:string,quote_configuration_hash:string,payment_decision_public_id:string,payment_decision_configuration_hash:string,usdt_authority_public_id:string}
+     */
+    private function usdtEvidenceState(array $payload): array
+    {
+        foreach (['txid', 'private_evidence_reference', 'evidence_content_hash'] as $forbidden) {
+            if (array_key_exists($forbidden, $payload)) {
+                throw new RuntimeException('Telegram USDT private evidence leaked into durable session state.');
+            }
+        }
+
+        if (($payload['payment_method_code'] ?? null) !== 'usdt_bep20'
+            || ! is_string($payload['order_public_id'] ?? null)
+            || ! Str::isUlid($payload['order_public_id'])
+            || ! is_string($payload['quote_public_id'] ?? null)
+            || ! Str::isUlid($payload['quote_public_id'])
+            || ! is_string($payload['quote_configuration_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1
+            || ! is_string($payload['payment_decision_public_id'] ?? null)
+            || ! Str::isUlid($payload['payment_decision_public_id'])
+            || ! is_string($payload['payment_decision_configuration_hash'] ?? null)
+            || preg_match('/\A[0-9a-f]{64}\z/', $payload['payment_decision_configuration_hash']) !== 1
+            || ! is_string($payload['usdt_authority_public_id'] ?? null)
+            || ! Str::isUlid($payload['usdt_authority_public_id'])
+            || ($payload['usdt_network'] ?? null) !== 'BEP20'
+            || ! is_string($payload['usdt_destination_address'] ?? null)
+            || preg_match('/\A0x[a-f0-9]{40}\z/', $payload['usdt_destination_address']) !== 1) {
+            throw new RuntimeException('Telegram USDT private-evidence session state is invalid.');
+        }
+
+        return [
+            'order_public_id' => strtoupper($payload['order_public_id']),
+            'quote_public_id' => strtoupper($payload['quote_public_id']),
+            'quote_configuration_hash' => $payload['quote_configuration_hash'],
+            'payment_decision_public_id' => strtoupper($payload['payment_decision_public_id']),
+            'payment_decision_configuration_hash' => $payload['payment_decision_configuration_hash'],
+            'usdt_authority_public_id' => strtoupper($payload['usdt_authority_public_id']),
+        ];
+    }
+
     /** @param array<string,mixed> $payload */
     private function positivePayloadId(array $payload, string $key): int
     {
@@ -373,6 +726,24 @@ final readonly class TelegramPrivateMediaInteractionGateway
         }
 
         return (int) $value;
+    }
+
+    private function queuePaymentEvidenceStatus(
+        TelegramPrivateMediaInteraction $interaction,
+        string $locale,
+        string $status,
+    ): void {
+        $this->paymentEvidenceStatus->queue(
+            $interaction->telegramUserId,
+            $interaction->requestKey,
+            $locale,
+            $status,
+        );
+    }
+
+    private function maskTxid(string $txid): string
+    {
+        return substr(strtolower($txid), 0, 10).'…'.substr(strtolower($txid), -8);
     }
 
     private function assertActorBinding(TelegramPrivateMediaInteraction $interaction, int $sessionUserId): void

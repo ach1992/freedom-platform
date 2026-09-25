@@ -11,17 +11,23 @@ use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeReceipt;
 use App\Modules\Payments\GiftCard\Application\GiftCardTypeService;
 use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\TelegramPaymentPrivateMediaTestSupport;
 use Tests\TestCase;
 
 final class TelegramGiftCardManualClock implements Clock
@@ -39,6 +45,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use RefreshDatabase;
+    use TelegramPaymentPrivateMediaTestSupport;
 
     private TelegramGiftCardManualClock $clock;
 
@@ -57,12 +64,12 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         $this->configureGiftCardMethod();
     }
 
-    public function test_customer_projection_exposes_only_active_manual_code_capable_types_and_denies_cross_actor_access(): void
+    public function test_customer_projection_exposes_active_configured_evidence_modes_and_denies_cross_actor_access(): void
     {
         $manualCode = $this->registerType('tg-manual-code', 'code_only', 'manual_only');
         $manualEither = $this->registerType('tg-manual-either', 'either', 'manual_only');
-        $this->registerType('tg-auto-code', 'code_only', 'automatic_only');
-        $this->registerType('tg-manual-image', 'image_only', 'manual_only');
+        $autoCode = $this->registerType('tg-auto-code', 'code_only', 'automatic_only');
+        $manualImage = $this->registerType('tg-manual-image', 'image_only', 'manual_only');
         $inactive = $this->registerType('tg-manual-inactive', 'code_only', 'manual_only');
         $this->app->make(GiftCardTypeService::class)->setActive($inactive->typeCode, false);
         $purchase = $this->purchase('projection');
@@ -77,14 +84,31 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
             $purchase['decision_configuration_hash'],
         );
 
-        self::assertSame([$manualCode->typeCode, $manualEither->typeCode], array_map(
+        self::assertSame([
+            $autoCode->typeCode,
+            $manualCode->typeCode,
+            $manualEither->typeCode,
+            $manualImage->typeCode,
+        ], array_map(
             static fn ($type): string => $type->typeCode,
             $types,
         ));
-        self::assertSame($manualCode->configurationHash, $types[0]->configurationHash);
-        self::assertSame('IRR', $types[0]->faceCurrency);
-        self::assertSame('Steam', $types[0]->brand);
-        self::assertSame('GLOBAL', $types[0]->region);
+        self::assertSame($manualCode->configurationHash, $types[1]->configurationHash);
+        self::assertSame('IRR', $types[1]->faceCurrency);
+        self::assertSame('Steam', $types[1]->brand);
+        self::assertSame('GLOBAL', $types[1]->region);
+        self::assertSame([
+            'tg-auto-code' => ['code_only', 'automatic_only'],
+            'tg-manual-code' => ['code_only', 'manual_only'],
+            'tg-manual-either' => ['either', 'manual_only'],
+            'tg-manual-image' => ['image_only', 'manual_only'],
+        ], array_column(array_map(
+            static fn ($type): array => [
+                $type->typeCode,
+                [$type->submissionMode, $type->verificationMode],
+            ],
+            $types,
+        ), 1, 0));
 
         $this->expectException(AuthorizationException::class);
         $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class)->availableTypesForSelf(
@@ -182,6 +206,151 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         self::assertSame(0, DB::table('gift_card_redemptions')->count());
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame('awaiting_payment', DB::table('orders')->where('public_id', $purchase['order_public_id'])->value('state'));
+    }
+
+    public function test_image_submission_preserves_configured_verification_policy_matrix(): void
+    {
+        $cases = [
+            ['manual_only', 'image_only', null, true],
+            ['automatic_only', 'image_only', null, false],
+            ['automatic_only', 'either', null, false],
+            ['automatic_then_manual', 'image_only', null, true],
+            ['manual_fallback_on_provider_failure', 'image_only', null, true],
+            ['automatic_with_manual_approval_above_limit', 'image_only', 2_000_000, false],
+            ['automatic_with_manual_approval_above_limit', 'image_only', 500_000, true],
+        ];
+        $service = $this->app->make(TelegramCustomerPurchaseGiftCardPaymentService::class);
+
+        foreach ($cases as $offset => [$verificationMode, $submissionMode, $manualLimit, $manualExpected]) {
+            $suffix = 'image-policy-'.$offset;
+            $type = $this->registerType(
+                'tg-image-policy-'.$offset,
+                $submissionMode,
+                $verificationMode,
+                $manualLimit,
+            );
+            $purchase = $this->purchase($suffix);
+            $before = [
+                'submissions' => DB::table('gift_card_submissions')->count(),
+                'reviews' => DB::table('gift_card_reviews')->count(),
+                'events' => DB::table('gift_card_provider_events')->count(),
+                'settlements' => DB::table('purchase_settlements')->count(),
+            ];
+            $privateReference = 'telegram-private-media:'.strtoupper((string) Str::ulid());
+            $evidenceBytes = $this->paymentEvidencePng($offset);
+            $contentHash = hash('sha256', $evidenceBytes);
+
+            if (! $manualExpected) {
+                try {
+                    $service->submitEvidenceForSelf(
+                        $purchase['user_id'],
+                        $purchase['user_id'],
+                        $purchase['order_public_id'],
+                        $purchase['quote_public_id'],
+                        $purchase['quote_configuration_hash'],
+                        $purchase['decision_public_id'],
+                        $purchase['decision_configuration_hash'],
+                        $type->typeCode,
+                        $type->configurationHash,
+                        $purchase['amount'],
+                        null,
+                        $privateReference,
+                        'tg-image-file-'.$offset,
+                        'tg-image-unique-'.$offset,
+                        $contentHash,
+                        hash('sha256', 'tg-image-policy-operation-'.$offset),
+                    );
+                    self::fail('Expected unsupported image/verification policy combination to fail closed.');
+                } catch (AuthorizationException) {
+                    self::assertTrue(true);
+                }
+
+                self::assertSame($before['submissions'], DB::table('gift_card_submissions')->count());
+                self::assertSame($before['reviews'], DB::table('gift_card_reviews')->count());
+                self::assertSame($before['events'], DB::table('gift_card_provider_events')->count());
+                self::assertSame($before['settlements'], DB::table('purchase_settlements')->count());
+
+                continue;
+            }
+
+            $submission = $service->submitEvidenceForSelf(
+                $purchase['user_id'],
+                $purchase['user_id'],
+                $purchase['order_public_id'],
+                $purchase['quote_public_id'],
+                $purchase['quote_configuration_hash'],
+                $purchase['decision_public_id'],
+                $purchase['decision_configuration_hash'],
+                $type->typeCode,
+                $type->configurationHash,
+                $purchase['amount'],
+                null,
+                $privateReference,
+                'tg-image-file-'.$offset,
+                'tg-image-unique-'.$offset,
+                $contentHash,
+                hash('sha256', 'tg-image-policy-operation-'.$offset),
+            );
+
+            self::assertSame('pending_manual_review', $submission->state);
+            self::assertNotNull($submission->reviewPublicId);
+            self::assertSame($before['submissions'] + 1, DB::table('gift_card_submissions')->count());
+            self::assertSame($before['reviews'] + 1, DB::table('gift_card_reviews')->count());
+            self::assertSame($before['events'], DB::table('gift_card_provider_events')->count());
+            self::assertSame($before['settlements'], DB::table('purchase_settlements')->count());
+
+            if ($verificationMode === 'manual_only') {
+                $this->storePaymentPrivateMedia(
+                    $purchase['user_id'],
+                    $privateReference,
+                    'gift_card_submission',
+                    $submission->submissionPublicId,
+                    $evidenceBytes,
+                    998301,
+                );
+                $administratorId = $this->ownerAdministrator();
+                $actorUserId = (int) DB::table('administrators')
+                    ->where('id', $administratorId)
+                    ->value('user_id');
+                $reviews = $this->app->make(TelegramAlternativePaymentReview::class);
+                $grant = $reviews->privateEvidence(
+                    $actorUserId,
+                    'gift_card',
+                    $submission->reviewPublicId ?? throw new RuntimeException('Missing Gift Card review ID.'),
+                );
+                self::assertSame('gift_card_submission', $grant->associationType);
+                self::assertSame($submission->submissionPublicId, $grant->associationPublicId);
+                self::assertSame($privateReference, $grant->privateMediaReference->reveal());
+                self::assertSame($contentHash, $grant->contentSha256->reveal());
+
+                $protectedReference = TelegramProtectedPresentationReference::paymentReviewEvidence(
+                    'gift_card',
+                    $submission->reviewPublicId,
+                    'en',
+                );
+                $resolver = $this->app->make(TelegramProtectedPresentationResolver::class);
+                $presentation = $resolver->resolveForSelf($actorUserId, $protectedReference);
+                self::assertSame($evidenceBytes, $presentation->documentContents());
+                self::assertSame('pending', DB::table('gift_card_reviews')
+                    ->where('public_id', $submission->reviewPublicId)
+                    ->value('state'));
+                self::assertSame($before['settlements'], DB::table('purchase_settlements')->count());
+
+                $reviews->reject(
+                    $actorUserId,
+                    'gift_card',
+                    $submission->reviewPublicId,
+                    'Administrator rejected image-only Gift Card evidence after protected inspection.',
+                    'gift-image-policy-reject-'.$offset,
+                );
+                try {
+                    $resolver->resolveForSelf($actorUserId, $protectedReference);
+                    self::fail('Expected closed Gift Card review evidence to stop resolving.');
+                } catch (DomainException) {
+                    self::assertTrue(true);
+                }
+            }
+        }
     }
 
     public function test_changed_quote_or_decision_fails_closed_before_gift_card_state_is_created(): void
@@ -337,8 +506,12 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
         ];
     }
 
-    private function registerType(string $typeCode, string $submissionMode, string $verificationMode): GiftCardTypeReceipt
-    {
+    private function registerType(
+        string $typeCode,
+        string $submissionMode,
+        string $verificationMode,
+        ?int $manualApprovalLimitFaceValue = null,
+    ): GiftCardTypeReceipt {
         return $this->app->make(GiftCardTypeService::class)->register(
             $typeCode,
             'Steam Gift Card '.$typeCode,
@@ -347,7 +520,7 @@ final class TelegramGiftCardManualPaymentTest extends TestCase
             'IRR',
             $submissionMode,
             $verificationMode,
-            null,
+            $manualApprovalLimitFaceValue,
             'fake_gift_card',
         );
     }

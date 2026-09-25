@@ -110,6 +110,41 @@ final readonly class UsdtBlockchainVerificationService
         );
     }
 
+    /** @requirement USDT-003 PAY-002 PAY-003 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
+    public function routeManualReview(string $submissionPublicId, string $correlationId): UsdtProcessingReceipt
+    {
+        if (! Str::isUlid($submissionPublicId)) {
+            throw new DomainException('USDT manual-review submission public ID is invalid.');
+        }
+        $this->assertCorrelation($correlationId);
+
+        $authority = $this->authority($submissionPublicId);
+        if ($authority === null) {
+            throw new DomainException('USDT TXID submission does not exist.');
+        }
+        if (in_array($authority->submission_state, ['captured', 'verified'], true)) {
+            return $this->verifiedTransfers->settlePersisted($submissionPublicId, $correlationId);
+        }
+        if ($authority->submission_state === 'pending_manual_review') {
+            return $this->receipt($authority, true);
+        }
+        if (! in_array($authority->submission_state, ['submitted', 'verifying', 'provider_unavailable'], true)) {
+            throw new RuntimeException('USDT submission cannot enter manual review from its current state.');
+        }
+
+        $this->beginVerification($authority, $correlationId);
+        $refreshed = $this->authority($submissionPublicId)
+            ?? throw new RuntimeException('USDT authority disappeared before manual-review queueing.');
+
+        return $this->queueManualReview(
+            $refreshed,
+            'manual_review_required',
+            'manual-review',
+            null,
+            $correlationId,
+        );
+    }
+
     private function beginVerification(stdClass $authority, string $correlationId): void
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($authority, $correlationId): void {

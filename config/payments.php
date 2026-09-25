@@ -3,6 +3,12 @@
 declare(strict_types=1);
 
 return [
+    'runtime' => [
+        // JSON objects keyed by immutable provider code. Credentials remain in protected environment configuration.
+        'c2c_generic_rest_providers_json' => env('C2C_GENERIC_REST_PROVIDERS_JSON', '{}'),
+        'gift_card_generic_rest_providers_json' => env('GIFT_CARD_GENERIC_REST_PROVIDERS_JSON', '{}'),
+        'usdt_generic_rest_providers_json' => env('USDT_BEP20_GENERIC_REST_PROVIDERS_JSON', '{}'),
+    ],
     'card_to_card' => [
         'lookup_key' => env('C2C_LOOKUP_KEY'),
         'reservation_minutes' => env('C2C_RESERVATION_MINUTES', 30),

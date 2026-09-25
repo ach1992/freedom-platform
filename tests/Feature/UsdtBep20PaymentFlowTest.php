@@ -26,6 +26,9 @@ use App\Modules\Payments\Usdt\Domain\UsdtRatePolicy;
 use App\Modules\Payments\Usdt\Domain\UsdtRateProvider;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
 use App\Modules\Payments\Usdt\Infrastructure\FakeBlockchainTransactionVerificationProvider;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -42,6 +45,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\TelegramPaymentPrivateMediaTestSupport;
 use Tests\TestCase;
 
 final class UsdtPaymentFlowClock implements Clock
@@ -83,6 +87,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use RefreshDatabase;
+    use TelegramPaymentPrivateMediaTestSupport;
 
     private UsdtPaymentFlowClock $clock;
 
@@ -133,6 +138,81 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         self::assertSame($processed->purchaseSettlementPublicId, $replay->purchaseSettlementPublicId);
         self::assertSame(1, DB::table('usdt_verified_transfers')->count());
         self::assertSame(1, DB::table('purchase_settlements')->where('provider_code', 'usdt_bep20')->count());
+    }
+
+    public function test_telegram_review_boundary_approves_manual_usdt_through_verified_transfer_authority(): void
+    {
+        $payment = $this->preparedPayment('admin-boundary');
+        $evidenceBytes = $this->paymentEvidencePng();
+        $privateEvidenceReference = $this->paymentPrivateReference();
+        $evidenceHash = hash('sha256', $evidenceBytes);
+        $submission = $this->submit(
+            $payment,
+            'admin-boundary',
+            '0x'.str_repeat('7d', 32),
+            $privateEvidenceReference,
+            $evidenceHash,
+        );
+        $this->storePaymentPrivateMedia(
+            $payment['authority']->userId,
+            $privateEvidenceReference,
+            'usdt_txid_submission',
+            $submission->publicId,
+            $evidenceBytes,
+            998201,
+        );
+        $pending = $this->app->make(UsdtBlockchainVerificationService::class)->routeManualReview(
+            $submission->publicId,
+            $this->correlation('admin-boundary-queue'),
+        );
+        self::assertSame('pending_manual_review', $pending->state);
+        self::assertNotNull($pending->reviewPublicId);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        $administratorId = $this->ownerAdministrator();
+        $actorUserId = (int) DB::table('administrators')
+            ->where('id', $administratorId)
+            ->value('user_id');
+        self::assertGreaterThan(0, $actorUserId);
+
+        $reviews = $this->app->make(TelegramAlternativePaymentReview::class);
+        $case = $reviews->find($actorUserId, 'usdt', $pending->reviewPublicId);
+        self::assertSame('usdt', $case->kind);
+        self::assertSame($submission->publicId, $case->subjectPublicId);
+        self::assertSame($payment['authority']->minimumConfirmations, $case->minimumConfirmations);
+
+        self::assertTrue($case->privateEvidenceAvailable);
+        $grant = $reviews->privateEvidence($actorUserId, 'usdt', $pending->reviewPublicId);
+        self::assertSame('usdt_txid_submission', $grant->associationType);
+        self::assertSame($submission->publicId, $grant->associationPublicId);
+        self::assertSame($privateEvidenceReference, $grant->privateMediaReference->reveal());
+        self::assertSame($evidenceHash, $grant->contentSha256->reveal());
+        $presentation = $this->app->make(TelegramProtectedPresentationResolver::class)->resolveForSelf(
+            $actorUserId,
+            TelegramProtectedPresentationReference::paymentReviewEvidence('usdt', $pending->reviewPublicId, 'en'),
+        );
+        self::assertSame($evidenceBytes, $presentation->documentContents());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        $reviews->approveUsdt(
+            $actorUserId,
+            $pending->reviewPublicId,
+            $payment['authority']->minimumConfirmations,
+            $this->clock->value->modify('+60 seconds')->format(DATE_ATOM),
+            'Administrator verified the exact canonical BSC-USDT transfer.',
+            'usdt-admin-boundary-approve',
+        );
+
+        self::assertSame('captured', DB::table('payment_intents')
+            ->where('public_id', $submission->paymentIntentPublicId)
+            ->value('state'));
+        self::assertSame('approved', DB::table('usdt_manual_reviews')
+            ->where('public_id', $pending->reviewPublicId)
+            ->value('state'));
+        self::assertSame(1, DB::table('usdt_verified_transfers')->count());
+        self::assertSame(1, DB::table('purchase_settlements')
+            ->where('provider_code', 'usdt_bep20')
+            ->count());
     }
 
     public function test_late_exact_transfer_requires_authorized_manual_review_and_receipt_cannot_replace_chain_evidence(): void

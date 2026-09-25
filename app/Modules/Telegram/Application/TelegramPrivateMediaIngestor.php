@@ -29,6 +29,8 @@ final readonly class TelegramPrivateMediaIngestor
         'c2c_manual_submission',
         'support_ticket_attachment',
         'administrator_direct_message',
+        'gift_card_submission',
+        'usdt_txid_submission',
     ];
 
     public function __construct(

@@ -253,7 +253,7 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
 
         self::assertSame($submitted->submissionPublicId, $submittedReplay->submissionPublicId);
         self::assertSame($txid, $submitted->txid);
-        self::assertSame('submitted', $submitted->state);
+        self::assertSame('pending_manual_review', $submitted->state);
         self::assertTrue($submittedReplay->replayed);
 
         try {
@@ -289,7 +289,9 @@ final class TelegramUsdtPaymentAdapterTest extends TestCase
         }
 
         self::assertSame(1, DB::table('usdt_txid_submissions')->count());
-        self::assertSame('submitted', DB::table('payment_intents')->where('public_id', $first->paymentIntentPublicId)->value('state'));
+        self::assertSame('pending_manual_review', DB::table('payment_intents')->where('public_id', $first->paymentIntentPublicId)->value('state'));
+        self::assertSame('pending_manual_review', DB::table('usdt_txid_submissions')->where('public_id', $submitted->submissionPublicId)->value('state'));
+        self::assertSame(1, DB::table('usdt_manual_reviews')->where('usdt_txid_submission_id', DB::table('usdt_txid_submissions')->where('public_id', $submitted->submissionPublicId)->value('id'))->where('state', 'pending')->count());
         self::assertSame(0, DB::table('usdt_verified_transfers')->count());
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame(0, DB::table('service_subscriptions')->count());

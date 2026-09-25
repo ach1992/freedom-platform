@@ -3,6 +3,11 @@
 declare(strict_types=1);
 
 return [
+    'private_payment_evidence' => [
+        'received' => 'Private payment evidence was received through protected storage. The payment remains pending until the canonical verification/review authority completes it.',
+        'invalid' => 'That private payment evidence could not be accepted. Send an approved image and follow the payment instructions; no payment or settlement effect was created.',
+        'unavailable' => 'The private payment evidence could not be attached to the current payment authority. Refresh the payment flow before retrying; no bypass or duplicate settlement was created.',
+    ],
     'navigation' => [
         'home' => "Welcome to Freedom Platform.\n\nMain menu\nChoose an option below.\n/cancel — Close the current session",
         'buttons' => [
@@ -60,10 +65,45 @@ Referral locked: :referral_locked',
             'buttons' => [
                 'access' => 'Access Control',
                 'global_search' => 'Cross-entity Search',
+                'payment_reviews' => 'Payment Reviews',
                 'customer_search' => 'Customer Search',
                 'usdt_rate' => 'USDT / NOWPayments rate',
                 'client_guides' => 'Client Guides',
                 'menus' => 'Menus & Buttons',
+            ],
+            'payment_reviews' => [
+                'list' => "Alternative Payment Reviews\n\n:items\n\nSelect a pending review. Every decision is authorized again at execution time.",
+                'empty' => "Alternative Payment Reviews\n\nNo pending C2C, Gift Card, or direct-USDT review is currently available.",
+                'item' => "#:number — :kind\nReview: :id\nSubject: :subject\nProvider: :provider\nReference: :reference\nAmount: :amount\nPrivate evidence: :private",
+                'detail' => "Payment Review\n\nKind: :kind\nReview: :id\nSubject: :subject\nProvider: :provider\nReference: :reference\nAmount: :amount\nPrivate evidence attached: :private\nC2C candidate reservations:\n:candidates\nRequired USDT confirmations: :confirmations\n\nApproval never bypasses canonical financial guards.",
+                'not_available' => 'Not available',
+                'yes' => 'Yes',
+                'no' => 'No',
+                'evidence_caption' => 'Protected :kind evidence for review :review (submission :submission).',
+                'kinds' => [
+                    'c2c' => 'Card to card',
+                    'gift_card' => 'Gift Card',
+                    'usdt' => 'Direct USDT',
+                ],
+                'buttons' => [
+                    'open' => 'Open review #:number',
+                    'refresh' => 'Refresh',
+                    'evidence' => 'View private evidence',
+                    'approve' => 'Approve with evidence',
+                    'approve_candidate' => 'Approve C2C candidate #:number',
+                    'reject' => 'Reject',
+                ],
+                'input' => [
+                    'reject' => 'Send the mandatory rejection reason. No other input is stored in session state.',
+                    'c2c' => 'Send the mandatory C2C approval reason. The selected reservation and normalized bank evidence will be revalidated before capture.',
+                    'gift_card' => "Send: external_redemption_id | reason\n\nThe full Gift Card code is never requested or stored in Telegram session state. The canonical review service revalidates exact amount/type/provider evidence before settlement.",
+                    'usdt' => "Send: confirmations | transaction_time | reason\nExample: 20 | 2026-09-24T12:34:56+00:00 | Verified on BSC explorer\n\nThe stored TXID/network/destination/amount authority is revalidated before settlement.",
+                    'invalid' => 'The review input was invalid, stale, unauthorized, or failed a financial-authority check. No bypass was applied.',
+                ],
+                'notices' => [
+                    'changed' => 'The review decision was recorded through the canonical payment authority.',
+                    'stale' => 'The selected candidate/review changed. Fresh authority is shown; review it again.',
+                ],
             ],
             'menus' => [
                 'list' => 'Menu & Button Configuration
@@ -327,22 +367,28 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                 'gift_card_payment' => [
                     'continue' => 'Continue with Gift Card',
                     'retry' => 'Refresh Gift Card types',
-                    'no_types' => "No manual-review Gift Card type that accepts code evidence is currently available.\n\nNo payment or Gift Card submission was created.",
-                    'types' => "Choose the Gift Card type you want to submit for manual review.\n\n:items\n\nOnly the listed active code-capable types can be submitted here. Choosing a type does not create a payment yet.",
+                    'no_types' => "No active Gift Card type is currently available for this payment.\n\nNo payment or Gift Card submission was created.",
+                    'types' => "Choose the Gift Card type you want to submit.\n\n:items\n\nThe configured evidence/verification policy for the selected type is enforced after selection. Choosing a type does not create a payment yet.",
                     'type_button' => ':name — :currency',
                     'type_item' => ':number. :name | Brand: :brand | Region: :region | Face currency: :currency',
                     'region_any' => 'Any',
-                    'face_value_prompt' => "Selected type: :type\n\nSend the Gift Card face value as a positive whole number in :currency.\n\nNo Gift Card/payment state is created until you submit the code.",
+                    'face_value_prompt' => "Selected type: :type\n\nSend the Gift Card face value as a positive whole number in :currency.\n\nNo Gift Card/payment state is created until the configured evidence is submitted.",
                     'face_value_invalid' => 'That face value is invalid. Send a positive whole number in :currency for :type.',
-                    'code_prompt' => "Gift Card type: :type\nClaimed face value: :face_value :currency\n\nSend the Gift Card code in your next message to submit it immediately for manual review.\n\nThe full code will not be echoed back or placed in the Telegram interaction session. Submitting it creates a pending review only; it is not payment confirmation, settlement, or service provisioning.",
+                    'code_prompt' => "Gift Card type: :type\nClaimed face value: :face_value :currency\n\nSend the Gift Card code in your next message.\n\nThe full code is transient input and is never copied into Telegram session/callback/presentation state.",
+                    'image_prompt' => "Gift Card type: :type\nClaimed face value: :face_value :currency\n\nSend one image of the Gift Card as private evidence. Do not put the code in the caption. The image is stored only through the protected private-media authority.",
+                    'either_prompt' => "Gift Card type: :type\nClaimed face value: :face_value :currency\n\nSend either the Gift Card code as text or one private image. If you choose an image, any optional caption is treated as transient code evidence and is never stored in Telegram session state.",
+                    'both_prompt' => "Gift Card type: :type\nClaimed face value: :face_value :currency\n\nSend one private image and put the Gift Card code in that image message caption. The caption remains transient; the image stays behind the protected private-media reference boundary.",
+                    'evidence_invalid' => 'The configured Gift Card evidence could not be accepted. Follow the requested code/image mode and try again. No second provider/payment effect was created.',
                     'code_invalid' => "The Gift Card code could not be accepted. Check the code and send it again.\n\nThe full code will not be echoed back. No second provider/payment effect is created by this retry.",
-                    'pending_manual_review' => "Gift Card submitted for manual review.\n\nSubmission: :submission_id\nType: :type\nCode: :masked_code\nClaimed face value: :face_value :currency\nStatus: Pending manual review\n\nThis is not payment confirmation, settlement, or service provisioning. The full Gift Card code is not shown here.",
+                    'image_evidence' => 'Private image evidence',
+                    'pending_verification' => "Gift Card evidence submitted.\n\nSubmission: :submission_id\nType: :type\nEvidence: :masked_code\nClaimed face value: :face_value :currency\nStatus: Pending configured provider verification/reconciliation\n\nThis is not payment confirmation, settlement, or service provisioning.",
+                    'pending_manual_review' => "Gift Card submitted for manual review.\n\nSubmission: :submission_id\nType: :type\nEvidence: :masked_code\nClaimed face value: :face_value :currency\nStatus: Pending manual review\n\nThis is not payment confirmation, settlement, or service provisioning. Restricted Gift Card evidence is not shown here.",
                 ],
                 'usdt_payment' => [
                     'unavailable' => 'USDT instructions are no longer available for this Order/Quote. Payment methods were refreshed. No payment, settlement, or provisioning effect was created.',
-                    'instructions' => "USDT payment prepared\n\nNetwork: :network\nExact amount: :amount USDT\nDestination: :address\nQuote expires: :expires_at (Tehran time)\n\nSend the blockchain transaction hash (TXID) in your next message after transferring the exact amount on BEP20. This screen does not confirm payment. Settlement requires authoritative blockchain verification; no Service provisioning starts here.",
+                    'instructions' => "USDT payment prepared\n\nNetwork: :network\nExact amount: :amount USDT\nDestination: :address\nQuote expires: :expires_at (Tehran time)\n\nAfter transferring the exact amount on BEP20, either send the TXID as text or optionally attach one private screenshot and put the TXID in that image caption. Private evidence stays behind the protected media-reference boundary. Settlement still requires authorized verification/review.",
                     'txid_invalid' => "That TXID is invalid. Send one EVM transaction hash in the form 0x followed by 64 hexadecimal characters.\n\nNetwork: :network\nExact amount: :amount USDT\nDestination: :address\nQuote expires: :expires_at (Tehran time)\n\nNo second payment or settlement effect was created by this invalid input.",
-                    'submitted' => "USDT transaction submitted\n\nSubmission: :submission_id\nTXID: :txid\nStatus: Pending blockchain verification\n\nThis is not payment confirmation or settlement. Service provisioning has not started and will require authoritative verification/capture through the existing payment authority.",
+                    'submitted' => "USDT transaction submitted\n\nSubmission: :submission_id\nTXID: :txid\nStatus: Pending authorized review/verification\n\nThis is not payment confirmation or settlement. Service provisioning has not started and capture remains inside the existing verified-transfer/settlement authority.",
                 ],
                 'wallet_payment' => [
                     'continue' => 'Continue with wallet',

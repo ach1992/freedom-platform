@@ -7,8 +7,11 @@ namespace Tests\Feature;
 use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use App\Modules\Payments\Application\AlternativePaymentRuntimeService;
+use App\Modules\Payments\Application\Contracts\AlternativePaymentProviderResolver;
 use App\Modules\Payments\CardToCard\Application\CardToCardBankTransactionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardDestinationService;
+use App\Modules\Payments\CardToCard\Application\CardToCardManualReviewQueueService;
 use App\Modules\Payments\CardToCard\Application\CardToCardManualSubmissionService;
 use App\Modules\Payments\CardToCard\Application\CardToCardMatchingService;
 use App\Modules\Payments\CardToCard\Application\CardToCardPaymentReceipt;
@@ -17,16 +20,27 @@ use App\Modules\Payments\CardToCard\Application\CardToCardProviderPollingService
 use App\Modules\Payments\CardToCard\Application\CardToCardReviewDecisionService;
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionObservation;
 use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionPage;
+use App\Modules\Payments\CardToCard\Application\Contracts\BankTransactionVerificationProvider;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\CardToCard\Infrastructure\FakeBankTransactionVerificationProvider;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
+use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardVerificationProvider;
+use App\Modules\Payments\Usdt\Application\Contracts\BlockchainTransactionVerificationProvider;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use RuntimeException;
+use Tests\Support\TelegramPaymentPrivateMediaTestSupport;
 use Tests\TestCase;
 
 final class ManualPollingFixedC2cAdjustmentGenerator implements CardToCardAdjustmentGenerator
@@ -52,6 +66,7 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use RefreshDatabase;
+    use TelegramPaymentPrivateMediaTestSupport;
 
     private ManualPollingC2cClock $clock;
 
@@ -148,6 +163,275 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
         self::assertSame('captured', DB::table('payment_intents')->where('public_id', $submission->paymentIntentPublicId)->value('state'));
         self::assertSame(1, DB::table('purchase_settlements')->count());
         self::assertSame('accepted', DB::table('c2c_match_reviews')->where('public_id', $review->reviewPublicId)->value('state'));
+    }
+
+    public function test_manual_submission_can_enter_canonical_review_queue_without_capture_and_replays_safely(): void
+    {
+        $payment = $this->payment('manual-queue');
+        $paidAt = $this->clock->value->modify('+2 minutes');
+        $submission = $this->app->make(CardToCardManualSubmissionService::class)->submit(
+            'c2c.manual.submission.queue.0001',
+            $payment['user_id'],
+            $payment['receipt']->reservationPublicId,
+            $payment['receipt']->payableAmountIrr,
+            $paidAt,
+            hash('sha256', 'manual-review-queue-evidence'),
+            privateReceiptReference: 'private://telegram/receipt/review-queue',
+            correlationId: $this->correlation('manual-review-queue-submit'),
+        );
+
+        $review = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
+            $submission->publicId,
+            $this->correlation('manual-review-queue'),
+        );
+
+        self::assertNotNull($review->reviewPublicId);
+        self::assertSame('review_pending:manual_required', $review->outcome);
+        self::assertSame(1, $review->candidateCount);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame('pending', DB::table('c2c_match_reviews')->where('public_id', $review->reviewPublicId)->value('state'));
+        self::assertSame('manual-receipt', DB::table('c2c_bank_transactions')->where('public_id', $review->bankTransactionPublicId)->value('provider_code'));
+
+        $replay = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
+            $submission->publicId,
+            $this->correlation('manual-review-queue-replay'),
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($review->reviewPublicId, $replay->reviewPublicId);
+        self::assertSame(1, DB::table('c2c_match_reviews')->count());
+        self::assertSame(1, DB::table('c2c_bank_transactions')->where('provider_code', 'manual-receipt')->count());
+    }
+
+    public function test_application_review_boundary_filters_permission_and_uses_canonical_c2c_settlement(): void
+    {
+        $payment = $this->payment('admin-review-boundary');
+        $paidAt = $this->clock->value->modify('+2 minutes');
+        $evidenceBytes = $this->paymentEvidencePng();
+        $privateReceiptReference = $this->paymentPrivateReference();
+        $evidenceHash = hash('sha256', $evidenceBytes);
+        $submission = $this->app->make(CardToCardManualSubmissionService::class)->submit(
+            'c2c.manual.submission.admin-boundary.0001',
+            $payment['user_id'],
+            $payment['receipt']->reservationPublicId,
+            $payment['receipt']->payableAmountIrr,
+            $paidAt,
+            $evidenceHash,
+            privateReceiptReference: $privateReceiptReference,
+            correlationId: $this->correlation('admin-boundary-submit'),
+        );
+        $mediaPath = $this->storePaymentPrivateMedia(
+            $payment['user_id'],
+            $privateReceiptReference,
+            'c2c_manual_submission',
+            $submission->publicId,
+            $evidenceBytes,
+            998101,
+        );
+        $queued = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
+            $submission->publicId,
+            $this->correlation('admin-boundary-queue'),
+        );
+        self::assertNotNull($queued->reviewPublicId);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        $reviews = $this->app->make(TelegramAlternativePaymentReview::class);
+        try {
+            $reviews->pending($payment['user_id']);
+            self::fail('A non-administrator must not enumerate pending payment reviews.');
+        } catch (AuthorizationException) {
+        }
+
+        $administratorId = $this->ownerAdministrator();
+        $administratorUserId = (int) DB::table('administrators')
+            ->where('id', $administratorId)
+            ->value('user_id');
+        self::assertGreaterThan(0, $administratorUserId);
+
+        $pending = $reviews->pending($administratorUserId);
+        self::assertContains(
+            $queued->reviewPublicId,
+            array_map(static fn ($case): string => $case->reviewPublicId, $pending),
+        );
+
+        $case = $reviews->find($administratorUserId, 'c2c', $queued->reviewPublicId);
+        self::assertSame('c2c', $case->kind);
+        self::assertContains($payment['receipt']->reservationPublicId, $case->candidateReservationPublicIds);
+
+        self::assertTrue($case->privateEvidenceAvailable);
+        $grant = $reviews->privateEvidence($administratorUserId, 'c2c', $queued->reviewPublicId);
+        self::assertSame('c2c_manual_submission', $grant->associationType);
+        self::assertSame($submission->publicId, $grant->associationPublicId);
+        self::assertSame($privateReceiptReference, $grant->privateMediaReference->reveal());
+        self::assertSame($evidenceHash, $grant->contentSha256->reveal());
+
+        $protectedReference = TelegramProtectedPresentationReference::paymentReviewEvidence(
+            'c2c',
+            $queued->reviewPublicId,
+            'en',
+        );
+        $durableReference = $protectedReference->durableText();
+        self::assertStringNotContainsString($privateReceiptReference, $durableReference);
+        self::assertStringNotContainsString($evidenceHash, $durableReference);
+        self::assertStringNotContainsString($mediaPath, $durableReference);
+
+        $resolver = $this->app->make(TelegramProtectedPresentationResolver::class);
+        $presentation = $resolver->resolveForSelf($administratorUserId, $protectedReference);
+        self::assertSame($evidenceBytes, $presentation->documentContents());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        DB::table('administrators')->where('id', $administratorId)->update(['status' => 'inactive']);
+        try {
+            $resolver->resolveForSelf($administratorUserId, $protectedReference);
+            self::fail('Expected revoked administrator evidence access to fail closed.');
+        } catch (DomainException) {
+            self::assertTrue(true);
+        }
+        DB::table('administrators')->where('id', $administratorId)->update(['status' => 'active']);
+
+        $crossReview = TelegramProtectedPresentationReference::paymentReviewEvidence(
+            'c2c',
+            '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+            'en',
+        );
+        try {
+            $resolver->resolveForSelf($administratorUserId, $crossReview);
+            self::fail('Expected cross-review evidence access to fail closed.');
+        } catch (DomainException) {
+            self::assertTrue(true);
+        }
+
+        $mediaPublicId = substr($privateReceiptReference, strlen('telegram-private-media:'));
+        DB::table('telegram_private_media')->where('public_id', $mediaPublicId)->update([
+            'association_public_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+        ]);
+        try {
+            $resolver->resolveForSelf($administratorUserId, $protectedReference);
+            self::fail('Expected cross-submission association mismatch to fail closed.');
+        } catch (RuntimeException) {
+            self::assertTrue(true);
+        }
+        DB::table('telegram_private_media')->where('public_id', $mediaPublicId)->update([
+            'association_public_id' => $submission->publicId,
+        ]);
+
+        Storage::disk('telegram_private_media')->put($mediaPath, 'tampered');
+        try {
+            $resolver->resolveForSelf($administratorUserId, $protectedReference);
+            self::fail('Expected tampered payment evidence to fail integrity verification.');
+        } catch (RuntimeException) {
+            self::assertTrue(true);
+        }
+        Storage::disk('telegram_private_media')->put($mediaPath, $evidenceBytes);
+
+        $reviews->approveC2c(
+            $administratorUserId,
+            $queued->reviewPublicId,
+            $payment['receipt']->reservationPublicId,
+            'Telegram administrator confirmed normalized bank evidence.',
+            'test-admin-c2c-approve-boundary',
+        );
+
+        self::assertSame('captured', DB::table('payment_intents')
+            ->where('public_id', $submission->paymentIntentPublicId)
+            ->value('state'));
+        self::assertSame('accepted', DB::table('c2c_match_reviews')
+            ->where('public_id', $queued->reviewPublicId)
+            ->value('state'));
+        self::assertSame(1, DB::table('purchase_settlements')->count());
+    }
+
+    public function test_telegram_review_boundary_rejects_c2c_without_settlement(): void
+    {
+        $payment = $this->payment('admin-review-reject');
+        $paidAt = $this->clock->value->modify('+2 minutes');
+        $submission = $this->app->make(CardToCardManualSubmissionService::class)->submit(
+            'c2c.manual.submission.admin-reject.0001',
+            $payment['user_id'],
+            $payment['receipt']->reservationPublicId,
+            $payment['receipt']->payableAmountIrr,
+            $paidAt,
+            hash('sha256', 'manual-review-admin-reject-evidence'),
+            privateReceiptReference: 'private://telegram/receipt/admin-reject',
+            correlationId: $this->correlation('admin-reject-submit'),
+        );
+        $queued = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
+            $submission->publicId,
+            $this->correlation('admin-reject-queue'),
+        );
+        self::assertNotNull($queued->reviewPublicId);
+
+        $administratorId = $this->ownerAdministrator();
+        $administratorUserId = (int) DB::table('administrators')
+            ->where('id', $administratorId)
+            ->value('user_id');
+
+        $reviews = $this->app->make(TelegramAlternativePaymentReview::class);
+        $reviews->reject(
+            $administratorUserId,
+            'c2c',
+            $queued->reviewPublicId,
+            'Administrator rejected the receipt after evidence review.',
+            'test-admin-c2c-reject-boundary',
+        );
+
+        self::assertSame('rejected', DB::table('c2c_match_reviews')
+            ->where('public_id', $queued->reviewPublicId)
+            ->value('state'));
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertNotSame('captured', DB::table('payment_intents')
+            ->where('public_id', $submission->paymentIntentPublicId)
+            ->value('state'));
+    }
+
+    public function test_runtime_service_polls_configured_c2c_provider_and_captures_canonically(): void
+    {
+        $payment = $this->payment('runtime-service');
+        $provider = new FakeBankTransactionVerificationProvider('fake');
+        $provider->put(null, new BankTransactionPage([
+            $this->observation(
+                'runtime-service',
+                $payment['receipt']->payableAmountIrr,
+                $this->clock->value->modify('+2 minutes'),
+            ),
+        ], 'runtime-cursor'));
+
+        $resolver = new class($provider) implements AlternativePaymentProviderResolver
+        {
+            public function __construct(private BankTransactionVerificationProvider $provider) {}
+
+            public function bank(string $providerCode): ?BankTransactionVerificationProvider
+            {
+                return $providerCode === 'fake' ? $this->provider : null;
+            }
+
+            public function giftCard(string $providerCode): ?GiftCardVerificationProvider
+            {
+                return null;
+            }
+
+            public function blockchain(string $providerCode): ?BlockchainTransactionVerificationProvider
+            {
+                return null;
+            }
+        };
+        $this->app->instance(AlternativePaymentProviderResolver::class, $resolver);
+
+        $result = $this->app->make(AlternativePaymentRuntimeService::class)->run(20);
+
+        self::assertSame(1, $result->c2cProvidersPolled);
+        self::assertSame(1, $result->c2cTransactionsIngested);
+        self::assertSame(1, $result->c2cMatches);
+        self::assertSame(1, $result->c2cCaptures);
+        self::assertSame(0, $result->c2cReviews);
+        self::assertSame(0, $result->giftCardSubmissionsProcessed);
+        self::assertSame(0, $result->giftCardSubmissionsReconciled);
+        self::assertSame(0, $result->failures);
+        self::assertSame('captured', DB::table('payment_intents')
+            ->where('public_id', $payment['receipt']->paymentIntent->intentPublicId)
+            ->value('state'));
+        self::assertSame(1, DB::table('purchase_settlements')
+            ->where('provider_code', 'card_to_card')
+            ->count());
     }
 
     public function test_fake_provider_polling_exact_match_captures_before_cursor_advances(): void

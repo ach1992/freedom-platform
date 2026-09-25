@@ -99,6 +99,8 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
         string $authorityPublicId,
         string $txid,
         string $operationKey,
+        ?string $privateEvidenceReference = null,
+        ?string $evidenceContentHash = null,
     ): TelegramCustomerPurchaseUsdtSubmission {
         $this->assertAuthority($actorUserId, $subjectUserId, $orderPublicId, $quotePublicId, $quoteConfigurationHash, $decisionPublicId, $decisionConfigurationHash);
         if ($authorityPublicId !== str_pad('01J', 26, '0')
@@ -128,7 +130,7 @@ final class TelegramUsdtNavigationPayment implements TelegramCustomerPurchaseUsd
             $authorityPublicId,
             str_pad('01H', 26, '0'),
             $txid,
-            'submitted',
+            'pending_manual_review',
             false,
         );
         $this->submissions[$operationKey] = $accepted;
@@ -290,7 +292,7 @@ final class TelegramUsdtNavigationTest extends TestCase
         $submittedPayload = json_decode((string) $session->payload, true, flags: JSON_THROW_ON_ERROR);
         self::assertIsArray($submittedPayload);
         self::assertSame('0xabababab…abababab', $submittedPayload['masked_txid'] ?? null);
-        self::assertStringContainsString('در انتظار بررسی بلاکچین', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('در انتظار بررسی/تأیید مجاز', $this->latestConfidentialPresentation());
         self::assertSame(0, DB::table('purchase_settlements')->count());
         self::assertSame(0, DB::table('service_subscriptions')->count());
         self::assertSame(0, DB::table('provisioning_operations')->count());

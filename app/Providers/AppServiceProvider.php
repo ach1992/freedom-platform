@@ -21,6 +21,8 @@ use App\Modules\Orders\Application\TelegramCustomerPurchaseDiscountQuoteService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseOrderService;
 use App\Modules\Orders\Application\TelegramCustomerPurchaseQuoteService;
 use App\Modules\Orders\Application\TelegramSupportOwnedOrderProjectionService;
+use App\Modules\Payments\Application\AlternativePaymentReviewService;
+use App\Modules\Payments\Application\Contracts\AlternativePaymentProviderResolver;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\TelegramAdministratorPaymentSearchSource;
 use App\Modules\Payments\Application\TelegramCustomerPurchaseWalletPaymentService;
@@ -31,6 +33,7 @@ use App\Modules\Payments\CardToCard\Application\TelegramCustomerPurchaseCardToCa
 use App\Modules\Payments\CardToCard\Infrastructure\SecureCardToCardAdjustmentGenerator;
 use App\Modules\Payments\Eligibility\Application\TelegramCustomerPurchasePaymentMethodsService;
 use App\Modules\Payments\GiftCard\Application\TelegramCustomerPurchaseGiftCardPaymentService;
+use App\Modules\Payments\Infrastructure\ConfiguredAlternativePaymentProviderResolver;
 use App\Modules\Payments\NowPayments\Application\Contracts\NowPaymentsTransport;
 use App\Modules\Payments\NowPayments\Application\TelegramCustomerPurchaseNowPaymentsPaymentService;
 use App\Modules\Payments\NowPayments\Infrastructure\HttpNowPaymentsTransport;
@@ -54,6 +57,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource
 use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
@@ -109,6 +113,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerTrialProvisioningStatus::class, TelegramCustomerTrialProvisioningStatusService::class);
         $this->app->bind(QuoteDiscountAuthority::class, BenefitCodeDiscountQuoteAuthority::class);
         $this->app->bind(PurchasePromotionUsageAuthority::class, PurchasePromotionUsageAuthorityService::class);
+        $this->app->singleton(AlternativePaymentProviderResolver::class, ConfiguredAlternativePaymentProviderResolver::class);
+        $this->app->bind(TelegramAlternativePaymentReview::class, AlternativePaymentReviewService::class);
         $this->app->bind(TelegramCustomerPurchaseDiscountQuote::class, TelegramCustomerPurchaseDiscountQuoteService::class);
         $this->app->bind(
             TelegramCustomerPurchaseQuote::class,
