@@ -327,7 +327,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
     }
 
     /**
-     * @param array<string,int|string> $context
+     * @param  array<string,int|string>  $context
      * @return list<object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}>
      */
     private function eligibleRoutes(array $context, bool $customerSelectableOnly): array
@@ -379,8 +379,8 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
     }
 
     /**
-     * @param array<string,int|string> $context
-     * @param list<object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}> $routes
+     * @param  array<string,int|string>  $context
+     * @param  list<object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}>  $routes
      * @return object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}|null
      */
     private function selectedRoute(array $context, array $routes, ?string $token, bool $required): ?object
@@ -389,12 +389,14 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
             if ($token !== null) {
                 throw new AuthorizationException('Service reconfiguration server selection is not allowed.');
             }
+
             return null;
         }
         if ($token === null) {
             if ($required && $context['server_selection_mode'] === 'customer_selects') {
                 throw new AuthorizationException('Service reconfiguration server selection is required.');
             }
+
             return null;
         }
         foreach ($routes as $route) {
@@ -409,9 +411,9 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
     }
 
     /**
-     * @param array<string,int|string> $context
-     * @param object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}|null $selectedRoute
-     * @param list<object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}> $routes
+     * @param  array<string,int|string>  $context
+     * @param  object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}|null  $selectedRoute
+     * @param  list<object{id:int,server_code:string,server_name_fa:string,server_name_en:?string,sales_server_id:int,service_target_id:int}>  $routes
      * @return list<TelegramServiceReconfigurationProtocolOption>
      */
     private function protocolOptions(array $context, ?object $selectedRoute, array $routes): array
@@ -462,8 +464,8 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
     }
 
     /**
-     * @param array<string,int|string> $context
-     * @param list<TelegramServiceReconfigurationProtocolOption> $options
+     * @param  array<string,int|string>  $context
+     * @param  list<TelegramServiceReconfigurationProtocolOption>  $options
      */
     private function selectedProtocol(array $context, array $options, ?string $token): ?TelegramServiceReconfigurationProtocolOption
     {
@@ -471,6 +473,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
             if ($token !== null) {
                 throw new AuthorizationException('Service reconfiguration protocol selection is not allowed.');
             }
+
             return null;
         }
         if ($token === null) {
@@ -502,6 +505,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
                     $serviceTargetId,
                     (int) $profileId,
                 );
+
                 return true;
             } catch (RouteCandidateUnavailable|DomainException) {
                 // Continue checking the next compatible profile.
@@ -558,6 +562,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
         if (! in_array($value, $allowed, true)) {
             throw new RuntimeException('Stored Service reconfiguration '.$label.' selection mode is invalid.');
         }
+
         return $value;
     }
 
@@ -567,6 +572,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
         if ($parsed === false) {
             throw new RuntimeException($label.' is invalid.');
         }
+
         return $parsed;
     }
 
@@ -576,6 +582,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
         if ($integer === false || $integer < 0) {
             throw new RuntimeException($label.' is invalid.');
         }
+
         return $integer;
     }
 }

@@ -21,17 +21,29 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
     public const ACTION_ENTRY = 'navigation.service.reconfigure';
 
     private const STATE_OFFERINGS = 'service_reconfigure_offerings';
+
     private const STATE_ROUTE = 'service_reconfigure_route';
+
     private const STATE_PROTOCOL = 'service_reconfigure_protocol';
+
     private const STATE_PREVIEW = 'service_reconfigure_preview';
+
     private const STATE_RESULT = 'service_reconfigure_result';
+
     private const ACTION_OFFERING_PAGE = 'navigation.service.reconfigure.offering_page';
+
     private const ACTION_OFFERING_SELECT = 'navigation.service.reconfigure.offering';
+
     private const ACTION_ROUTE_SELECT = 'navigation.service.reconfigure.route';
+
     private const ACTION_ROUTE_AUTO = 'navigation.service.reconfigure.route_auto';
+
     private const ACTION_PROTOCOL_SELECT = 'navigation.service.reconfigure.protocol';
+
     private const ACTION_CONFIRM = 'navigation.service.reconfigure.confirm';
+
     private const ACTION_BACK = 'navigation.back';
+
     private const PAGE_SIZE = 6;
 
     public function __construct(
@@ -76,15 +88,18 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             }
             if (! in_array(TelegramOwnedServiceAction::Reconfigure, $detail->allowedActions, true)) {
                 $this->navigation->showOwnedServiceDetailForPage($action, $selection, $this->page($action->sessionPayload));
+
                 return;
             }
             $this->showOfferings($action, $selection, $this->page($action->sessionPayload), 1);
+
             return;
         }
 
         if ($this->isBack($action)) {
             [$servicePage, $selection] = $this->serviceReturnState($action->sessionPayload);
             $this->navigation->showOwnedServiceDetailForPage($action, $selection, $servicePage);
+
             return;
         }
 
@@ -113,6 +128,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
                 throw new RuntimeException('Telegram Service reconfiguration Offering page is invalid.');
             }
             $this->showOfferings($action, $selection, $servicePage, (int) $page);
+
             return;
         }
         if ($action->callbackAction !== self::ACTION_OFFERING_SELECT
@@ -131,15 +147,18 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             );
         } catch (AuthorizationException|DomainException) {
             $this->showOfferings($action, $selection, $servicePage, $offeringPage, true);
+
             return;
         }
 
         if (in_array($options->serverSelectionMode, ['customer_selects', 'hybrid'], true)) {
             $this->showRoutes($action, $selection, $servicePage, $offeringPage, $offeringSelection, $options);
+
             return;
         }
         if ($options->protocolSelectionMode === 'customer_selects') {
             $this->showProtocols($action, $selection, $servicePage, $offeringPage, $offeringSelection, null, $options);
+
             return;
         }
         $this->createPreview($action, $selection, $servicePage, $offeringPage, $offeringSelection, null, null);
@@ -176,11 +195,13 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             );
         } catch (AuthorizationException|DomainException) {
             $this->showOfferings($action, $selection, $servicePage, $offeringPage, true);
+
             return;
         }
 
         if ($options->protocolSelectionMode === 'customer_selects') {
             $this->showProtocols($action, $selection, $servicePage, $offeringPage, $offeringSelection, $routeSelection, $options);
+
             return;
         }
         $this->createPreview($action, $selection, $servicePage, $offeringPage, $offeringSelection, $routeSelection, null);
@@ -246,6 +267,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             );
         } catch (AuthorizationException|DomainException) {
             $this->showUnavailable($action, $selection, $servicePage);
+
             return;
         }
 
@@ -281,6 +303,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             $catalog = $this->catalog->pageForSelf($action->userId, $action->userId, $offeringPage, self::PAGE_SIZE);
         } catch (AuthorizationException|DomainException) {
             $this->navigation->showOwnedServiceDetailForPage($action, $selection, $servicePage);
+
             return;
         }
 
@@ -479,6 +502,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             );
         } catch (AuthorizationException|DomainException) {
             $this->showOfferings($action, $selection, $servicePage, $offeringPage, true);
+
             return;
         }
 
@@ -585,6 +609,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($page === false || ! is_string($selection) || preg_match('/\A[0-9a-f]{40}\z/', $selection) !== 1) {
             throw new RuntimeException('Stored Telegram Service reconfiguration return state is invalid.');
         }
+
         return [(int) $page, $selection];
     }
 
@@ -603,6 +628,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($offeringPage === false) {
             throw new RuntimeException('Stored Telegram Service reconfiguration Offering page is invalid.');
         }
+
         return [$servicePage, $selection, (int) $offeringPage];
     }
 
@@ -619,6 +645,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($offeringPage === false) {
             throw new RuntimeException('Stored Telegram Service reconfiguration route page is invalid.');
         }
+
         return [$servicePage, $selection, (int) $offeringPage, $this->selection($payload['offering_selection'])];
     }
 
@@ -635,6 +662,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($routeSelection !== null) {
             $routeSelection = $this->selection($routeSelection);
         }
+
         return [$servicePage, $selection, $offeringPage, $offeringSelection, $routeSelection];
     }
 
@@ -668,6 +696,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if (! is_string($value) || preg_match('/\A[0-9a-f]{40}\z/', $value) !== 1) {
             throw new RuntimeException('Telegram Service reconfiguration selection token is invalid.');
         }
+
         return $value;
     }
 
@@ -678,6 +707,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($page === false) {
             throw new RuntimeException('Telegram Service reconfiguration Service page is invalid.');
         }
+
         return (int) $page;
     }
 
@@ -686,6 +716,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($action->callbackPublicId === null || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $action->callbackPublicId) !== 1) {
             throw new RuntimeException('Telegram Service reconfiguration callback identity is invalid.');
         }
+
         return $action->callbackPublicId;
     }
 
@@ -706,6 +737,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             [],
             'tg-service-reconfig-back:'.hash('sha256', $action->requestKey.':'.$surface),
         );
+
         return new TelegramInlineCallbackButton(
             $this->translation('telegram.navigation.buttons.back', $this->locale($action->userId)),
             $callback->publicId,
@@ -729,6 +761,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($session->userId !== $action->userId) {
             throw new RuntimeException('Telegram Service reconfiguration actor binding changed.');
         }
+
         return $session;
     }
 
@@ -737,6 +770,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         $source = new readonly class($text) implements ConfidentialTelegramPresentationSource
         {
             public function __construct(private string $text) {}
+
             public function confidentialTelegramText(): string
             {
                 return $this->text;
@@ -763,6 +797,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
         if ($value === '' || $value === '['.$key.']' || preg_match('/:[A-Za-z_][A-Za-z0-9_]*/', $value) === 1) {
             throw new RuntimeException('Telegram Service reconfiguration translation is unavailable.');
         }
+
         return $value;
     }
 }

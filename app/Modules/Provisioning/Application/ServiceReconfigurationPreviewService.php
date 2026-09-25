@@ -333,8 +333,7 @@ final readonly class ServiceReconfigurationPreviewService
         bool $changesPlan,
         bool $changesTarget,
         bool $changesProtocol,
-    ): array
-    {
+    ): array {
         $codes = [];
         if ($changesPlan) {
             $codes[] = 'change_plan';

@@ -184,7 +184,7 @@ BEGIN
        ))
        OR NEW.changes_plan <> (NEW.source_plan_offering_id <> NEW.target_plan_offering_id)
        OR NEW.changes_target <> (NEW.source_service_target_id <> NEW.target_service_target_id)
-       OR NEW.changes_protocol <> NOT (NEW.source_protocol_profile_id <=> NEW.target_protocol_profile_id)
+       OR NEW.changes_protocol <> (NOT (NEW.source_protocol_profile_id <=> NEW.target_protocol_profile_id))
        OR NEW.price_difference_irr <> expected_price_difference
        OR NEW.operation_fee_irr <> expected_operation_fee
        OR NEW.total_price_irr <> expected_price_difference + expected_operation_fee

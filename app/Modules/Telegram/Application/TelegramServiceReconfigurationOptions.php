@@ -9,8 +9,8 @@ use InvalidArgumentException;
 final readonly class TelegramServiceReconfigurationOptions
 {
     /**
-     * @param list<TelegramServiceReconfigurationRouteOption> $routeOptions
-     * @param list<TelegramServiceReconfigurationProtocolOption> $protocolOptions
+     * @param  list<TelegramServiceReconfigurationRouteOption>  $routeOptions
+     * @param  list<TelegramServiceReconfigurationProtocolOption>  $protocolOptions
      */
     public function __construct(
         public string $offeringSelectionToken,
