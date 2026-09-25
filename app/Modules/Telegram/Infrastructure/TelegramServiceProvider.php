@@ -75,6 +75,7 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Application\TelegramProtectedReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramReferralDeepLink;
 use App\Modules\Telegram\Application\TelegramRequiredChannelService;
+use App\Modules\Telegram\Application\TelegramServiceLifecycleNavigationHandler;
 use App\Modules\Telegram\Application\TelegramSourceMessageInteractionGateway;
 use App\Modules\Telegram\Application\TelegramSourceMessageReferenceDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
@@ -185,6 +186,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramClientGuideNavigationHandler::class);
         $this->app->singleton(TelegramMenuConfigurationNavigationHandler::class);
         $this->app->singleton(TelegramMembershipConfigurationNavigationHandler::class);
+        $this->app->singleton(TelegramServiceLifecycleNavigationHandler::class);
         $this->app->singleton(TelegramAgentBulkPurchaseNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);

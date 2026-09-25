@@ -17,10 +17,23 @@ final class TelegramOwnedServiceAllowedActionResolverTest extends TestCase
             true,
             $this->policies(),
             ['add_data_days', 'renewal', 'add_days', 'add_data'],
-            ['reset_usage', 'atomic_service_entitlements', 'add_data_allowance', 'update_expiry'],
+            [
+                'reset_usage', 'atomic_service_entitlements', 'add_data_allowance', 'update_expiry',
+                'suspend', 'activate', 'rotate_subscription_link', 'fetch_status', 'delete',
+            ],
         );
 
-        self::assertSame(TelegramOwnedServiceAction::ordered(), $actions);
+        self::assertSame([
+            TelegramOwnedServiceAction::Renew,
+            TelegramOwnedServiceAction::AddData,
+            TelegramOwnedServiceAction::AddDays,
+            TelegramOwnedServiceAction::AddDataDays,
+            TelegramOwnedServiceAction::ResetUsage,
+            TelegramOwnedServiceAction::Suspend,
+            TelegramOwnedServiceAction::RotateSubscriptionLink,
+            TelegramOwnedServiceAction::RefreshDetails,
+            TelegramOwnedServiceAction::Delete,
+        ], $actions);
     }
 
     public function test_customer_policy_package_and_intrinsic_capability_each_fail_closed_for_only_the_affected_actions(): void
@@ -28,7 +41,7 @@ final class TelegramOwnedServiceAllowedActionResolverTest extends TestCase
         $resolver = new TelegramOwnedServiceAllowedActionResolver;
         $policies = $this->policies();
         $policies['renew']['customer_enabled'] = false;
-
+        /** @var array<string,array{customer_enabled:bool,required_capability_code:?string}> $policies */
         $actions = $resolver->resolve(
             'suspended',
             true,
@@ -60,6 +73,7 @@ final class TelegramOwnedServiceAllowedActionResolverTest extends TestCase
     {
         $policies = $this->policies();
         $policies['add_data']['required_capability_code'] = 'custom_data_gate';
+        /** @var array<string,array{customer_enabled:bool,required_capability_code:?string}> $policies */
         $resolver = new TelegramOwnedServiceAllowedActionResolver;
 
         $withoutPolicyCapability = $resolver->resolve(
@@ -91,10 +105,13 @@ final class TelegramOwnedServiceAllowedActionResolverTest extends TestCase
 
         self::assertSame([], $resolver->resolve('active', false, $policies, $packages, $capabilities));
         self::assertSame([], $resolver->resolve('retired', true, $policies, $packages, $capabilities));
-        self::assertSame(
-            TelegramOwnedServiceAction::ordered(),
-            $resolver->resolve('active', true, $policies, $packages, $capabilities),
-        );
+        self::assertSame([
+            TelegramOwnedServiceAction::Renew,
+            TelegramOwnedServiceAction::AddData,
+            TelegramOwnedServiceAction::AddDays,
+            TelegramOwnedServiceAction::AddDataDays,
+            TelegramOwnedServiceAction::ResetUsage,
+        ], $resolver->resolve('active', true, $policies, $packages, $capabilities));
     }
 
     /** @return array<string,array{customer_enabled:bool,required_capability_code:?string}> */
@@ -106,6 +123,11 @@ final class TelegramOwnedServiceAllowedActionResolverTest extends TestCase
             'add_days' => ['customer_enabled' => true, 'required_capability_code' => null],
             'add_data_days' => ['customer_enabled' => true, 'required_capability_code' => null],
             'reset_usage' => ['customer_enabled' => true, 'required_capability_code' => null],
+            'suspend' => ['customer_enabled' => true, 'required_capability_code' => null],
+            'activate' => ['customer_enabled' => true, 'required_capability_code' => null],
+            'rotate_subscription_link' => ['customer_enabled' => true, 'required_capability_code' => null],
+            'refresh_details' => ['customer_enabled' => true, 'required_capability_code' => null],
+            'delete' => ['customer_enabled' => true, 'required_capability_code' => null],
         ];
     }
 }

@@ -20,6 +20,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceLifecycleExecutor;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
@@ -87,8 +88,11 @@ use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
 use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Application\TelegramNavigationHandler;
+use App\Modules\Telegram\Application\TelegramOwnedServiceAction;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDeliveryResendStatus;
 use App\Modules\Telegram\Application\TelegramOwnedServiceDetail;
+use App\Modules\Telegram\Application\TelegramOwnedServiceLifecycleResult;
+use App\Modules\Telegram\Application\TelegramOwnedServiceLifecycleStatus;
 use App\Modules\Telegram\Application\TelegramOwnedServiceListItem;
 use App\Modules\Telegram\Application\TelegramOwnedServicePage;
 use App\Modules\Telegram\Application\TelegramOwnedServiceSearchResult;
@@ -1143,6 +1147,36 @@ final class TelegramNavigationOwnedServiceSearchProjection implements TelegramOw
             'ambiguous-search' => TelegramOwnedServiceSearchResult::ambiguous(),
             default => TelegramOwnedServiceSearchResult::notFound(),
         };
+    }
+}
+
+final class TelegramNavigationOwnedServiceLifecycleExecutor implements TelegramOwnedServiceLifecycleExecutor
+{
+    /** @var list<array{actor_user_id:int,service_public_id:string,action:TelegramOwnedServiceAction,request_key:string,correlation_id:string}> */
+    public array $calls = [];
+
+    public function executeForSelf(
+        int $actorUserId,
+        string $servicePublicId,
+        TelegramOwnedServiceAction $action,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramOwnedServiceLifecycleResult {
+        $this->calls[] = [
+            'actor_user_id' => $actorUserId,
+            'service_public_id' => $servicePublicId,
+            'action' => $action,
+            'request_key' => $requestKey,
+            'correlation_id' => $correlationId,
+        ];
+
+        return new TelegramOwnedServiceLifecycleResult($action, TelegramOwnedServiceLifecycleStatus::Queued);
+    }
+
+    /** @return array{actor_user_id:int,service_public_id:string,action:TelegramOwnedServiceAction,request_key:string,correlation_id:string}|null */
+    public function lastCall(): ?array
+    {
+        return $this->calls === [] ? null : $this->calls[array_key_last($this->calls)];
     }
 }
 
@@ -2602,6 +2636,130 @@ SQL);
         self::assertSame($backCallbackCount, DB::table('telegram_interaction_callbacks')->where('telegram_interaction_session_id', $sessionId)->where('action', 'navigation.back')->count());
         self::assertSame($operationCount, DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count());
         self::assertSame($outboxCount, DB::table('outbox_messages')->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)->count());
+    }
+
+    public function test_my_services_lifecycle_action_requires_confirmation_and_completed_callback_replays_without_second_execution(): void
+    {
+        $selectionToken = str_repeat('b', 40);
+        $servicePublicId = '01J11111111111111111111111';
+        $projection = new class($selectionToken, $servicePublicId) implements TelegramOwnedServiceProjection
+        {
+            public function __construct(
+                private readonly string $selectionToken,
+                private readonly string $servicePublicId,
+            ) {}
+
+            public function pageForSelf(int $actorUserId, int $subjectUserId, int $page, int $pageSize): TelegramOwnedServicePage
+            {
+                return new TelegramOwnedServicePage([
+                    new TelegramOwnedServiceListItem(
+                        $this->selectionToken,
+                        $this->servicePublicId,
+                        'active',
+                        'پلن چرخه',
+                        'Lifecycle plan',
+                        'سرور چرخه',
+                        'Lifecycle server',
+                        '2026-09-01 04:00:00.000000',
+                    ),
+                ], 1, 1, 1);
+            }
+
+            public function detailForSelf(int $actorUserId, int $subjectUserId, string $selectionToken): TelegramOwnedServiceDetail
+            {
+                if ($actorUserId !== $subjectUserId || $selectionToken !== $this->selectionToken) {
+                    throw new AuthorizationException('Lifecycle test Service is unavailable.');
+                }
+
+                return new TelegramOwnedServiceDetail(
+                    $this->servicePublicId,
+                    'active',
+                    'پلن چرخه',
+                    'Lifecycle plan',
+                    'سرور چرخه',
+                    'Lifecycle server',
+                    '2026-09-01 04:00:00.000000',
+                    'current',
+                    'present',
+                    'active',
+                    10 * 1024 * 1024 * 1024,
+                    3 * 1024 * 1024 * 1024,
+                    '2026-10-01 04:00:00.000000',
+                    '2026-09-01 04:05:00.000000',
+                    [TelegramOwnedServiceAction::ResetUsage],
+                );
+            }
+
+            public function searchForSelf(int $actorUserId, int $subjectUserId, string $searchTerm): TelegramOwnedServiceSearchResult
+            {
+                return TelegramOwnedServiceSearchResult::notFound();
+            }
+        };
+        $lifecycle = new TelegramNavigationOwnedServiceLifecycleExecutor;
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+        $this->app->instance(TelegramOwnedServiceLifecycleExecutor::class, $lifecycle);
+
+        $telegramUserId = 9649;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $this->accept($this->payload(6490, $telegramUserId, 'navigation_service_lifecycle', 'fa', '/start'));
+        $processor->process('123456789', 6490);
+
+        $servicesCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.my_services')
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($servicesCallback);
+        $servicesToken = $this->app->make(StringEncrypter::class)->decryptString((string) $servicesCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6491, $telegramUserId, 'navigation_service_lifecycle', 'fa', $servicesToken));
+        $processor->process('123456789', 6491);
+
+        $detailCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.'.$selectionToken)
+            ->orderByDesc('id')
+            ->first(['token_ciphertext']);
+        self::assertNotNull($detailCallback);
+        $detailToken = $this->app->make(StringEncrypter::class)->decryptString((string) $detailCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6492, $telegramUserId, 'navigation_service_lifecycle', 'fa', $detailToken));
+        $processor->process('123456789', 6492);
+
+        $lifecycleCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.lifecycle')
+            ->orderByDesc('id')
+            ->first(['action_payload', 'token_ciphertext']);
+        self::assertNotNull($lifecycleCallback);
+        self::assertStringContainsString($selectionToken, (string) $lifecycleCallback->action_payload);
+        self::assertStringContainsString('reset_usage', (string) $lifecycleCallback->action_payload);
+        self::assertStringNotContainsString($servicePublicId, (string) $lifecycleCallback->action_payload);
+        $lifecycleToken = $this->app->make(StringEncrypter::class)->decryptString((string) $lifecycleCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6493, $telegramUserId, 'navigation_service_lifecycle', 'fa', $lifecycleToken));
+        $processor->process('123456789', 6493);
+        self::assertSame([], $lifecycle->calls, 'Opening the lifecycle confirmation must not execute the mutation.');
+
+        $confirmCallback = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.service.lifecycle.confirm')
+            ->orderByDesc('id')
+            ->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($confirmCallback);
+        self::assertSame('{}', (string) $confirmCallback->action_payload);
+        $confirmToken = $this->app->make(StringEncrypter::class)->decryptString((string) $confirmCallback->token_ciphertext);
+        $this->accept($this->callbackPayload(6494, $telegramUserId, 'navigation_service_lifecycle', 'fa', $confirmToken));
+        $processor->process('123456789', 6494);
+
+        self::assertCount(1, $lifecycle->calls);
+        $lifecycleCall = $lifecycle->lastCall();
+        self::assertNotNull($lifecycleCall);
+        self::assertSame($servicePublicId, $lifecycleCall['service_public_id']);
+        self::assertSame(TelegramOwnedServiceAction::ResetUsage, $lifecycleCall['action']);
+        self::assertStringStartsWith('tg-service-life-', $lifecycleCall['request_key']);
+        $this->assertDatabaseHas('telegram_interaction_callbacks', [
+            'public_id' => (string) $confirmCallback->public_id,
+            'state' => 'completed',
+            'accepted_update_id' => 6494,
+        ]);
+
+        $this->accept($this->callbackPayload(6495, $telegramUserId, 'navigation_service_lifecycle', 'fa', $confirmToken));
+        $processor->process('123456789', 6495);
+        self::assertCount(1, $lifecycle->calls, 'A completed confirmation callback must not execute a second lifecycle mutation.');
     }
 
     public function test_my_services_list_and_detail_reuse_same_session_and_keep_service_identity_out_of_common_durable_state(): void

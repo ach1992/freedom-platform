@@ -14,7 +14,7 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * @phpstan-type CommandServiceRow object{id:int|string,public_id:string,user_id:int|string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string}
+ * @phpstan-type CommandServiceRow object{id:int|string,public_id:string,user_id:int|string,order_item_id:int|string,service_target_id:int|string|null,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string}
  * @phpstan-type CommandOperationRow object{target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
  */
 final readonly class ServiceLifecycleCommandService
@@ -24,6 +24,7 @@ final readonly class ServiceLifecycleCommandService
         private AdministratorPermissionAuthorizer $administratorAuthorizer,
         private ServiceMutationQueueService $mutations,
         private ServiceLifecycleCommandAudit $audit,
+        private ServiceCustomerOperationPolicyGuard $customerPolicies,
     ) {}
 
     public function resetUsage(string $servicePublicId, ServiceLifecycleCommandContext $context): ServiceLifecycleCommandReceipt
@@ -71,8 +72,8 @@ final readonly class ServiceLifecycleCommandService
                 ->where('public_id', $servicePublicId)
                 ->lockForUpdate()
                 ->first([
-                    'id', 'public_id', 'user_id', 'lifecycle_state', 'lifecycle_version',
-                    'remote_identity_generation', 'mutation_generation',
+                    'id', 'public_id', 'user_id', 'order_item_id', 'service_target_id',
+                    'lifecycle_state', 'lifecycle_version', 'remote_identity_generation', 'mutation_generation',
                 ]);
             if ($service === null) {
                 throw new DomainException('Service Subscription does not exist.');
@@ -148,17 +149,32 @@ final readonly class ServiceLifecycleCommandService
         }
 
         $actorUserId = $context->actorUserId;
-        if ($actorUserId === null || $this->positiveInt($service->user_id, 'Service owner user ID') !== $actorUserId) {
+        if ($actorUserId === null) {
             throw new AuthorizationException('Service lifecycle authorization failed.');
         }
 
-        /** @var object{account_status:string,account_type:string}|null $user */
-        $user = $connection->table('users')->where('id', $actorUserId)->lockForUpdate()->first(['account_status', 'account_type']);
-        if ($user === null
-            || $user->account_status !== 'active'
-            || ! in_array($user->account_type, ['customer', 'agent'], true)) {
-            throw new AuthorizationException('Service lifecycle authorization failed.');
-        }
+        $this->customerPolicies->assertCurrentForUpdate(
+            $connection,
+            $service,
+            $actorUserId,
+            $this->customerOperationCode($type),
+            $type->panelCapabilities(),
+        );
+    }
+
+    private function customerOperationCode(ServiceMutationType $type): string
+    {
+        return match ($type) {
+            ServiceMutationType::ResetUsage => 'reset_usage',
+            ServiceMutationType::Suspend => 'suspend',
+            ServiceMutationType::Activate => 'activate',
+            ServiceMutationType::RotateSubscriptionLink => 'rotate_subscription_link',
+            ServiceMutationType::Delete => 'delete',
+            ServiceMutationType::Renew,
+            ServiceMutationType::AddData,
+            ServiceMutationType::AddDays,
+            ServiceMutationType::AddDataDays => throw new DomainException('Paid Service entitlement mutations are not lifecycle customer commands.'),
+        };
     }
 
     private function administratorPermission(ServiceMutationType $type): string

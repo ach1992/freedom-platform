@@ -51,6 +51,7 @@ use App\Modules\Provisioning\Application\TelegramAdministratorServiceSearchSourc
 use App\Modules\Provisioning\Application\TelegramCustomerTrialClaimService;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialProvisioningStatusService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceDeliveryResendService;
+use App\Modules\Provisioning\Application\TelegramOwnedServiceLifecycleService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
@@ -76,6 +77,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
+use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceLifecycleExecutor;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedPaymentIntentProjection;
@@ -141,6 +143,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramOwnedServiceProjection::class, TelegramOwnedServiceProjectionService::class);
         $this->app->bind(TelegramSupportOwnedServiceReferenceResolver::class, TelegramOwnedServiceProjectionService::class);
         $this->app->bind(TelegramOwnedServiceDeliveryResender::class, TelegramOwnedServiceDeliveryResendService::class);
+        $this->app->bind(TelegramOwnedServiceLifecycleExecutor::class, TelegramOwnedServiceLifecycleService::class);
         $this->app->bind(TelegramManagedUsdtRateSettings::class, TelegramManagedUsdtRateSettingsService::class);
         $this->app->bind(CardToCardAdjustmentGenerator::class, SecureCardToCardAdjustmentGenerator::class);
         $this->app->bind(ZarinpalTransport::class, HttpZarinpalTransport::class);

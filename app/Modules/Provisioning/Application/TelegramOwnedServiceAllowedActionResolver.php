@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
-use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Modules\Telegram\Application\TelegramOwnedServiceAction;
 
 final readonly class TelegramOwnedServiceAllowedActionResolver
@@ -15,6 +14,20 @@ final readonly class TelegramOwnedServiceAllowedActionResolver
         'add_data' => 'add_data',
         'add_days' => 'add_days',
         'add_data_days' => 'add_data_days',
+    ];
+
+    /** @var array<string,list<string>> */
+    private const CAPABILITIES_BY_ACTION = [
+        'renew' => ['update_expiry'],
+        'add_data' => ['add_data_allowance'],
+        'add_days' => ['update_expiry'],
+        'add_data_days' => ['update_expiry', 'add_data_allowance', 'atomic_service_entitlements'],
+        'reset_usage' => ['reset_usage'],
+        'suspend' => ['suspend'],
+        'activate' => ['activate'],
+        'rotate_subscription_link' => ['rotate_subscription_link'],
+        'refresh_details' => ['fetch_status'],
+        'delete' => ['delete'],
     ];
 
     /**
@@ -39,6 +52,10 @@ final readonly class TelegramOwnedServiceAllowedActionResolver
         $allowed = [];
 
         foreach (TelegramOwnedServiceAction::ordered() as $action) {
+            if (! $this->lifecycleAllows($lifecycleState, $action)) {
+                continue;
+            }
+
             $policy = $policies[$action->value] ?? null;
             if ($policy === null || ! $policy['customer_enabled']) {
                 continue;
@@ -49,8 +66,7 @@ final readonly class TelegramOwnedServiceAllowedActionResolver
                 continue;
             }
 
-            $mutation = ServiceMutationType::from($action->value);
-            $requiredCapabilities = $mutation->panelCapabilities();
+            $requiredCapabilities = self::CAPABILITIES_BY_ACTION[$action->value] ?? [];
             $policyCapability = $policy['required_capability_code'];
             if ($policyCapability !== null) {
                 $requiredCapabilities[] = $policyCapability;
@@ -69,5 +85,14 @@ final readonly class TelegramOwnedServiceAllowedActionResolver
         }
 
         return $allowed;
+    }
+
+    private function lifecycleAllows(string $lifecycleState, TelegramOwnedServiceAction $action): bool
+    {
+        return match ($action) {
+            TelegramOwnedServiceAction::Suspend => $lifecycleState === 'active',
+            TelegramOwnedServiceAction::Activate => $lifecycleState === 'suspended',
+            default => true,
+        };
     }
 }

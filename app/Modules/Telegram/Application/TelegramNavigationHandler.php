@@ -3125,6 +3125,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->showServiceDetailForPage($action, $selectionToken, $page);
     }
 
+    public function showOwnedServiceDetailForPage(
+        TelegramInteractionAction $action,
+        string $selectionToken,
+        int $page,
+    ): void {
+        $this->showServiceDetailForPage($action, $selectionToken, $page);
+    }
+
     private function showServiceDetailForPage(
         TelegramInteractionAction $action,
         string $selectionToken,
@@ -3253,6 +3261,25 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $rows = [];
+        foreach ($detail->allowedActions as $serviceAction) {
+            if (! $serviceAction->isLifecycleAction()) {
+                continue;
+            }
+            $callback = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                TelegramServiceLifecycleNavigationHandler::ACTION_ENTRY,
+                ['service_selection' => $selectionToken, 'action' => $serviceAction->value],
+                'nav-service-detail-lifecycle:'.hash('sha256', $action->requestKey.':'.$serviceAction->value),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.lifecycle.button.'.$serviceAction->value, $locale),
+                $callback->publicId,
+                $serviceAction === TelegramOwnedServiceAction::Delete
+                    ? TelegramInlineButtonStyle::Danger
+                    : TelegramInlineButtonStyle::Primary,
+            )];
+        }
         if ($this->canOfferServiceResend($detail)) {
             $resend = $this->callbacks->issue(
                 $session->publicId,
@@ -3714,6 +3741,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->assertActorBinding($action, $session->userId);
 
         $this->renderMyServices($action, $session->version, $services, $locale, $action->requestKey);
+    }
+
+    public function returnHomeFromExtension(TelegramInteractionAction $action): void
+    {
+        $this->returnHome($action);
     }
 
     private function returnHome(TelegramInteractionAction $action): void

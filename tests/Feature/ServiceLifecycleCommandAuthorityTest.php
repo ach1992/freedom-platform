@@ -252,6 +252,51 @@ SQL);
             ->where('event_type', ServiceMutationQueueService::OUTBOX_EVENT_TYPE)->count());
     }
 
+    public function test_customer_policy_and_verified_capability_are_rechecked_before_lifecycle_queueing(): void
+    {
+        $policyScenario = $this->scenario('policy-revoked');
+        $offeringId = (int) DB::table('order_items')
+            ->where('id', (int) DB::table('service_subscriptions')->where('id', $policyScenario['service_id'])->value('order_item_id'))
+            ->value('plan_offering_id');
+        DB::table('plan_offering_operations')
+            ->where('plan_offering_id', $offeringId)
+            ->where('operation_code', 'suspend')
+            ->update(['customer_enabled' => false, 'updated_at' => now('UTC')]);
+
+        try {
+            $this->commands()->suspend(
+                $policyScenario['service_public_id'],
+                $this->userContext($policyScenario['user_id'], 'policy-revoked'),
+            );
+            self::fail('Revoked customer lifecycle policy must fail before mutation queueing.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, DB::table('provisioning_operations')
+                ->where('service_subscription_id', $policyScenario['service_id'])
+                ->where('operation_type', '<>', 'initial_provision')->count());
+        }
+
+        $capabilityScenario = $this->scenario('capability-stale');
+        $targetId = (int) DB::table('service_subscriptions')
+            ->where('id', $capabilityScenario['service_id'])
+            ->value('service_target_id');
+        DB::table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
+            ->where('capability_code', 'reset_usage')
+            ->update(['verification_status' => 'stale', 'updated_at' => now('UTC')]);
+
+        try {
+            $this->commands()->resetUsage(
+                $capabilityScenario['service_public_id'],
+                $this->userContext($capabilityScenario['user_id'], 'capability-stale'),
+            );
+            self::fail('Stale Panel capability evidence must fail before mutation queueing.');
+        } catch (AuthorizationException) {
+            self::assertSame(0, DB::table('provisioning_operations')
+                ->where('service_subscription_id', $capabilityScenario['service_id'])
+                ->where('operation_type', '<>', 'initial_provision')->count());
+        }
+    }
+
     private function commands(): ServiceLifecycleCommandService
     {
         return $this->app->make(ServiceLifecycleCommandService::class);
@@ -424,5 +469,35 @@ SQL);
             'protocol_selection_mode' => 'system_selects',
             'updated_at' => $now,
         ]);
+
+        foreach (['reset_usage', 'suspend', 'activate', 'rotate_subscription_link', 'refresh_details', 'delete'] as $operationCode) {
+            DB::table('plan_offering_operations')->insertOrIgnore([
+                'plan_offering_id' => $offeringId,
+                'operation_code' => $operationCode,
+                'customer_enabled' => true,
+                'administrator_enabled' => true,
+                'price_irr' => 0,
+                'discount_eligible' => false,
+                'required_capability_code' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+        foreach (['reset_usage', 'suspend', 'activate', 'rotate_subscription_link', 'fetch_status', 'delete'] as $capabilityCode) {
+            if (! DB::table('panel_target_capabilities')
+                ->where('panel_service_target_id', $targetId)
+                ->where('capability_code', $capabilityCode)
+                ->exists()) {
+                DB::table('panel_target_capabilities')->insert([
+                    'panel_service_target_id' => $targetId,
+                    'capability_code' => $capabilityCode,
+                    'verification_status' => 'verified',
+                    'evidence_hash' => $targetEvidenceHash,
+                    'verified_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+        }
     }
 }
