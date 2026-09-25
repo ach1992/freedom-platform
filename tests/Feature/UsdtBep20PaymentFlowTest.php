@@ -154,7 +154,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
             $evidenceHash,
         );
         $this->storePaymentPrivateMedia(
-            $payment['user_id'],
+            $payment['authority']->userId,
             $privateEvidenceReference,
             'usdt_txid_submission',
             $submission->publicId,
