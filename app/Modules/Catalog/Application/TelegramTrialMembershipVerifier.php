@@ -7,13 +7,15 @@ namespace App\Modules\Catalog\Application;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipResolutionRequest;
+use Closure;
 use DomainException;
 use Illuminate\Database\Connection;
 use RuntimeException;
 
 final readonly class TelegramTrialMembershipVerifier implements TrialMembershipVerifier
 {
-    public function __construct(private TelegramChannelMembershipEvaluator $evaluator) {}
+    /** @param Closure(): TelegramChannelMembershipEvaluator $evaluator */
+    public function __construct(private Closure $evaluator) {}
 
     public function assertSatisfied(Connection $connection, int $userId, int $offeringId, int $policyId): void
     {
@@ -25,7 +27,7 @@ final readonly class TelegramTrialMembershipVerifier implements TrialMembershipV
         }
 
         try {
-            $evaluation = $this->evaluator->evaluate(
+            $evaluation = ($this->evaluator)()->evaluate(
                 new TelegramChannelMembershipResolutionRequest($userId, 'trial', $offeringId),
             );
         } catch (DomainException|RuntimeException $exception) {

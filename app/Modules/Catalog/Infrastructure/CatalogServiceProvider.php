@@ -29,6 +29,7 @@ use App\Modules\Catalog\Application\TrialPolicyService;
 use App\Modules\Catalog\Application\TrialReservationService;
 use App\Modules\Catalog\Application\TrialRouteSelector;
 use App\Modules\Panels\Application\TargetCapacityAllocator;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Shared\Application\Clock;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\DatabaseManager;
@@ -41,7 +42,12 @@ final class CatalogServiceProvider extends ServiceProvider
         $this->app->bind(RouteOperationalVerifier::class, DatabaseRouteOperationalVerifier::class);
         $this->app->bind(CustomPlanOperationalVerifier::class, DatabaseCustomPlanOperationalVerifier::class);
         $this->app->bind(ServiceUsernameAvailability::class, DatabaseServiceUsernameAvailability::class);
-        $this->app->bind(TrialMembershipVerifier::class, TelegramTrialMembershipVerifier::class);
+        $this->app->bind(
+            TrialMembershipVerifier::class,
+            fn (Application $application): TrialMembershipVerifier => new TelegramTrialMembershipVerifier(
+                fn (): TelegramChannelMembershipEvaluator => $application->make(TelegramChannelMembershipEvaluator::class),
+            ),
+        );
 
         $this->app->singleton(
             CatalogMutationAudit::class,
