@@ -6,9 +6,11 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewCase;
+use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewEvidence;
 use App\Modules\Telegram\Application\TelegramAlternativePaymentReviewNavigationHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
+use App\Shared\Application\RestrictedValue;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +24,8 @@ final class TelegramAlternativePaymentReviewFake implements TelegramAlternativeP
     public int $pendingCalls = 0;
 
     public int $findCalls = 0;
+
+    public int $privateEvidenceCalls = 0;
 
     public function __construct(
         private readonly TelegramAlternativePaymentReviewCase $case,
@@ -50,6 +54,28 @@ final class TelegramAlternativePaymentReviewFake implements TelegramAlternativeP
         }
 
         return $this->case;
+    }
+
+    public function privateEvidence(
+        int $actorUserId,
+        string $kind,
+        string $reviewPublicId,
+    ): TelegramAlternativePaymentReviewEvidence {
+        $this->privateEvidenceCalls++;
+
+        return new TelegramAlternativePaymentReviewEvidence(
+            $kind,
+            strtoupper($reviewPublicId),
+            match ($kind) {
+                'c2c' => 'c2c_manual_submission',
+                'gift_card' => 'gift_card_submission',
+                'usdt' => 'usdt_txid_submission',
+                default => throw new RuntimeException('Unexpected payment-review evidence kind.'),
+            },
+            '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+            RestrictedValue::fromString('telegram-private-media:01ARZ3NDEKTSV4RRFFQ69G5FAW'),
+            RestrictedValue::fromString(str_repeat('a', 64)),
+        );
     }
 
     public function approveC2c(
@@ -210,6 +236,33 @@ final class TelegramAlternativePaymentReviewNavigationTest extends TestCase
         $detail = $this->latestConfidentialPresentation();
         self::assertStringContainsString($reviewPublicId, $detail);
         self::assertStringContainsString($reservationPublicId, $detail);
+
+        $evidence = $this->callbackToken(
+            'navigation.admin.payment_reviews.evidence',
+            (int) $account->id,
+        );
+        $this->accept($this->callbackPayload(9855, $telegramUserId, $username, 'fa', $evidence));
+        $processor->process('123456789', 9855);
+
+        self::assertSame(0, $fake->privateEvidenceCalls, 'Raw private evidence must be resolved only at delivery time.');
+        $protected = DB::table('telegram_delivery_operations')
+            ->where('presentation_text', 'like', '[PROTECTED_TELEGRAM_REFERENCE:v4:payment_review_evidence:%')
+            ->orderByDesc('id')
+            ->value('presentation_text');
+        self::assertIsString($protected);
+        self::assertSame(
+            '[PROTECTED_TELEGRAM_REFERENCE:v4:payment_review_evidence:c2c:'.$reviewPublicId.':fa]',
+            $protected,
+        );
+        self::assertStringNotContainsString('telegram-private-media:', $protected);
+        self::assertStringNotContainsString(str_repeat('a', 64), $protected);
+
+        $sessionPayload = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('payload');
+        self::assertIsString($sessionPayload);
+        self::assertStringNotContainsString('telegram-private-media:', $sessionPayload);
+        self::assertStringNotContainsString(str_repeat('a', 64), $sessionPayload);
         self::assertSame(0, DB::table('purchase_settlements')->count());
     }
 

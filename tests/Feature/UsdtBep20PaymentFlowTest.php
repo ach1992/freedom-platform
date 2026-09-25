@@ -27,6 +27,8 @@ use App\Modules\Payments\Usdt\Domain\UsdtRateProvider;
 use App\Modules\Payments\Usdt\Domain\UsdtRateSide;
 use App\Modules\Payments\Usdt\Infrastructure\FakeBlockchainTransactionVerificationProvider;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
@@ -43,6 +45,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Tests\Support\TelegramPaymentPrivateMediaTestSupport;
 use Tests\TestCase;
 
 final class UsdtPaymentFlowClock implements Clock
@@ -84,6 +87,7 @@ final class UsdtBep20PaymentFlowTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use RefreshDatabase;
+    use TelegramPaymentPrivateMediaTestSupport;
 
     private UsdtPaymentFlowClock $clock;
 
@@ -139,12 +143,23 @@ final class UsdtBep20PaymentFlowTest extends TestCase
     public function test_telegram_review_boundary_approves_manual_usdt_through_verified_transfer_authority(): void
     {
         $payment = $this->preparedPayment('admin-boundary');
+        $evidenceBytes = $this->paymentEvidencePng();
+        $privateEvidenceReference = $this->paymentPrivateReference();
+        $evidenceHash = hash('sha256', $evidenceBytes);
         $submission = $this->submit(
             $payment,
             'admin-boundary',
             '0x'.str_repeat('7d', 32),
-            'private://receipt/admin-boundary',
-            hash('sha256', 'usdt-admin-boundary-private-evidence'),
+            $privateEvidenceReference,
+            $evidenceHash,
+        );
+        $this->storePaymentPrivateMedia(
+            $payment['user_id'],
+            $privateEvidenceReference,
+            'usdt_txid_submission',
+            $submission->publicId,
+            $evidenceBytes,
+            998201,
         );
         $pending = $this->app->make(UsdtBlockchainVerificationService::class)->routeManualReview(
             $submission->publicId,
@@ -165,6 +180,19 @@ final class UsdtBep20PaymentFlowTest extends TestCase
         self::assertSame('usdt', $case->kind);
         self::assertSame($submission->publicId, $case->subjectPublicId);
         self::assertSame($payment['authority']->minimumConfirmations, $case->minimumConfirmations);
+
+        self::assertTrue($case->privateEvidenceAvailable);
+        $grant = $reviews->privateEvidence($actorUserId, 'usdt', $pending->reviewPublicId);
+        self::assertSame('usdt_txid_submission', $grant->associationType);
+        self::assertSame($submission->publicId, $grant->associationPublicId);
+        self::assertSame($privateEvidenceReference, $grant->privateMediaReference->reveal());
+        self::assertSame($evidenceHash, $grant->contentSha256->reveal());
+        $presentation = $this->app->make(TelegramProtectedPresentationResolver::class)->resolveForSelf(
+            $actorUserId,
+            TelegramProtectedPresentationReference::paymentReviewEvidence('usdt', $pending->reviewPublicId, 'en'),
+        );
+        self::assertSame($evidenceBytes, $presentation->documentContents());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
 
         $reviews->approveUsdt(
             $actorUserId,

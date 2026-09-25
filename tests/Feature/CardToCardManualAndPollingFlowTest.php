@@ -27,14 +27,20 @@ use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService
 use App\Modules\Payments\GiftCard\Application\Contracts\GiftCardVerificationProvider;
 use App\Modules\Payments\Usdt\Application\Contracts\BlockchainTransactionVerificationProvider;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
+use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Shared\Application\Clock;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
+use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use RuntimeException;
+use Tests\Support\TelegramPaymentPrivateMediaTestSupport;
 use Tests\TestCase;
 
 final class ManualPollingFixedC2cAdjustmentGenerator implements CardToCardAdjustmentGenerator
@@ -60,6 +66,7 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
 {
     use AgentPricingQuoteIntegrationTestSupport;
     use RefreshDatabase;
+    use TelegramPaymentPrivateMediaTestSupport;
 
     private ManualPollingC2cClock $clock;
 
@@ -199,15 +206,26 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
     {
         $payment = $this->payment('admin-review-boundary');
         $paidAt = $this->clock->value->modify('+2 minutes');
+        $evidenceBytes = $this->paymentEvidencePng();
+        $privateReceiptReference = $this->paymentPrivateReference();
+        $evidenceHash = hash('sha256', $evidenceBytes);
         $submission = $this->app->make(CardToCardManualSubmissionService::class)->submit(
             'c2c.manual.submission.admin-boundary.0001',
             $payment['user_id'],
             $payment['receipt']->reservationPublicId,
             $payment['receipt']->payableAmountIrr,
             $paidAt,
-            hash('sha256', 'manual-review-admin-boundary-evidence'),
-            privateReceiptReference: 'private://telegram/receipt/admin-boundary',
+            $evidenceHash,
+            privateReceiptReference: $privateReceiptReference,
             correlationId: $this->correlation('admin-boundary-submit'),
+        );
+        $mediaPath = $this->storePaymentPrivateMedia(
+            $payment['user_id'],
+            $privateReceiptReference,
+            'c2c_manual_submission',
+            $submission->publicId,
+            $evidenceBytes,
+            998101,
         );
         $queued = $this->app->make(CardToCardManualReviewQueueService::class)->queue(
             $submission->publicId,
@@ -238,6 +256,72 @@ final class CardToCardManualAndPollingFlowTest extends TestCase
         $case = $reviews->find($administratorUserId, 'c2c', $queued->reviewPublicId);
         self::assertSame('c2c', $case->kind);
         self::assertContains($payment['receipt']->reservationPublicId, $case->candidateReservationPublicIds);
+
+        self::assertTrue($case->privateEvidenceAvailable);
+        $grant = $reviews->privateEvidence($administratorUserId, 'c2c', $queued->reviewPublicId);
+        self::assertSame('c2c_manual_submission', $grant->associationType);
+        self::assertSame($submission->publicId, $grant->associationPublicId);
+        self::assertSame($privateReceiptReference, $grant->privateMediaReference->reveal());
+        self::assertSame($evidenceHash, $grant->contentSha256->reveal());
+
+        $protectedReference = TelegramProtectedPresentationReference::paymentReviewEvidence(
+            'c2c',
+            $queued->reviewPublicId,
+            'en',
+        );
+        $durableReference = $protectedReference->durableText();
+        self::assertStringNotContainsString($privateReceiptReference, $durableReference);
+        self::assertStringNotContainsString($evidenceHash, $durableReference);
+        self::assertStringNotContainsString($mediaPath, $durableReference);
+
+        $resolver = $this->app->make(TelegramProtectedPresentationResolver::class);
+        $presentation = $resolver->resolveForSelf($administratorUserId, $protectedReference);
+        self::assertSame($evidenceBytes, $presentation->documentContents());
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+
+        DB::table('administrators')->where('id', $administratorId)->update(['status' => 'inactive']);
+        try {
+            $resolver->resolveForSelf($administratorUserId, $protectedReference);
+            self::fail('Expected revoked administrator evidence access to fail closed.');
+        } catch (DomainException) {
+            self::assertTrue(true);
+        }
+        DB::table('administrators')->where('id', $administratorId)->update(['status' => 'active']);
+
+        $crossReview = TelegramProtectedPresentationReference::paymentReviewEvidence(
+            'c2c',
+            '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+            'en',
+        );
+        try {
+            $resolver->resolveForSelf($administratorUserId, $crossReview);
+            self::fail('Expected cross-review evidence access to fail closed.');
+        } catch (DomainException) {
+            self::assertTrue(true);
+        }
+
+        $mediaPublicId = substr($privateReceiptReference, strlen('telegram-private-media:'));
+        DB::table('telegram_private_media')->where('public_id', $mediaPublicId)->update([
+            'association_public_id' => '01ARZ3NDEKTSV4RRFFQ69G5FAW',
+        ]);
+        try {
+            $resolver->resolveForSelf($administratorUserId, $protectedReference);
+            self::fail('Expected cross-submission association mismatch to fail closed.');
+        } catch (RuntimeException) {
+            self::assertTrue(true);
+        }
+        DB::table('telegram_private_media')->where('public_id', $mediaPublicId)->update([
+            'association_public_id' => $submission->publicId,
+        ]);
+
+        Storage::disk('telegram_private_media')->put($mediaPath, 'tampered');
+        try {
+            $resolver->resolveForSelf($administratorUserId, $protectedReference);
+            self::fail('Expected tampered payment evidence to fail integrity verification.');
+        } catch (RuntimeException) {
+            self::assertTrue(true);
+        }
+        Storage::disk('telegram_private_media')->put($mediaPath, $evidenceBytes);
 
         $reviews->approveC2c(
             $administratorUserId,
