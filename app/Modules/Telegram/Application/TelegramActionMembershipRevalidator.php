@@ -39,18 +39,20 @@ final readonly class TelegramActionMembershipRevalidator
         }
 
         $this->configurationFence->acquire($connection);
-        $plan = $this->resolver->resolveCurrentForUpdate(new TelegramChannelMembershipResolutionRequest(
+        $request = new TelegramChannelMembershipResolutionRequest(
             $subjectUserId,
             $action,
             null,
-        ));
+        );
         if ($preflight === null) {
-            if ($plan->required) {
+            if ($this->resolver->hasPotentialCurrentRequirementForUpdate($request)) {
                 throw new TelegramActionMembershipChanged('Telegram action membership preflight is required.');
             }
 
             return;
         }
+
+        $plan = $this->resolver->resolveCurrentForUpdate($request);
 
         if ($plan->userId !== $subjectUserId
             || $plan->action !== $action

@@ -52,6 +52,37 @@ final readonly class TelegramChannelMembershipRuleResolver
         return $this->resolveWithConnection($connection, $request, true);
     }
 
+    /**
+     * Conservatively detects whether an accepted action may be governed by any
+     * current membership rule without requiring tier/tag selector material.
+     * Callers use this only to decide whether a provider preflight is mandatory;
+     * a supplied preflight is still revalidated through full selector resolution.
+     *
+     * @requirement CHN-001 SEC-001 DAT-003 QUA-001
+     */
+    public function hasPotentialCurrentRequirementForUpdate(
+        TelegramChannelMembershipResolutionRequest $request,
+    ): bool {
+        $connection = $this->database->connection();
+        if ($connection->transactionLevel() < 1) {
+            throw new RuntimeException('Current Telegram membership potential resolution requires an active database transaction.');
+        }
+
+        $userQuery = $connection->table('users')->where('id', $request->userId)->lockForUpdate();
+        /** @var object{account_type:string,account_status:string}|null $user */
+        $user = $userQuery->first(['account_type', 'account_status']);
+        if ($user === null
+            || $user->account_status !== 'active'
+            || ! in_array($user->account_type, ['customer', 'agent'], true)) {
+            throw new DomainException('Telegram membership resolution requires an active customer or agent.');
+        }
+
+        $this->assertCurrentPlanOffering($connection, $request->planOfferingId, true);
+        $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+
+        return $this->candidateRules($connection, $request, $user->account_type, $now, true) !== [];
+    }
+
     private function resolveWithConnection(
         Connection $connection,
         TelegramChannelMembershipResolutionRequest $request,
