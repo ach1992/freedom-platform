@@ -25,6 +25,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceLifecycleExec
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramServiceAutoRenewPolicyManager;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
@@ -108,6 +109,8 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationReference;
 use App\Modules\Telegram\Application\TelegramResolvedInlineKeyboardMarkup;
 use App\Modules\Telegram\Application\TelegramResolvedPrivateMediaPresentation;
 use App\Modules\Telegram\Application\TelegramResolvedSourceMessagePresentation;
+use App\Modules\Telegram\Application\TelegramServiceAutoRenewPolicyResult;
+use App\Modules\Telegram\Application\TelegramServiceAutoRenewPolicySnapshot;
 use App\Modules\Telegram\Application\TelegramSourceMessageMode;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
@@ -1151,6 +1154,52 @@ final class TelegramNavigationOwnedServiceSearchProjection implements TelegramOw
             'ambiguous-search' => TelegramOwnedServiceSearchResult::ambiguous(),
             default => TelegramOwnedServiceSearchResult::notFound(),
         };
+    }
+}
+
+final class TelegramNavigationServiceAutoRenewPolicyManager implements TelegramServiceAutoRenewPolicyManager
+{
+    /** @var list<array{actorUserId:int,offeringCode:string,mode:string,absoluteIncreaseLimitIrr:?int,percentageIncreaseLimitBps:?int,requestKey:string,correlationId:string}> */
+    public array $configureCalls = [];
+
+    public function availableFor(int $actorUserId): bool
+    {
+        return $actorUserId > 0;
+    }
+
+    public function snapshotForUser(int $actorUserId, string $offeringCode): TelegramServiceAutoRenewPolicySnapshot
+    {
+        return new TelegramServiceAutoRenewPolicySnapshot($offeringCode, 'stop', null, null, 1);
+    }
+
+    public function configureForUser(
+        int $actorUserId,
+        string $offeringCode,
+        string $mode,
+        ?int $absoluteIncreaseLimitIrr,
+        ?int $percentageIncreaseLimitBps,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramServiceAutoRenewPolicyResult {
+        $this->configureCalls[] = compact(
+            'actorUserId', 'offeringCode', 'mode', 'absoluteIncreaseLimitIrr', 'percentageIncreaseLimitBps',
+            'requestKey', 'correlationId',
+        );
+
+        return new TelegramServiceAutoRenewPolicyResult(
+            $offeringCode,
+            $mode,
+            $absoluteIncreaseLimitIrr,
+            $percentageIncreaseLimitBps,
+            2,
+            false,
+        );
+    }
+
+    /** @return array{actorUserId:int,offeringCode:string,mode:string,absoluteIncreaseLimitIrr:?int,percentageIncreaseLimitBps:?int,requestKey:string,correlationId:string}|null */
+    public function lastConfigureCall(): ?array
+    {
+        return $this->configureCalls === [] ? null : $this->configureCalls[array_key_last($this->configureCalls)];
     }
 }
 
@@ -8082,6 +8131,67 @@ SQL);
             ->where('delivery_operation_public_id', $operationPublicId)->value('keyboard_snapshot');
         self::assertIsString($keyboard);
         self::assertStringNotContainsString('https://apps.example.com/client?platform=android', $keyboard);
+    }
+
+    public function test_admin_service_auto_renew_policy_is_permission_filtered_confirmation_gated_and_replay_safe(): void
+    {
+        $telegramUserId = 9698;
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $manager = new TelegramNavigationServiceAutoRenewPolicyManager;
+        $this->app->instance(TelegramServiceAutoRenewPolicyManager::class, $manager);
+
+        $this->accept($this->payload(6980, $telegramUserId, 'navigation_admin_auto_policy', 'en', '/start'));
+        $processor->process('123456789', 6980);
+        $account = DB::table('telegram_accounts')->where('telegram_user_id', $telegramUserId)->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        self::assertSame(0, DB::table('telegram_interaction_callbacks')->where('action', 'navigation.admin')->count());
+
+        $administratorId = $this->salesContentAdministratorForUser((int) $account->user_id);
+        self::assertGreaterThan(0, $administratorId);
+        $this->accept($this->payload(6981, $telegramUserId, 'navigation_admin_auto_policy', 'en', '/menu'));
+        $processor->process('123456789', 6981);
+
+        $adminToken = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(6982, $telegramUserId, 'navigation_admin_auto_policy', 'en', $adminToken));
+        $processor->process('123456789', 6982);
+        $policyToken = $this->callbackToken('navigation.admin.service.auto_renew_policy', (int) $account->id);
+        $this->accept($this->callbackPayload(6983, $telegramUserId, 'navigation_admin_auto_policy', 'en', $policyToken));
+        $processor->process('123456789', 6983);
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => (int) $account->id,
+            'state' => 'admin_service_auto_renew_policy',
+            'payload' => '{}',
+        ]);
+
+        $this->accept($this->payload(6984, $telegramUserId, 'navigation_admin_auto_policy', 'en', 'bad command with too many pieces here'));
+        $processor->process('123456789', 6984);
+        self::assertSame([], $manager->configureCalls);
+
+        $this->accept($this->payload(6985, $telegramUserId, 'navigation_admin_auto_policy', 'en', 'service-plus within_limit 100000 -'));
+        $processor->process('123456789', 6985);
+        self::assertSame([], $manager->configureCalls, 'A valid admin policy message must only open confirmation.');
+        $confirm = DB::table('telegram_interaction_callbacks')
+            ->where('action', 'navigation.admin.service.auto_renew_policy.confirm')
+            ->orderByDesc('id')
+            ->first(['public_id', 'action_payload', 'token_ciphertext']);
+        self::assertNotNull($confirm);
+        self::assertSame('{}', (string) $confirm->action_payload);
+        $confirmToken = $this->app->make(StringEncrypter::class)->decryptString((string) $confirm->token_ciphertext);
+
+        $this->accept($this->callbackPayload(6986, $telegramUserId, 'navigation_admin_auto_policy', 'en', $confirmToken));
+        $processor->process('123456789', 6986);
+        self::assertCount(1, $manager->configureCalls);
+        $policyCall = $manager->lastConfigureCall();
+        self::assertNotNull($policyCall);
+        self::assertSame('service-plus', $policyCall['offeringCode']);
+        self::assertSame('within_limit', $policyCall['mode']);
+        self::assertSame(100000, $policyCall['absoluteIncreaseLimitIrr']);
+        self::assertNull($policyCall['percentageIncreaseLimitBps']);
+        self::assertStringStartsWith('tg-admin-auto-', $policyCall['requestKey']);
+
+        $this->accept($this->callbackPayload(6987, $telegramUserId, 'navigation_admin_auto_policy', 'en', $confirmToken));
+        $processor->process('123456789', 6987);
+        self::assertCount(1, $manager->configureCalls, 'A completed admin policy confirmation callback must not mutate twice.');
     }
 
     public function test_admin_usdt_rate_journey_is_permission_filtered_confidential_and_crash_replay_idempotent(): void

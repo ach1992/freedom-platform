@@ -71,6 +71,7 @@ return [
                 'client_guides' => 'اپلیکیشن‌ها و راهنماها',
                 'menus' => 'منوها و دکمه‌ها',
                 'membership' => 'عضویت کانال‌ها',
+                'service_auto_renew_policy' => 'سیاست تمدید خودکار سرویس',
             ],
             'payment_reviews' => [
                 'list' => "بررسی پرداخت‌های جایگزین\n\n:items\n\nیک بررسی در انتظار را انتخاب کنید. مجوز هر تصمیم هنگام اجرا دوباره کنترل می‌شود.",
@@ -140,6 +141,14 @@ return [
 دکمه‌های پیش‌نمایش عمداً هیچ action واقعی اجرا نمی‌کنند.',
                 'yes' => 'بله',
                 'no' => 'خیر',
+            ],
+            'auto_renew_policy' => [
+                'prompt' => "سیاست تمدید خودکار سرویس\n\nیک دستور با یکی از قالب‌های زیر ارسال کنید:\n<offering_code> stop\n<offering_code> continue\n<offering_code> within_limit <absolute_irr|-> <percentage_bps|->\n\nبرای within_limit حداقل یکی از دو محدودیت باید مقدار داشته باشد.",
+                'invalid' => 'دستور یا Offering نامعتبر/غیرمجاز است. هیچ تغییری اعمال نشد. دوباره با قالب اعلام‌شده ارسال کنید.',
+                'confirm' => "Offering: :offering\nسیاست فعلی: :current\nسیاست پیشنهادی: :proposed\n\nتغییر سیاست قیمت تمدید خودکار را تأیید می‌کنید؟",
+                'confirm_button' => 'تأیید سیاست',
+                'result' => 'سیاست تمدید خودکار Offering :offering ثبت شد. نسخه :version — :policy',
+                'unconfigured' => 'تنظیم نشده',
             ],
             'membership' => [
                 'list' => "مدیریت عضویت کانال‌ها\n\nکانال‌های اجباری (:channel_count):\n:channels\n\nقواعد عضویت (:rule_count):\n:rules\n\nفقط metadata امن نمایش داده می‌شود و لینک عضویت هرگز بازنمایی نمی‌شود.",

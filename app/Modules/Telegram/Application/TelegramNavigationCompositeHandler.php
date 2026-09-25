@@ -25,6 +25,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramMenuConfigurationNavigationHandler $menuConfiguration,
         private TelegramMembershipConfigurationNavigationHandler $membershipConfiguration,
         private TelegramServiceAutoRenewNavigationHandler $serviceAutoRenew,
+        private TelegramServiceAutoRenewPolicyNavigationHandler $serviceAutoRenewPolicy,
         private TelegramServiceLifecycleNavigationHandler $serviceLifecycle,
         private TelegramAgentBulkPurchaseNavigationHandler $agentBulk,
         private TelegramAgentNavigationHandler $agent,
@@ -71,6 +72,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->serviceAutoRenew->supports($action)) {
             $this->serviceAutoRenew->handle($action);
+
+            return;
+        }
+        if ($this->serviceAutoRenewPolicy->supports($action)) {
+            $this->serviceAutoRenewPolicy->handle($action);
 
             return;
         }

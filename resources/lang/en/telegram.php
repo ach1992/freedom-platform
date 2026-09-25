@@ -71,6 +71,7 @@ Referral locked: :referral_locked',
                 'client_guides' => 'Client Guides',
                 'menus' => 'Menus & Buttons',
                 'membership' => 'Channel Membership',
+                'service_auto_renew_policy' => 'Service Auto-renew Policy',
             ],
             'payment_reviews' => [
                 'list' => "Alternative Payment Reviews\n\n:items\n\nSelect a pending review. Every decision is authorized again at execution time.",
@@ -140,6 +141,14 @@ Active: :active
 Preview buttons intentionally execute no real action.',
                 'yes' => 'Yes',
                 'no' => 'No',
+            ],
+            'auto_renew_policy' => [
+                'prompt' => "Service auto-renew policy\n\nSend one command using one of these forms:\n<offering_code> stop\n<offering_code> continue\n<offering_code> within_limit <absolute_irr|-> <percentage_bps|->\n\nFor within_limit at least one limit must be set.",
+                'invalid' => 'The command or Offering is invalid or unauthorized. No change was applied. Send a command using the documented form.',
+                'confirm' => "Offering: :offering\nCurrent policy: :current\nProposed policy: :proposed\n\nConfirm changing the auto-renew price policy?",
+                'confirm_button' => 'Confirm policy',
+                'result' => 'Auto-renew policy for Offering :offering was saved. Version :version — :policy',
+                'unconfigured' => 'Not configured',
             ],
             'membership' => [
                 'list' => "Channel Membership Configuration\n\nRequired channels (:channel_count):\n:channels\n\nMembership rules (:rule_count):\n:rules\n\nOnly safe configuration metadata is shown. Join links are never echoed.",

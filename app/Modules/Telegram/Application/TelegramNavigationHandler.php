@@ -1260,6 +1260,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
 
+        if ($this->administratorUsers->allowsUser($action->userId, 'catalog.manage')) {
+            $autoRenewPolicy = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramServiceAutoRenewPolicyNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-service-auto-renew-policy:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.service_auto_renew_policy', $locale),
+                $autoRenewPolicy->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
         if ($this->managedUsdtRateSettings->availableFor($action->userId)) {
             $rate = $this->callbacks->issue(
                 $action->sessionPublicId,
