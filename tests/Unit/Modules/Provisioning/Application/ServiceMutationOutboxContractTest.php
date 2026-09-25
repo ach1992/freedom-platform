@@ -88,9 +88,10 @@ final class ServiceMutationOutboxContractTest extends TestCase
     {
         $source = $this->classSource(FoundationServiceProvider::class);
 
+        self::assertStringContainsString('PaidServiceMutationOrderOutboxHandler::class', $source);
         self::assertStringContainsString('ServiceMutationOutboxHandler::class', $source);
         self::assertStringContainsString(
-            '[InitialProvisioningOutboxHandler::class, ServiceMutationOutboxHandler::class]',
+            '[InitialProvisioningOutboxHandler::class, PaidServiceMutationOrderOutboxHandler::class, ServiceMutationOutboxHandler::class]',
             $source,
         );
     }

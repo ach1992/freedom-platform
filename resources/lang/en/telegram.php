@@ -573,6 +573,7 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                     'add_data' => 'Add data',
                     'add_days' => 'Add days',
                     'add_data_days' => 'Add data and days',
+                    'reconfigure' => 'Change plan / server / protocol',
                     'reset_usage' => 'Reset usage',
                     'suspend' => 'Suspend',
                     'activate' => 'Activate',

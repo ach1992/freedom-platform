@@ -115,6 +115,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
             'app/Modules/Telegram/Application/TelegramServiceAutoRenewNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramServiceAutoRenewPolicyNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramServiceLifecycleNavigationHandler.php',
+            'app/Modules/Telegram/Application/TelegramServiceReconfigurationNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramServiceNotificationPreferenceNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramNowPaymentsNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',

@@ -17,26 +17,33 @@ return new class extends Migration
             $table->ulid('public_id')->unique('srp_public_uq');
             $table->char('request_key_hash', 64)->unique('srp_request_uq');
             $table->char('payload_hash', 64);
-            $table->foreignId('actor_user_id')->constrained('users')->restrictOnDelete();
-            $table->foreignId('service_subscription_id')->constrained('service_subscriptions')->restrictOnDelete();
-            $table->foreignId('source_plan_offering_id')->constrained('plan_offerings')->restrictOnDelete();
+            $table->foreignId('actor_user_id');
+            $table->foreign('actor_user_id', 'srp_actor_fk')->references('id')->on('users')->restrictOnDelete();
+            $table->foreignId('service_subscription_id');
+            $table->foreign('service_subscription_id', 'srp_service_fk')->references('id')->on('service_subscriptions')->restrictOnDelete();
+            $table->foreignId('source_plan_offering_id');
+            $table->foreign('source_plan_offering_id', 'srp_source_offering_fk')->references('id')->on('plan_offerings')->restrictOnDelete();
             $table->unsignedBigInteger('source_route_selection_id')->nullable();
             $table->foreign('source_route_selection_id', 'srp_source_route_fk')
                 ->references('id')->on('plan_offering_route_selections')->restrictOnDelete();
-            $table->foreignId('source_service_target_id')->constrained('panel_service_targets')->restrictOnDelete();
+            $table->foreignId('source_service_target_id');
+            $table->foreign('source_service_target_id', 'srp_source_target_fk')->references('id')->on('panel_service_targets')->restrictOnDelete();
             $table->unsignedBigInteger('source_protocol_profile_id')->nullable();
             $table->foreign('source_protocol_profile_id', 'srp_source_profile_fk')
                 ->references('id')->on('panel_protocol_profiles')->restrictOnDelete();
             $table->unsignedBigInteger('source_remote_identity_generation');
             $table->unsignedBigInteger('source_lifecycle_version');
             $table->unsignedBigInteger('source_mutation_generation');
-            $table->foreignId('target_plan_offering_id')->constrained('plan_offerings')->restrictOnDelete();
+            $table->foreignId('target_plan_offering_id');
+            $table->foreign('target_plan_offering_id', 'srp_target_offering_fk')->references('id')->on('plan_offerings')->restrictOnDelete();
             $table->unsignedBigInteger('target_route_selection_id')->unique('srp_target_route_uq');
             $table->foreign('target_route_selection_id', 'srp_target_route_fk')
                 ->references('id')->on('plan_offering_route_selections')->restrictOnDelete();
-            $table->foreignId('target_service_target_id')->constrained('panel_service_targets')->restrictOnDelete();
+            $table->foreignId('target_service_target_id');
+            $table->foreign('target_service_target_id', 'srp_target_target_fk')->references('id')->on('panel_service_targets')->restrictOnDelete();
             $table->unsignedBigInteger('target_service_target_version');
-            $table->foreignId('target_protocol_profile_id')->constrained('panel_protocol_profiles')->restrictOnDelete();
+            $table->foreignId('target_protocol_profile_id');
+            $table->foreign('target_protocol_profile_id', 'srp_target_profile_fk')->references('id')->on('panel_protocol_profiles')->restrictOnDelete();
             $table->unsignedBigInteger('target_protocol_profile_version');
             $table->unsignedBigInteger('target_capacity_reservation_id')->unique('srp_target_capacity_uq');
             $table->foreign('target_capacity_reservation_id', 'srp_target_capacity_fk')

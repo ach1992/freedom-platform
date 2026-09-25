@@ -573,6 +573,7 @@ return [
                     'add_data' => 'افزایش حجم',
                     'add_days' => 'افزایش زمان',
                     'add_data_days' => 'افزایش حجم و زمان',
+                    'reconfigure' => 'تغییر پلن / سرور / پروتکل',
                     'reset_usage' => 'بازنشانی مصرف',
                     'suspend' => 'تعلیق',
                     'activate' => 'فعال‌سازی',
