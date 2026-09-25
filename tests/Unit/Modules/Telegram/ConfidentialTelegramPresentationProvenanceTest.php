@@ -110,6 +110,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
             'app/Modules/Telegram/Application/TelegramCardToCardReceiptStatusDelivery.php',
             'app/Modules/Telegram/Application/TelegramPaymentPrivateEvidenceStatusDelivery.php',
             'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
+            'app/Modules/Telegram/Application/TelegramMembershipConfigurationNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramNowPaymentsNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramSupportAttachmentNavigationHandler.php',
@@ -128,6 +129,14 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
     public function test_admin_customer_navigation_has_confidential_but_not_generic_delivery_provenance(): void
     {
         $source = 'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php';
+
+        self::assertContains($source, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+        self::assertNotContains($source, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
+    }
+
+    public function test_membership_configuration_navigation_has_confidential_but_not_generic_delivery_provenance(): void
+    {
+        $source = 'app/Modules/Telegram/Application/TelegramMembershipConfigurationNavigationHandler.php';
 
         self::assertContains($source, TelegramConfidentialPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);
         self::assertNotContains($source, TelegramPresentationProvenanceGuard::REVIEWED_SOURCE_FILES);

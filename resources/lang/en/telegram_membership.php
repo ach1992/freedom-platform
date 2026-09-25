@@ -6,5 +6,7 @@ return [
     'entry_unavailable' => 'Bot access is temporarily unavailable. Please try again shortly.',
     'retry_prompt' => 'Join the required Telegram channels or groups, then check your membership again.',
     'retry_button' => 'Check Membership Again',
+    'gift_code_unavailable' => 'Gift-code membership verification is temporarily unavailable. Check your membership again before applying a code.',
+    'service_unavailable' => 'Service membership verification is temporarily unavailable. Check your membership again before viewing service details.',
     'purchase_unavailable' => 'Purchase membership verification is temporarily unavailable. Check your membership again before continuing.',
 ];

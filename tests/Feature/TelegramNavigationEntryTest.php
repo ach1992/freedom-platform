@@ -24,6 +24,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
+use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMediaMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageButtonBuilder;
@@ -33,6 +34,9 @@ use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseCandidate;
 use App\Modules\Telegram\Application\TelegramAgentBulkPurchasePage;
 use App\Modules\Telegram\Application\TelegramAgentBulkPurchaseResult;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
+use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleDefinition;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramConfigurationChangeContext;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCardToCardDestination;
@@ -73,6 +77,7 @@ use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingReceipt;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
+use App\Modules\Telegram\Application\TelegramMembershipEvidence;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use App\Modules\Telegram\Application\TelegramMenuConfigurationDefinition;
 use App\Modules\Telegram\Application\TelegramMenuConfigurationService;
@@ -495,6 +500,22 @@ final class TelegramNavigationNoMembershipLookup implements TelegramMembershipLo
     }
 }
 
+final class TelegramNavigationMembershipLookup implements TelegramMembershipLookup
+{
+    /** @var list<int> */
+    public array $transactionLevels = [];
+
+    /** @param \Closure(int,int): TelegramMembershipLookupResult $lookup */
+    public function __construct(private readonly \Closure $lookup) {}
+
+    public function lookup(int $chatId, int $telegramUserId): TelegramMembershipLookupResult
+    {
+        $this->transactionLevels[] = DB::connection()->transactionLevel();
+
+        return ($this->lookup)($chatId, $telegramUserId);
+    }
+}
+
 final class TelegramNavigationCustomerPurchaseQuote implements TelegramCustomerPurchaseQuote
 {
     /** @var list<array{actor_user_id:int,subject_user_id:int,selection_token:string,accepted_at:DateTimeImmutable,quote_key:string,correlation_id:string}> */
@@ -631,6 +652,7 @@ final class TelegramNavigationCustomerPurchaseDiscountQuote implements TelegramC
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
+        ?TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview {
         $this->calls[] = [
             'actor_user_id' => $actorUserId,
@@ -1129,7 +1151,16 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
     /** @var list<array{actor_user_id:int,service_public_id:string,request_key:string,correlation_id:string}> */
     public array $calls = [];
 
+    /** @var list<int> */
+    public array $transactionLevels = [];
+
     public TelegramOwnedServiceDeliveryResendStatus $status = TelegramOwnedServiceDeliveryResendStatus::Queued;
+
+    public ?string $fenceTable = null;
+
+    public ?int $fenceId = null;
+
+    public bool $fenceHeldDuringEffect = false;
 
     public function resendForSelf(
         int $actorUserId,
@@ -1137,6 +1168,8 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
         string $requestKey,
         string $correlationId,
     ): TelegramOwnedServiceDeliveryResendStatus {
+        $this->transactionLevels[] = DB::connection()->transactionLevel();
+        $this->probeMembershipFence();
         $this->calls[] = [
             'actor_user_id' => $actorUserId,
             'service_public_id' => $servicePublicId,
@@ -1145,6 +1178,41 @@ final class TelegramNavigationOwnedServiceDeliveryResender implements TelegramOw
         ];
 
         return $this->status;
+    }
+
+    private function probeMembershipFence(): void
+    {
+        if ($this->fenceTable === null || $this->fenceId === null) {
+            return;
+        }
+
+        $default = (string) Config::get('database.default');
+        $configuration = Config::get('database.connections.'.$default);
+        if (! is_array($configuration)) {
+            throw new RuntimeException('Membership fence probe database configuration is unavailable.');
+        }
+
+        $connectionName = 'telegram_membership_fence_probe';
+        Config::set('database.connections.'.$connectionName, $configuration);
+        DB::purge($connectionName);
+
+        try {
+            DB::connection($connectionName)
+                ->table($this->fenceTable)
+                ->where('id', $this->fenceId)
+                ->lock('FOR UPDATE NOWAIT')
+                ->first(['id']);
+        } catch (QueryException $exception) {
+            $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+            if (! in_array($driverCode, [1205, 3572], true)) {
+                throw $exception;
+            }
+            $this->fenceHeldDuringEffect = true;
+        } finally {
+            DB::disconnect($connectionName);
+            DB::purge($connectionName);
+            Config::set('database.connections.'.$connectionName, null);
+        }
     }
 }
 
@@ -2004,6 +2072,114 @@ final class TelegramNavigationEntryTest extends TestCase
             ->count());
     }
 
+    /** @requirement CHN-001 ACL-002 DAT-003 SEC-001 SEC-002 QUA-001 QUA-004 */
+    public function test_admin_membership_configuration_creates_channel_without_secret_projection_and_rechecks_permission(): void
+    {
+        $telegramUserId = 9620;
+        $username = 'membership_admin';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $secretJoinUrl = 'https://t.me/+MembershipSecretToken01';
+
+        $this->accept($this->payload(6150, $telegramUserId, $username, 'en', '/start'));
+        $processor->process('123456789', 6150);
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $this->salesContentAdministratorForUser((int) $account->user_id);
+
+        $this->accept($this->payload(6151, $telegramUserId, $username, 'en', '/menu'));
+        $processor->process('123456789', 6151);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(6152, $telegramUserId, $username, 'en', $adminToken));
+        $processor->process('123456789', 6152);
+
+        $membershipToken = $this->callbackToken('navigation.admin.membership', (int) $account->id);
+        $this->accept($this->callbackPayload(6153, $telegramUserId, $username, 'en', $membershipToken));
+        $this->processTelegramUpdateOrFail($processor, 6153);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_membership_configuration', (string) $session->state);
+        self::assertSame('{}', (string) $session->payload);
+        self::assertStringContainsString('Channel Membership Configuration', $this->latestConfidentialPresentation());
+
+        $editToken = $this->callbackToken('navigation.admin.membership.edit', (int) $account->id);
+        $this->accept($this->callbackPayload(6154, $telegramUserId, $username, 'en', $editToken));
+        $this->processTelegramUpdateOrFail($processor, 6154);
+        self::assertSame('admin_membership_configuration_edit', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+
+        $command = implode("\n", [
+            'operation=channel.create',
+            'channel_key=required_support',
+            'chat_id=-1002600000001',
+            'chat_type=channel',
+            'visibility=private',
+            'title=Required Support',
+            'join_url='.$secretJoinUrl,
+            'sort_order=10',
+            'reason=Verify Telegram membership administration',
+        ]);
+        $this->accept($this->payload(6155, $telegramUserId, $username, 'en', $command));
+        $this->processTelegramUpdateOrFail($processor, 6155);
+
+        $channel = DB::table('required_channels')
+            ->where('channel_key', 'required_support')
+            ->first(['id', 'state', 'version', 'join_url_ciphertext', 'join_url_hash']);
+        self::assertNotNull($channel);
+        self::assertSame('draft', (string) $channel->state);
+        self::assertSame(1, (int) $channel->version);
+        self::assertNotSame($secretJoinUrl, (string) $channel->join_url_ciphertext);
+        self::assertSame(hash('sha256', $secretJoinUrl), (string) $channel->join_url_hash);
+        self::assertSame(
+            $secretJoinUrl,
+            $this->app->make(StringEncrypter::class)->decryptString((string) $channel->join_url_ciphertext),
+        );
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_membership_configuration', (string) $session->state);
+        self::assertSame('{}', (string) $session->payload);
+        self::assertStringNotContainsString($secretJoinUrl, (string) $session->payload);
+        self::assertStringNotContainsString($secretJoinUrl, $this->latestConfidentialPresentation());
+        self::assertStringNotContainsString(
+            $secretJoinUrl,
+            $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId),
+        );
+
+        $audit = DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->first();
+        self::assertNotNull($audit);
+        $auditText = json_encode([$audit->before_safe_data, $audit->after_safe_data, $audit->reason], JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString($secretJoinUrl, $auditText);
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->count());
+
+        $processor->process('123456789', 6155);
+        self::assertSame(1, DB::table('required_channels')->where('channel_key', 'required_support')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->count());
+
+        $editAfterCreate = $this->callbackToken('navigation.admin.membership.edit', (int) $account->id);
+        $roleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        $permissionId = DB::table('permissions')->where('code', 'telegram.membership.manage')->value('id');
+        self::assertIsNumeric($roleId);
+        self::assertIsNumeric($permissionId);
+        DB::table('role_permissions')
+            ->where('role_id', (int) $roleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete();
+
+        $this->accept($this->callbackPayload(6156, $telegramUserId, $username, 'en', $editAfterCreate));
+        $this->processTelegramUpdateOrFail($processor, 6156);
+        self::assertSame(TelegramNavigationEntryGateway::STATE, (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->count());
+    }
+
     /** @requirement SUP-002 CNT-001 CNT-002 SEC-002 QUA-001 QUA-004 */
     public function test_home_internal_support_contact_mode_preserves_existing_callback_only(): void
     {
@@ -2717,6 +2893,36 @@ SQL);
         $processor->process('123456789', 7004);
         self::assertSame([], $resender->calls);
 
+        $fenceRuleId = DB::table('channel_membership_rules')->orderBy('id')->value('id');
+        if (is_numeric($fenceRuleId)) {
+            $resender->fenceTable = 'channel_membership_rules';
+            $resender->fenceId = (int) $fenceRuleId;
+        } else {
+            $fenceChannelId = DB::table('required_channels')->orderBy('id')->value('id');
+            if (! is_numeric($fenceChannelId)) {
+                $now = now('UTC');
+                $fenceChannelId = DB::table('required_channels')->insertGetId([
+                    'channel_key' => 'service-resend-fence',
+                    'telegram_chat_id' => -1002600000009,
+                    'chat_type' => 'channel',
+                    'visibility' => 'public',
+                    'display_title' => 'Service resend fence',
+                    'join_url_ciphertext' => str_repeat('x', 64),
+                    'join_url_hash' => hash('sha256', 'https://t.me/service_resend_fence'),
+                    'sort_order' => 0,
+                    'state' => 'draft',
+                    'version' => 1,
+                    'verified_bot_id' => null,
+                    'verification_result_code' => null,
+                    'verified_at' => null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
+            $resender->fenceTable = 'required_channels';
+            $resender->fenceId = (int) $fenceChannelId;
+        }
+
         $operationCountBefore = DB::table('telegram_delivery_operations')->count();
         $this->accept($this->callbackPayload(7005, $telegramUserId, 'navigation_resend', 'fa', $resendToken));
         $processor->process('123456789', 7005);
@@ -2726,6 +2932,8 @@ SQL);
             'request_key' => 'telegram-service-resend:'.(string) $resendCallback->public_id,
             'correlation_id' => 'telegram-resend:'.(string) $resendCallback->public_id,
         ]], $resender->calls);
+        self::assertSame([1], $resender->transactionLevels);
+        self::assertTrue($resender->fenceHeldDuringEffect, 'Membership configuration fence must remain locked through resend effect creation.');
         self::assertSame($operationCountBefore + 1, DB::table('telegram_delivery_operations')->count());
         $confirmation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('مسیر محافظت‌شده', $confirmation);
@@ -2781,6 +2989,8 @@ SQL);
         $this->accept($this->callbackPayload(7009, $telegramUserId, 'navigation_resend', 'fa', $blockedToken));
         $processor->process('123456789', 7009);
         self::assertCount(2, $resender->calls);
+        self::assertSame([1, 1], $resender->transactionLevels);
+        self::assertTrue($resender->fenceHeldDuringEffect);
         $blockedCopy = $this->latestConfidentialPresentation();
         self::assertStringContainsString('کمی بعد دوباره تلاش کنید', $blockedCopy);
         self::assertStringNotContainsString($servicePublicId, $blockedCopy);
@@ -2795,6 +3005,133 @@ SQL);
         $english = require resource_path('lang/en/telegram.php');
         self::assertStringContainsString('protected delivery', (string) $english['navigation']['services']['resend']['queued']);
         self::assertStringContainsString('try again later', mb_strtolower((string) $english['navigation']['services']['resend']['temporarily_blocked']));
+    }
+
+    /** @requirement CHN-001 SEC-001 SEC-002 DAT-003 QUA-001 */
+    public function test_service_resend_rejects_membership_configuration_drift_before_resend_effect(): void
+    {
+        $selectionToken = str_repeat('f', 40);
+        $servicePublicId = '01J00000000000000000000006';
+        $projection = new TelegramNavigationOwnedServiceSearchProjection($selectionToken, $servicePublicId);
+        $resender = new TelegramNavigationOwnedServiceDeliveryResender;
+        $this->app->instance(TelegramOwnedServiceProjection::class, $projection);
+        $this->app->instance(TelegramOwnedServiceDeliveryResender::class, $resender);
+
+        $telegramUserId = 9681;
+        $username = 'navigation_resend_drift';
+        $this->accept($this->payload(7080, $telegramUserId, $username, 'fa', '/start'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $processor->process('123456789', 7080);
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $ownerUserId = (int) $account->user_id;
+
+        $servicesToken = $this->callbackToken('navigation.my_services', (int) $account->id);
+        $this->accept($this->callbackPayload(7081, $telegramUserId, $username, 'fa', $servicesToken));
+        $processor->process('123456789', 7081);
+        $detailToken = $this->callbackToken('navigation.service.'.$selectionToken, (int) $account->id);
+        $this->accept($this->callbackPayload(7082, $telegramUserId, $username, 'fa', $detailToken));
+        $processor->process('123456789', 7082);
+
+        $resendCallback = DB::table('telegram_interaction_callbacks')
+            ->where('telegram_interaction_session_id', (int) DB::table('telegram_interaction_sessions')
+                ->where('telegram_account_id', (int) $account->id)
+                ->value('id'))
+            ->where('action', 'navigation.service.resend')
+            ->orderByDesc('id')
+            ->first(['public_id', 'token_ciphertext']);
+        self::assertNotNull($resendCallback);
+        $resendToken = $this->app->make(StringEncrypter::class)
+            ->decryptString((string) $resendCallback->token_ciphertext);
+
+        $administratorId = $this->salesContentAdministratorForUser($ownerUserId);
+        $now = now('UTC');
+        $channelId = (int) DB::table('required_channels')->insertGetId([
+            'channel_key' => 'service-resend-drift',
+            'telegram_chat_id' => -1002600000011,
+            'chat_type' => 'channel',
+            'visibility' => 'public',
+            'display_title' => 'Service resend drift',
+            'join_url_ciphertext' => str_repeat('y', 64),
+            'join_url_hash' => hash('sha256', 'https://t.me/service_resend_drift'),
+            'sort_order' => 0,
+            'state' => 'draft',
+            'version' => 1,
+            'verified_bot_id' => null,
+            'verification_result_code' => null,
+            'verified_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('required_channels')->where('id', $channelId)->update([
+            'state' => 'active',
+            'version' => 2,
+            'verified_bot_id' => 123456789,
+            'verification_result_code' => 'telegram_membership_administrator',
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $context = static fn (string $suffix): TelegramConfigurationChangeContext => new TelegramConfigurationChangeContext(
+            'nav-service-membership-'.$suffix,
+            'nav-service-membership-correlation-'.$suffix,
+            'telegram_service_resend_membership_test',
+            'Verify service resend membership freshness.',
+            $administratorId,
+        );
+        $rules = $this->app->make(TelegramChannelMembershipRuleService::class);
+        $createdRule = $rules->create(
+            new TelegramChannelMembershipRuleDefinition(
+                'service-resend-drift',
+                'service_view',
+                'both',
+                null,
+                null,
+                null,
+                'all',
+                'fail_closed',
+                100,
+                null,
+                null,
+                [$channelId],
+            ),
+            $context('create'),
+        );
+        $rules->activate($createdRule->targetId, 1, $context('activate'));
+
+        $lookup = new TelegramNavigationMembershipLookup(
+            function (int $chatId, int $lookupUserId) use (
+                $rules,
+                $createdRule,
+                $context,
+                $telegramUserId,
+            ): TelegramMembershipLookupResult {
+                self::assertSame(-1002600000011, $chatId);
+                self::assertSame($telegramUserId, $lookupUserId);
+                $rules->disable($createdRule->targetId, 2, $context('disable'));
+
+                return new TelegramMembershipLookupResult(
+                    TelegramMembershipEvidence::Member,
+                    'telegram_membership_member',
+                );
+            },
+        );
+        $this->app->instance(TelegramMembershipLookup::class, $lookup);
+        $this->app->forgetInstance(TelegramChannelMembershipEvaluator::class);
+
+        $this->accept($this->callbackPayload(7083, $telegramUserId, $username, 'fa', $resendToken));
+        $processor->process('123456789', 7083);
+
+        self::assertSame([0], $lookup->transactionLevels, 'Telegram provider membership lookup must remain outside the resend transaction.');
+        self::assertSame([], $resender->calls, 'Changed membership configuration must fail before the resend effect boundary.');
+        self::assertSame('disabled', DB::table('channel_membership_rules')->where('id', $createdRule->targetId)->value('state'));
+        $this->assertDatabaseHas('telegram_interaction_sessions', [
+            'telegram_account_id' => (int) $account->id,
+            'state' => 'service_membership',
+            'version' => 4,
+        ]);
     }
 
     public function test_my_services_empty_state_is_confidential_and_back_remains_deterministic(): void

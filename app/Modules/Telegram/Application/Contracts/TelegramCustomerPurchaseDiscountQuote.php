@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application\Contracts;
 
+use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
 use DateTimeImmutable;
 
@@ -18,5 +19,6 @@ interface TelegramCustomerPurchaseDiscountQuote
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
+        ?TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview;
 }

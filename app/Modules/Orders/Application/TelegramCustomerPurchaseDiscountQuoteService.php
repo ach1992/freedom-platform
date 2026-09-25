@@ -8,6 +8,8 @@ use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
+use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
+use App\Modules\Telegram\Application\TelegramActionMembershipRevalidator;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuoteRefreshRequired;
@@ -27,6 +29,7 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
         private QuoteService $quotes,
         private QuoteDiscountAuthority $discounts,
         private TelegramCustomerPurchaseCatalog $catalog,
+        private TelegramActionMembershipRevalidator $membership,
     ) {}
 
     /** @requirement BUY-001 BUY-002 BUY-003 PRO-001 PRO-002 DAT-002 DAT-003 SEC-001 SEC-002 QUA-001 */
@@ -39,6 +42,7 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
+        ?TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview {
         if ($actorUserId < 1 || $subjectUserId < 1 || $actorUserId !== $subjectUserId) {
             throw new AuthorizationException('Telegram discounted Quote self access denied.');
@@ -61,7 +65,15 @@ final readonly class TelegramCustomerPurchaseDiscountQuoteService implements Tel
             $operationKey,
             $correlationId,
             $expiresAt,
+            $membership,
         ): TelegramCustomerPurchaseDiscountQuotePreview {
+            $this->membership->assertCurrentForUpdate(
+                $connection,
+                $actorUserId,
+                $subjectUserId,
+                'gift_code_use',
+                $membership,
+            );
             try {
                 $offering = $this->catalog->offeringForSelf($actorUserId, $subjectUserId, $offeringSelectionToken);
             } catch (AuthorizationException $exception) {

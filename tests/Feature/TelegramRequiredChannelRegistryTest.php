@@ -277,6 +277,7 @@ final class TelegramRequiredChannelRegistryTest extends TestCase
             return $this->adminEvidence();
         }));
         $created = $service->create($this->definition(), $this->context($ownerId, 'telegram-channel-create-0003'));
+        self::assertSame(0, $lookupCalls, 'Construction and draft creation must not resolve Telegram provider membership.');
 
         $activationContext = $this->context($ownerId, 'telegram-channel-activate-02');
         $activated = $service->activate($created->targetId, 1, $activationContext);

@@ -15,6 +15,8 @@ use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
+use App\Modules\Telegram\Application\TelegramNavigationCompositeHandler;
+use App\Modules\Telegram\Application\TelegramNavigationEntryGateway;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Telegram\Domain\TelegramInteractionDispatchStatus;
 use App\Modules\Telegram\Domain\TelegramInteractionSessionStatus;
@@ -65,6 +67,25 @@ final class TelegramInteractionAuthorityTest extends TestCase
         } finally {
             parent::tearDown();
         }
+    }
+
+    /** @requirement CHN-001 ARCH-003 SEC-001 QUA-001 */
+    public function test_default_handler_registry_and_unrelated_dispatch_are_provider_free_without_telegram_credentials(): void
+    {
+        config(['telegram.bot_token' => null]);
+        $this->forgetInteractionServices();
+        $this->app->forgetInstance(TelegramNavigationCompositeHandler::class);
+
+        $registry = $this->app->make(TelegramInteractionHandlerRegistry::class);
+        self::assertInstanceOf(
+            TelegramNavigationCompositeHandler::class,
+            $registry->forFlow(TelegramNavigationEntryGateway::FLOW),
+        );
+
+        $result = $this->app->make(TelegramInteractionDispatcher::class)
+            ->dispatch('123456', 5999, null, []);
+
+        self::assertSame(TelegramInteractionDispatchStatus::Ignored, $result->status);
     }
 
     public function test_session_transitions_are_restart_safe_replay_exact_and_version_fenced(): void

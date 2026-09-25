@@ -70,6 +70,7 @@ return [
                 'usdt_rate' => 'نرخ USDT / NOWPayments',
                 'client_guides' => 'اپلیکیشن‌ها و راهنماها',
                 'menus' => 'منوها و دکمه‌ها',
+                'membership' => 'عضویت کانال‌ها',
             ],
             'payment_reviews' => [
                 'list' => "بررسی پرداخت‌های جایگزین\n\n:items\n\nیک بررسی در انتظار را انتخاب کنید. مجوز هر تصمیم هنگام اجرا دوباره کنترل می‌شود.",
@@ -139,6 +140,20 @@ return [
 دکمه‌های پیش‌نمایش عمداً هیچ action واقعی اجرا نمی‌کنند.',
                 'yes' => 'بله',
                 'no' => 'خیر',
+            ],
+            'membership' => [
+                'list' => "مدیریت عضویت کانال‌ها\n\nکانال‌های اجباری (:channel_count):\n:channels\n\nقواعد عضویت (:rule_count):\n:rules\n\nفقط metadata امن نمایش داده می‌شود و لینک عضویت هرگز بازنمایی نمی‌شود.",
+                'channel_item' => '#:id :key — :title — chat :chat_id — :state v:version',
+                'rule_item' => '#:id :key — :action/:audience — :mode — :failure — channels :channels — :state v:version',
+                'none' => 'موردی ثبت نشده است.',
+                'list_truncated' => 'فقط :limit مورد اول هر فهرست نمایش داده می‌شود. برای تغییرات از ID و version وضعیت فعلی استفاده کنید.',
+                'edit_button' => 'ساخت / ویرایش / فعال / غیرفعال',
+                'refresh_button' => 'تازه‌سازی',
+                'changed' => 'تنظیمات هدف #:id از مسیر canonical عضویت تغییر کرد.',
+                'unchanged' => 'هدف #:id از قبل در وضعیت درخواستی بود.',
+                'replayed' => 'همان درخواست تنظیمات برای هدف #:id به‌صورت امن replay شد.',
+                'editor' => "مدیریت عضویت\n\nیک دستور کامل key=value ارسال کنید. هر write هنگام اجرا دوباره مجوزسنجی، version-check، audit و replay-safe می‌شود. در ویرایش کانال باید join_url را دوباره وارد کنید چون secret از تلگرام قابل خواندن نیست. لینک ارسالی echo نمی‌شود و در session state ذخیره نمی‌شود.\n\n:example",
+                'invalid' => 'دستور نامعتبر، stale، بدون مجوز یا ناسازگار با محدودیت ایمنی عضویت است. هیچ bypass اعمال نشد.',
             ],
             'access' => [
                 'menu' => "مدیریت دسترسی\n\nهویت مدیران، نقش‌ها، override مجوزها، تأییدهای حساس و انتقال مالکیت از authority اصلی AccessControl مدیریت می‌شوند. هر تغییر هنگام اجرا دوباره مجوزسنجی می‌شود.",
