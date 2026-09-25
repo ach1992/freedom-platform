@@ -13,7 +13,7 @@ use RuntimeException;
 
 final readonly class TelegramConfigurationMutationExecutor
 {
-    private const MANAGE_PERMISSION = 'telegram.membership.manage';
+    public const MANAGE_PERMISSION = 'telegram.membership.manage';
 
     public function __construct(
         private DatabaseManager $database,

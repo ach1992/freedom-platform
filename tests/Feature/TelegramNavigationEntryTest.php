@@ -631,6 +631,7 @@ final class TelegramNavigationCustomerPurchaseDiscountQuote implements TelegramC
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
+        ?\App\Modules\Telegram\Application\TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview {
         $this->calls[] = [
             'actor_user_id' => $actorUserId,

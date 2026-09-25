@@ -58,6 +58,7 @@ use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramInteractionUpdateBindingService;
 use App\Modules\Telegram\Application\TelegramInteractiveDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use App\Modules\Telegram\Application\TelegramMembershipConfigurationNavigationHandler;
 use App\Modules\Telegram\Application\TelegramMembershipJoinPresentationResolver;
 use App\Modules\Telegram\Application\TelegramMenuConfigurationMutationExecutor;
 use App\Modules\Telegram\Application\TelegramMenuConfigurationNavigationHandler;
@@ -181,6 +182,7 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramBroadcastNavigationHandler::class);
         $this->app->singleton(TelegramClientGuideNavigationHandler::class);
         $this->app->singleton(TelegramMenuConfigurationNavigationHandler::class);
+        $this->app->singleton(TelegramMembershipConfigurationNavigationHandler::class);
         $this->app->singleton(TelegramAgentBulkPurchaseNavigationHandler::class);
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);

@@ -164,6 +164,7 @@ final class StaleDiscountBackDiscountQuote implements TelegramCustomerPurchaseDi
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
+        ?\App\Modules\Telegram\Application\TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview {
         throw new RuntimeException('Stale-Back recovery must not invoke discount re-Quote authority.');
     }
