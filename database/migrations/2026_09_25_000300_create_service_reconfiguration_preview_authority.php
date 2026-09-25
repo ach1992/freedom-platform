@@ -125,6 +125,13 @@ BEGIN
       AND capacity.panel_service_target_id = NEW.target_service_target_id
       AND capacity.state = 'enabled'
       AND source_target.panel_connection_id = target_row.panel_connection_id
+      AND EXISTS (
+          SELECT 1
+          FROM panel_target_capabilities capability_row
+          WHERE capability_row.panel_service_target_id = source_target.id
+            AND capability_row.capability_code = 'reconfigure_service'
+            AND capability_row.verification_status = 'verified'
+      )
       AND target_row.state = 'active'
       AND target_row.capability_status = 'verified'
       AND target_row.version = NEW.target_service_target_version

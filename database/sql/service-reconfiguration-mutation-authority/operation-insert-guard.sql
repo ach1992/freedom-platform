@@ -212,6 +212,100 @@ BEGIN
         IF valid_paid_mutation_order_id IS NULL THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Paid Service mutation does not match captured Order/Quote and current Service authority.';
         END IF;
+    ELSEIF COALESCE(@app_service_mutation_authority, '') = 'service_reconfiguration_no_charge_queue_v1' THEN
+        IF NEW.operation_type <> 'reconfigure'
+           OR NEW.operation_generation < 1
+           OR NEW.operation_generation <> COALESCE(@app_service_mutation_generation, 0)
+           OR NEW.target_remote_identity_generation < 1
+           OR NEW.request_key_hash IS NULL
+           OR BINARY NEW.request_key_hash <> BINARY COALESCE(@app_service_mutation_request_hash, '')
+           OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_mutation_correlation_id, '')
+           OR COALESCE(@app_service_reconfiguration_preview_id, 0) < 1
+           OR NEW.state <> 'queued'
+           OR NEW.state_version <> 1
+           OR NEW.attempt_count <> 0
+           OR NEW.effect_fence_key IS NOT NULL
+           OR NEW.route_hold_expires_at IS NOT NULL
+           OR NEW.route_selection_id IS NOT NULL
+           OR NEW.capacity_reservation_id IS NOT NULL
+           OR NEW.capacity_reservation_key IS NOT NULL
+           OR NEW.remote_username IS NOT NULL
+           OR NEW.target_reference IS NOT NULL
+           OR NEW.remote_effect_started_at IS NOT NULL
+           OR NEW.remote_effect_completed_at IS NOT NULL
+           OR NEW.last_result_code IS NOT NULL
+           OR NEW.last_result_message IS NOT NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zero-cost Service reconfiguration operation creation authority is invalid.';
+        END IF;
+
+        SELECT service_row.id INTO valid_mutation_service_id
+        FROM service_subscriptions service_row
+        INNER JOIN order_items item_row ON item_row.id = service_row.order_item_id
+        INNER JOIN service_reconfiguration_previews preview_row
+            ON preview_row.id = COALESCE(@app_service_reconfiguration_preview_id, 0)
+           AND preview_row.service_subscription_id = service_row.id
+        INNER JOIN plan_offerings target_offering ON target_offering.id = preview_row.target_plan_offering_id
+        INNER JOIN plan_offering_route_selections target_selection ON target_selection.id = preview_row.target_route_selection_id
+        INNER JOIN panel_capacity_reservations target_reservation ON target_reservation.id = preview_row.target_capacity_reservation_id
+        INNER JOIN panel_service_targets source_target ON source_target.id = preview_row.source_service_target_id
+        INNER JOIN panel_service_targets target_target ON target_target.id = preview_row.target_service_target_id
+        INNER JOIN panel_protocol_profiles target_profile ON target_profile.id = preview_row.target_protocol_profile_id
+        LEFT JOIN plan_offering_route_selections source_selection ON source_selection.id = preview_row.source_route_selection_id
+        LEFT JOIN panel_capacity_reservations source_reservation ON source_reservation.id = source_selection.capacity_reservation_id
+        WHERE service_row.id = NEW.service_subscription_id
+          AND service_row.order_id = NEW.order_id
+          AND item_row.id = NEW.order_item_id
+          AND item_row.order_id = NEW.order_id
+          AND service_row.user_id = NEW.user_id
+          AND service_row.mutation_generation = NEW.operation_generation
+          AND service_row.remote_deleted_at IS NULL
+          AND service_row.lifecycle_state IN ('active','suspended')
+          AND service_row.provisioned_at IS NOT NULL
+          AND service_row.service_target_id IS NOT NULL
+          AND service_row.remote_service_id IS NOT NULL
+          AND NEW.service_target_id = service_row.service_target_id
+          AND BINARY NEW.remote_service_id = BINARY service_row.remote_service_id
+          AND NEW.target_remote_identity_generation = service_row.remote_identity_generation
+          AND NEW.target_lifecycle_version = service_row.lifecycle_version
+          AND BINARY NEW.operation_key = BINARY CONCAT('service-mutation:', service_row.public_id, ':', NEW.operation_generation, ':reconfigure')
+          AND preview_row.actor_user_id = service_row.user_id
+          AND preview_row.total_price_irr = 0
+          AND preview_row.state = 'previewed'
+          AND preview_row.expires_at > CURRENT_TIMESTAMP(6)
+          AND preview_row.source_mutation_generation = NEW.operation_generation - 1
+          AND preview_row.source_remote_identity_generation = service_row.remote_identity_generation
+          AND preview_row.source_lifecycle_version = service_row.lifecycle_version
+          AND preview_row.source_service_target_id = service_row.service_target_id
+          AND (preview_row.source_route_selection_id <=> service_row.route_selection_id)
+          AND target_offering.state = 'active'
+          AND target_offering.visibility = 'visible'
+          AND target_selection.plan_offering_id = preview_row.target_plan_offering_id
+          AND target_selection.selected_service_target_id = preview_row.target_service_target_id
+          AND target_selection.panel_protocol_profile_id = preview_row.target_protocol_profile_id
+          AND target_selection.capacity_reservation_id = preview_row.target_capacity_reservation_id
+          AND target_reservation.state = 'held'
+          AND target_reservation.units = 1
+          AND target_reservation.expires_at > CURRENT_TIMESTAMP(6)
+          AND BINARY target_reservation.reservation_key = BINARY preview_row.target_capacity_reservation_key
+          AND source_target.panel_connection_id = target_target.panel_connection_id
+          AND EXISTS (
+              SELECT 1
+              FROM panel_target_capabilities capability_row
+              WHERE capability_row.panel_service_target_id = source_target.id
+                AND capability_row.capability_code = 'reconfigure_service'
+                AND capability_row.verification_status = 'verified'
+          )
+          AND target_target.state = 'active'
+          AND target_target.capability_status = 'verified'
+          AND target_target.version = preview_row.target_service_target_version
+          AND target_profile.state = 'active'
+          AND target_profile.version = preview_row.target_protocol_profile_version
+          AND (preview_row.source_route_selection_id IS NULL OR (source_reservation.state = 'committed' AND source_reservation.units = 1))
+        LIMIT 1 FOR UPDATE;
+
+        IF valid_mutation_service_id IS NULL THEN
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Zero-cost Service reconfiguration does not match preview and current Service authority.';
+        END IF;
     ELSE
         IF COALESCE(@app_service_mutation_authority, '') <> 'service_mutation_queue_v1'
            OR NEW.operation_type NOT IN ('reset_usage','suspend','activate','delete','rotate_subscription_link')

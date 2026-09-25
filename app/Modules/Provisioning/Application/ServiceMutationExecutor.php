@@ -34,7 +34,7 @@ use Throwable;
  * @phpstan-type MutationService object{id:int|string,public_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type PaidTarget array{snapshot_hash:string,target_expires_at:?DateTimeImmutable,target_data_limit_bytes:?int}
  * @phpstan-type PaidAuthority object{id:int|string,provisioning_operation_id:int|string,purchase_settlement_id:int|string,payment_intent_id:int|string,action:string,duration_days:int|string|null,data_bytes:int|string|null,remote_snapshot_hash:?string,target_expires_at:?string,target_data_limit_bytes:int|string|null,targets_resolved_at:?string}
- * @phpstan-type ReconfigurationExecutionAuthority object{id:int|string,provisioning_operation_id:int|string,service_subscription_id:int|string,purchase_settlement_id:int|string,payment_intent_id:int|string,target_plan_offering_id:int|string,target_plan_offering_code:string,target_plan_offering_version:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,target_capacity_reservation_key:string,target_reference:string,target_protocol_profile_code:string,quoted_remote_identity_generation:int|string,quoted_lifecycle_version:int|string,quoted_mutation_generation:int|string,result_remote_service_id:?string,remote_result_snapshot_hash:?string,result_recorded_at:?string,target_reservation_state:string,target_reservation_version:int|string,target_reservation_expires_at:string,current_offering_version:int|string,current_offering_state:string,current_offering_visibility:string,current_target_version:int|string,current_profile_version:int|string,target_connection_id:int|string,source_connection_id:int|string,source_reservation_state:?string,source_reservation_version:int|string|null,source_reservation_key:?string}
+ * @phpstan-type ReconfigurationExecutionAuthority object{id:int|string,provisioning_operation_id:int|string,service_subscription_id:int|string,authorization_mode:string,purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,target_plan_offering_id:int|string,target_plan_offering_code:string,target_plan_offering_version:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,target_capacity_reservation_key:string,target_reference:string,target_protocol_profile_code:string,quoted_remote_identity_generation:int|string,quoted_lifecycle_version:int|string,quoted_mutation_generation:int|string,result_remote_service_id:?string,remote_result_snapshot_hash:?string,result_recorded_at:?string,target_reservation_state:string,target_reservation_version:int|string,target_reservation_expires_at:string,current_offering_version:int|string,current_offering_state:string,current_offering_visibility:string,current_target_version:int|string,current_profile_version:int|string,target_connection_id:int|string,source_connection_id:int|string,source_reservation_state:?string,source_reservation_version:int|string|null,source_reservation_key:?string}
  */
 final readonly class ServiceMutationExecutor
 {
@@ -418,6 +418,29 @@ final readonly class ServiceMutationExecutor
                     ->on('invalidation.payment_intent_id', '=', 'authority_row.payment_intent_id');
             })
             ->where('authority_row.provisioning_operation_id', $operationId)
+            ->where('authority_row.authorization_mode', 'paid_purchase')
+            ->exists();
+    }
+
+    /** @param ReconfigurationExecutionAuthority $authority */
+    private function reconfigurationFinanciallyInvalidated(Connection $connection, object $authority): bool
+    {
+        if ($authority->authorization_mode === 'no_charge') {
+            if ($authority->purchase_settlement_id !== null || $authority->payment_intent_id !== null) {
+                throw new RuntimeException('Zero-cost Service reconfiguration has conflicting financial authority.');
+            }
+
+            return false;
+        }
+        if ($authority->authorization_mode !== 'paid_purchase'
+            || $authority->purchase_settlement_id === null
+            || $authority->payment_intent_id === null) {
+            throw new RuntimeException('Paid Service reconfiguration financial authority shape is invalid.');
+        }
+
+        return $connection->table('provisioning_financial_invalidations')
+            ->where('purchase_settlement_id', $this->positiveDatabaseInt($authority->purchase_settlement_id, 'Purchase settlement ID'))
+            ->where('payment_intent_id', $this->positiveDatabaseInt($authority->payment_intent_id, 'Payment intent ID'))
             ->exists();
     }
 
@@ -506,10 +529,7 @@ final readonly class ServiceMutationExecutor
                 || (int) $authority->current_profile_version !== (int) $authority->target_protocol_profile_version
                 || (int) $authority->source_connection_id !== (int) $authority->target_connection_id
                 || ($authority->source_route_selection_id !== null && $authority->source_reservation_state !== 'committed')
-                || $connection->table('provisioning_financial_invalidations')
-                    ->where('purchase_settlement_id', (int) $authority->purchase_settlement_id)
-                    ->where('payment_intent_id', (int) $authority->payment_intent_id)
-                    ->exists()) {
+                || $this->reconfigurationFinanciallyInvalidated($connection, $authority)) {
                 return null;
             }
 
@@ -593,10 +613,7 @@ final readonly class ServiceMutationExecutor
                 || (int) $authority->current_profile_version !== (int) $authority->target_protocol_profile_version
                 || (int) $authority->source_connection_id !== (int) $authority->target_connection_id
                 || ($authority->source_route_selection_id !== null && $authority->source_reservation_state !== 'committed')
-                || $connection->table('provisioning_financial_invalidations')
-                    ->where('purchase_settlement_id', (int) $authority->purchase_settlement_id)
-                    ->where('payment_intent_id', (int) $authority->payment_intent_id)
-                    ->exists()) {
+                || $this->reconfigurationFinanciallyInvalidated($connection, $authority)) {
                 throw new DomainException('Service reconfiguration destination or financial authority changed after provider success.');
             }
             if (! hash_equals($verifiedRemote->remoteId, $this->requiredString($result->service?->remoteId, 'Reconfiguration remote result ID'))
@@ -727,7 +744,7 @@ final readonly class ServiceMutationExecutor
         /** @var ReconfigurationExecutionAuthority|null $row */
         $row = $query->first([
             'authority_row.id', 'authority_row.provisioning_operation_id', 'authority_row.service_subscription_id',
-            'authority_row.purchase_settlement_id', 'authority_row.payment_intent_id',
+            'authority_row.authorization_mode', 'authority_row.purchase_settlement_id', 'authority_row.payment_intent_id',
             'authority_row.target_plan_offering_id', 'authority_row.target_plan_offering_code', 'authority_row.target_plan_offering_version',
             'authority_row.source_route_selection_id',
             'authority_row.source_service_target_id', 'authority_row.target_route_selection_id', 'authority_row.target_service_target_id',

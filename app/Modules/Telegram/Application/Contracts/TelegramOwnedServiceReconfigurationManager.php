@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application\Contracts;
 
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
+use App\Modules\Telegram\Application\TelegramServiceReconfigurationExecution;
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationOptions;
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationPreview;
 use DateTimeImmutable;
@@ -29,6 +30,14 @@ interface TelegramOwnedServiceReconfigurationManager
         string $requestKey,
         string $correlationId,
     ): TelegramServiceReconfigurationPreview;
+
+    public function executeNoChargeForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $previewPublicId,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramServiceReconfigurationExecution;
 
     public function quoteForSelf(
         int $actorUserId,

@@ -508,6 +508,7 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
                 'confirm_free' => 'Confirm free change',
                 'stale' => 'The selected option is no longer valid; current options were reloaded.',
                 'unavailable' => 'This change is no longer allowed by the current Service state, policy, capacity, or Panel capability.',
+                'queued' => "The zero-cost Service change was queued successfully.\n\nOperation: :operation_id",
                 'payment_quote' => "Service change payment\n\nQuote: :quote_id\nTarget plan: :plan\nTotal: :final_price :currency\nExpires: :expires_at",
             ],
             'lifecycle' => [

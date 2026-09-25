@@ -17,6 +17,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceReconfigurationManager;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuotePreview;
+use App\Modules\Telegram\Application\TelegramServiceReconfigurationExecution;
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationOptions;
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationPreview;
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationProtocolOption;
@@ -47,6 +48,7 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
         private RouteOperationalVerifier $routeVerifier,
         private TargetCapacityAllocator $capacity,
         private ServiceReconfigurationPreviewService $previews,
+        private ServiceReconfigurationNoChargeQueueService $noChargeQueue,
         private QuoteService $quotes,
         private TelegramCustomerPurchaseQuote $purchaseQuotes,
     ) {}
@@ -136,6 +138,33 @@ final readonly class TelegramOwnedServiceReconfigurationService implements Teleg
             $receipt->operationFeeIrr,
             $receipt->totalPriceIrr,
             $receipt->expiresAt,
+            $receipt->replayed,
+        );
+    }
+
+    /** @requirement SVC-005 PRV-002 PRV-003 DAT-003 SEC-002 QUA-004 */
+    public function executeNoChargeForSelf(
+        int $actorUserId,
+        int $subjectUserId,
+        string $previewPublicId,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramServiceReconfigurationExecution {
+        if ($actorUserId < 1 || $subjectUserId < 1 || $actorUserId !== $subjectUserId) {
+            throw new AuthorizationException('Zero-cost Service reconfiguration is restricted to self-service.');
+        }
+
+        $receipt = $this->noChargeQueue->queueForSelf(
+            $actorUserId,
+            $previewPublicId,
+            $requestKey,
+            $correlationId,
+        );
+
+        return new TelegramServiceReconfigurationExecution(
+            $receipt->servicePublicId,
+            $receipt->operationPublicId,
+            $receipt->state->value,
             $receipt->replayed,
         );
     }

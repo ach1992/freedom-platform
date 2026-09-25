@@ -239,7 +239,7 @@ BEGIN
            OR (OLD.provisioned_at IS NOT NULL AND NEW.provisioned_at <> OLD.provisioned_at) THEN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Subscription remote binding mutation is not allowed.';
         END IF;
-    ELSEIF COALESCE(@app_service_mutation_authority, '') IN ('service_mutation_queue_v1', 'service_paid_mutation_queue_v1') THEN
+    ELSEIF COALESCE(@app_service_mutation_authority, '') IN ('service_mutation_queue_v1', 'service_paid_mutation_queue_v1', 'service_reconfiguration_no_charge_queue_v1') THEN
         SELECT COUNT(*) INTO unresolved_mutations
         FROM provisioning_operations operation_row
         WHERE operation_row.service_subscription_id = OLD.id

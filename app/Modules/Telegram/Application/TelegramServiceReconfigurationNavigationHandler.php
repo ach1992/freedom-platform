@@ -24,6 +24,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
     private const STATE_ROUTE = 'service_reconfigure_route';
     private const STATE_PROTOCOL = 'service_reconfigure_protocol';
     private const STATE_PREVIEW = 'service_reconfigure_preview';
+    private const STATE_RESULT = 'service_reconfigure_result';
     private const ACTION_OFFERING_PAGE = 'navigation.service.reconfigure.offering_page';
     private const ACTION_OFFERING_SELECT = 'navigation.service.reconfigure.offering';
     private const ACTION_ROUTE_SELECT = 'navigation.service.reconfigure.route';
@@ -57,6 +58,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
                 self::STATE_ROUTE,
                 self::STATE_PROTOCOL,
                 self::STATE_PREVIEW,
+                self::STATE_RESULT,
             ], true);
     }
 
@@ -91,6 +93,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             self::STATE_ROUTE => $this->handleRoute($action),
             self::STATE_PROTOCOL => $this->handleProtocol($action),
             self::STATE_PREVIEW => $this->handlePreview($action),
+            self::STATE_RESULT => $this->handleResult($action),
             default => throw new RuntimeException('Telegram Service reconfiguration state is unsupported.'),
         };
     }
@@ -204,36 +207,63 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
 
     private function handlePreview(TelegramInteractionAction $action): void
     {
-        [$servicePage, $selection, , $offeringSelection, $previewPublicId] = $this->previewState($action->sessionPayload);
+        [$servicePage, $selection, , $offeringSelection, $previewPublicId, $requiresPayment] = $this->previewState($action->sessionPayload);
         if ($action->kind !== TelegramInteractionActionKind::Callback
             || $action->callbackAction !== self::ACTION_CONFIRM
             || $action->callbackPayload !== []) {
             throw new RuntimeException('Telegram Service reconfiguration preview action is unsupported.');
         }
 
+        $callback = $this->callbackPublicId($action);
         try {
-            $callback = $this->callbackPublicId($action);
-            $quote = $this->reconfiguration->quoteForSelf(
+            if ($requiresPayment) {
+                $quote = $this->reconfiguration->quoteForSelf(
+                    $action->userId,
+                    $action->userId,
+                    $offeringSelection,
+                    $previewPublicId,
+                    $this->clock->now(),
+                    'tg-service-reconfig-quote-'.substr(hash('sha256', $callback), 0, 48),
+                    'tg-service-reconfig-'.substr(hash('sha256', $callback.':quote'), 0, 40),
+                );
+                $this->navigation->showPreparedServiceReconfigurationQuote(
+                    $action,
+                    $selection,
+                    $servicePage,
+                    $offeringSelection,
+                    $quote,
+                );
+
+                return;
+            }
+
+            $execution = $this->reconfiguration->executeNoChargeForSelf(
                 $action->userId,
                 $action->userId,
-                $offeringSelection,
                 $previewPublicId,
-                $this->clock->now(),
-                'tg-service-reconfig-quote-'.substr(hash('sha256', $callback), 0, 48),
-                'tg-service-reconfig-'.substr(hash('sha256', $callback.':quote'), 0, 40),
+                'tg-service-reconfig-free-'.substr(hash('sha256', $callback), 0, 48),
+                'tg-service-reconfig-'.substr(hash('sha256', $callback.':no-charge'), 0, 40),
             );
         } catch (AuthorizationException|DomainException) {
             $this->showUnavailable($action, $selection, $servicePage);
             return;
         }
 
-        $this->navigation->showPreparedServiceReconfigurationQuote(
+        $session = $this->transition(
             $action,
-            $selection,
-            $servicePage,
-            $offeringSelection,
-            $quote,
+            self::STATE_RESULT,
+            ['service_page' => $servicePage, 'service_selection' => $selection],
+            'no-charge-result',
         );
+        if ($session === null) {
+            return;
+        }
+        $this->renderExecutionResult($action, $session, $execution);
+    }
+
+    private function handleResult(TelegramInteractionAction $action): void
+    {
+        // Back is handled before state dispatch. Other updates do not mutate a completed result surface.
     }
 
     private function showOfferings(
@@ -461,6 +491,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
                 'offering_page' => $offeringPage,
                 'offering_selection' => $offeringSelection,
                 'preview_public_id' => $preview->previewPublicId,
+                'requires_payment' => $preview->requiresPayment(),
             ],
             'preview',
         );
@@ -508,14 +539,8 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
     {
         $session = $this->transition(
             $action,
-            self::STATE_PREVIEW,
-            [
-                'service_page' => $servicePage,
-                'service_selection' => $selection,
-                'offering_page' => 1,
-                'offering_selection' => str_repeat('0', 40),
-                'preview_public_id' => str_repeat('0', 26),
-            ],
+            self::STATE_RESULT,
+            ['service_page' => $servicePage, 'service_selection' => $selection],
             'unavailable',
         );
         if ($session === null) {
@@ -526,6 +551,22 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             $this->translation('telegram.navigation.services.reconfiguration.unavailable', $this->locale($action->userId)),
             'unavailable',
             new TelegramInlineKeyboardSnapshot([[$this->backButton($session, $action, 'unavailable-back')]]),
+        );
+    }
+
+    private function renderExecutionResult(
+        TelegramInteractionAction $action,
+        TelegramInteractionSessionReceipt $session,
+        TelegramServiceReconfigurationExecution $execution,
+    ): void {
+        $locale = $this->locale($action->userId);
+        $this->queue(
+            $action,
+            $this->translation('telegram.navigation.services.reconfiguration.queued', $locale, [
+                'operation_id' => $execution->operationPublicId,
+            ]),
+            'queued',
+            new TelegramInlineKeyboardSnapshot([[$this->backButton($session, $action, 'queued-back')]]),
         );
     }
 
@@ -598,17 +639,28 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
     }
 
     /** @param array<string,mixed> $payload
-     * @return array{int,string,int,string,string}
+     * @return array{int,string,int,string,string,bool}
      */
     private function previewState(array $payload): array
     {
-        if (count($payload) !== 5
+        if (count($payload) !== 6
             || ! is_string($payload['preview_public_id'] ?? null)
-            || preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/i', $payload['preview_public_id']) !== 1) {
+            || preg_match('/\\A[0-9A-HJKMNP-TV-Z]{26}\\z/i', $payload['preview_public_id']) !== 1
+            || ! is_bool($payload['requires_payment'] ?? null)) {
             throw new RuntimeException('Stored Telegram Service reconfiguration preview state is invalid.');
         }
-        [$servicePage, $selection, $offeringPage, $offeringSelection] = $this->routeState(array_diff_key($payload, ['preview_public_id' => true]));
-        return [$servicePage, $selection, $offeringPage, $offeringSelection, $payload['preview_public_id']];
+        [$servicePage, $selection, $offeringPage, $offeringSelection] = $this->routeState(
+            array_diff_key($payload, ['preview_public_id' => true, 'requires_payment' => true]),
+        );
+
+        return [
+            $servicePage,
+            $selection,
+            $offeringPage,
+            $offeringSelection,
+            $payload['preview_public_id'],
+            $payload['requires_payment'],
+        ];
     }
 
     private function selection(mixed $value): string

@@ -286,6 +286,7 @@ final readonly class ServicePurchaseMutationQueueService
                         'public_id' => (string) Str::ulid(),
                         'provisioning_operation_id' => $operationId,
                         'service_subscription_id' => (int) $service->id,
+                        'authorization_mode' => 'paid_purchase',
                         'source_quote_id' => (int) $quote->id,
                         'purchase_order_id' => (int) $order->id,
                         'purchase_order_item_id' => (int) $item->id,

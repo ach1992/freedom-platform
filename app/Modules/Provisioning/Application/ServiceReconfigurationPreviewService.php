@@ -83,6 +83,13 @@ final readonly class ServiceReconfigurationPreviewService
         }
 
         $baseline = $this->baseline($actorUserId, $servicePublicId);
+        if (! $this->database->connection()->table('panel_target_capabilities')
+            ->where('panel_service_target_id', (int) $baseline->service_target_id)
+            ->where('capability_code', 'reconfigure_service')
+            ->where('verification_status', 'verified')
+            ->exists()) {
+            throw new DomainException('Current Service target does not expose verified reconfiguration capability.');
+        }
         $targetOffering = $this->targetOffering($targetOfferingCode);
         $requestedRouteId = $this->requestedRouteId((int) $targetOffering->id, $requestedSalesServerCode);
         $requestedProtocolId = $this->requestedProtocolId($requestedProtocolProfileCode);
