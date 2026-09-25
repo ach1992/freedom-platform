@@ -10,6 +10,7 @@ use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
+use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
@@ -358,6 +359,7 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(SupportTicketAttachmentService::class),
                 $application->make(TelegramSupportMembershipFreshnessGuard::class),
                 $application->make(TelegramPrivateMediaDeliveryResolver::class),
+                $application->make(TelegramAlternativePaymentReview::class),
             ),
         );
         $this->app->singleton(
