@@ -229,6 +229,9 @@ final readonly class ServiceMutationRecoveryService
             ServiceMutationType::AddDays,
             ServiceMutationType::AddDataDays,
             ServiceMutationType::Reconfigure => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+            ServiceMutationType::GrantData,
+            ServiceMutationType::GrantDays,
+            ServiceMutationType::GrantDataDays => $service->lifecycle_state === 'active',
         };
     }
 

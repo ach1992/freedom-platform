@@ -89,6 +89,19 @@ final class ServiceMutationExecutorNormalizationTest extends TestCase
         self::assertStringContainsString("->whereNotIn('state', self::TERMINAL_STATES)", $source);
     }
 
+    public function test_administrative_entitlement_grants_cannot_bypass_audited_queue_authority(): void
+    {
+        $queue = $this->classSource(ServiceMutationQueueService::class);
+        self::assertStringContainsString('if ($type->isAdministrativeEntitlementGrant())', $queue);
+        self::assertStringContainsString('Administrative Service entitlement grants require audited grant authority.', $queue);
+
+        $executor = $this->classSource(ServiceMutationExecutor::class);
+        self::assertStringContainsString('private function grantTarget(', $executor);
+        self::assertStringContainsString('private function markGrantProviderBoundary(', $executor);
+        self::assertStringContainsString('private function invokeGrant(', $executor);
+        self::assertStringContainsString('service_entitlement_grant_authorities', $executor);
+    }
+
     /** @param class-string $class */
     private function classSource(string $class): string
     {

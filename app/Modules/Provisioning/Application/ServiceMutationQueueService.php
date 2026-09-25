@@ -51,6 +51,9 @@ final readonly class ServiceMutationQueueService
         if ($type->isPaidCommercialMutation()) {
             throw new DomainException('Paid Service commercial mutations require captured purchase authority.');
         }
+        if ($type->isAdministrativeEntitlementGrant()) {
+            throw new DomainException('Administrative Service entitlement grants require audited grant authority.');
+        }
         $requestKeyHash = $this->requestKeyHash($requestKey);
         $this->assertToken($correlationId, 'Service mutation correlation ID', 8, 64);
 

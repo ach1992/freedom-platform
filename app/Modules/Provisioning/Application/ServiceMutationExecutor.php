@@ -34,6 +34,8 @@ use Throwable;
  * @phpstan-type MutationService object{id:int|string,public_id:string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type PaidTarget array{snapshot_hash:string,target_expires_at:?DateTimeImmutable,target_data_limit_bytes:?int}
  * @phpstan-type PaidAuthority object{id:int|string,provisioning_operation_id:int|string,purchase_settlement_id:int|string,payment_intent_id:int|string,action:string,duration_days:int|string|null,data_bytes:int|string|null,remote_snapshot_hash:?string,target_expires_at:?string,target_data_limit_bytes:int|string|null,targets_resolved_at:?string}
+ * @phpstan-type GrantTarget array{snapshot_hash:string,target_expires_at:?DateTimeImmutable,target_data_limit_bytes:?int}
+ * @phpstan-type GrantAuthority object{id:int|string,provisioning_operation_id:int|string,action:string,duration_days:int|string|null,data_bytes:int|string|null,remote_snapshot_hash:?string,target_expires_at:?string,target_data_limit_bytes:int|string|null,targets_resolved_at:?string}
  * @phpstan-type ReconfigurationExecutionAuthority object{id:int|string,provisioning_operation_id:int|string,service_subscription_id:int|string,authorization_mode:string,purchase_settlement_id:int|string|null,payment_intent_id:int|string|null,target_plan_offering_id:int|string,target_plan_offering_code:string,target_plan_offering_version:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,target_capacity_reservation_key:string,target_reference:string,target_protocol_profile_code:string,quoted_remote_identity_generation:int|string,quoted_lifecycle_version:int|string,quoted_mutation_generation:int|string,result_remote_service_id:?string,remote_result_snapshot_hash:?string,result_recorded_at:?string,target_reservation_state:string,target_reservation_version:int|string,target_reservation_expires_at:string,current_offering_version:int|string,current_offering_state:string,current_offering_visibility:string,current_target_version:int|string,current_profile_version:int|string,target_connection_id:int|string,source_connection_id:int|string,source_reservation_state:?string,source_reservation_version:int|string|null,source_reservation_key:?string}
  */
 final readonly class ServiceMutationExecutor
@@ -46,6 +48,7 @@ final readonly class ServiceMutationExecutor
         private ProvisioningPanelAdapterResolver $adapters,
         private TargetCapacityAllocator $capacity,
         private ServiceDeliveryAttemptQueueService $deliveries,
+        private ServiceOperationalDatabaseCapability $operationalDatabaseCapability,
     ) {}
 
     /** @requirement SVC-004 SVC-005 PRV-001 PRV-002 PRV-003 DAT-003 SEC-002 SEC-008 QUA-004 */
@@ -124,7 +127,8 @@ final readonly class ServiceMutationExecutor
                 'Panel does not support the requested Service mutation.',
             );
         }
-        if ($type === ServiceMutationType::AddDataDays && ! $adapter instanceof AtomicServiceEntitlementAdapter) {
+        if (in_array($type, [ServiceMutationType::AddDataDays, ServiceMutationType::GrantDataDays], true)
+            && ! $adapter instanceof AtomicServiceEntitlementAdapter) {
             return $this->finalize(
                 $operation,
                 $type,
@@ -145,37 +149,55 @@ final readonly class ServiceMutationExecutor
 
         /** @var PaidTarget|null $paidTarget */
         $paidTarget = null;
-        if ($type->isPaidEntitlement()) {
+        /** @var GrantTarget|null $grantTarget */
+        $grantTarget = null;
+        if ($type->isEntitlementMutation()) {
             $this->assertProviderCallOutsideTransaction();
             try {
                 $remote = $adapter->findByRemoteId($this->requiredString($operation->remote_service_id, 'Remote Service ID'));
             } catch (Throwable) {
+                $isGrant = $type->isAdministrativeEntitlementGrant();
+
                 return $this->finalize(
                     $operation,
                     $type,
                     ProvisioningState::RetryScheduled,
-                    'paid_mutation_remote_lookup_unavailable',
-                    'Authoritative remote Service lookup is unavailable before the paid mutation boundary.',
+                    $isGrant ? 'grant_mutation_remote_lookup_unavailable' : 'paid_mutation_remote_lookup_unavailable',
+                    $isGrant
+                        ? 'Authoritative remote Service lookup is unavailable before the administrative grant boundary.'
+                        : 'Authoritative remote Service lookup is unavailable before the paid mutation boundary.',
                 );
             }
             if ($remote === null) {
+                $isGrant = $type->isAdministrativeEntitlementGrant();
+
                 return $this->finalize(
                     $operation,
                     $type,
                     ProvisioningState::NeedsReview,
-                    'paid_mutation_remote_missing',
-                    'Paid Service mutation target is absent from the authoritative remote lookup.',
+                    $isGrant ? 'grant_mutation_remote_missing' : 'paid_mutation_remote_missing',
+                    $isGrant
+                        ? 'Administrative entitlement grant target is absent from the authoritative remote lookup.'
+                        : 'Paid Service mutation target is absent from the authoritative remote lookup.',
                 );
             }
             try {
-                $paidTarget = $this->paidTarget($operation, $type, $remote);
+                if ($type->isAdministrativeEntitlementGrant()) {
+                    $grantTarget = $this->grantTarget($operation, $type, $remote);
+                } else {
+                    $paidTarget = $this->paidTarget($operation, $type, $remote);
+                }
             } catch (DomainException|RuntimeException) {
+                $isGrant = $type->isAdministrativeEntitlementGrant();
+
                 return $this->finalize(
                     $operation,
                     $type,
                     ProvisioningState::NeedsReview,
-                    'paid_mutation_remote_state_ambiguous',
-                    'Paid Service mutation cannot derive a safe absolute target from current remote state.',
+                    $isGrant ? 'grant_mutation_remote_state_ambiguous' : 'paid_mutation_remote_state_ambiguous',
+                    $isGrant
+                        ? 'Administrative entitlement grant cannot derive a safe absolute target from current remote state.'
+                        : 'Paid Service mutation cannot derive a safe absolute target from current remote state.',
                 );
             }
         }
@@ -196,9 +218,11 @@ final readonly class ServiceMutationExecutor
             }
             [$operation, $reconfigurationRequest] = $boundary;
         } else {
-            $boundaryOperation = $paidTarget === null
-                ? $this->markProviderBoundary($operation, $type)
-                : $this->markPaidProviderBoundary($operation, $type, $paidTarget);
+            $boundaryOperation = match (true) {
+                $paidTarget !== null => $this->markPaidProviderBoundary($operation, $type, $paidTarget),
+                $grantTarget !== null => $this->markGrantProviderBoundary($operation, $type, $grantTarget),
+                default => $this->markProviderBoundary($operation, $type),
+            };
             if ($boundaryOperation === null) {
                 return $this->finalize(
                     $operation,
@@ -220,20 +244,28 @@ final readonly class ServiceMutationExecutor
                 }
                 $result = $adapter->reconfigureService($reconfigurationRequest);
             } else {
-                $result = $paidTarget === null
-                    ? $this->invoke(
-                        $adapter,
-                        $type,
-                        $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
-                        $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
-                    )
-                    : $this->invokePaid(
+                $result = match (true) {
+                    $paidTarget !== null => $this->invokePaid(
                         $adapter,
                         $type,
                         $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
                         $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
                         $paidTarget,
-                    );
+                    ),
+                    $grantTarget !== null => $this->invokeGrant(
+                        $adapter,
+                        $type,
+                        $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                        $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                        $grantTarget,
+                    ),
+                    default => $this->invoke(
+                        $adapter,
+                        $type,
+                        $this->requiredString($operation->effect_fence_key, 'Service mutation effect fence'),
+                        $this->requiredString($operation->remote_service_id, 'Remote Service ID'),
+                    ),
+                };
             }
         } catch (Throwable) {
             return $this->finalize(
@@ -828,6 +860,69 @@ final readonly class ServiceMutationExecutor
     }
 
     /**
+     * @param  MutationOperation  $operation
+     * @return GrantTarget
+     */
+    private function grantTarget(object $operation, ServiceMutationType $type, RemoteServiceSnapshot $remote): array
+    {
+        if (! $type->isAdministrativeEntitlementGrant()) {
+            throw new RuntimeException('Non-grant mutation reached the administrative entitlement target path.');
+        }
+        if (! hash_equals($this->requiredString($operation->remote_service_id, 'Remote Service ID'), $remote->remoteId)) {
+            throw new DomainException('Authoritative remote Service identity changed before administrative entitlement grant.');
+        }
+
+        /** @var GrantAuthority|null $authority */
+        $authority = $this->database->connection()->table('service_entitlement_grant_authorities')
+            ->where('provisioning_operation_id', (int) $operation->id)
+            ->first([
+                'id', 'provisioning_operation_id', 'action', 'duration_days', 'data_bytes',
+                'remote_snapshot_hash', 'target_expires_at', 'target_data_limit_bytes', 'targets_resolved_at',
+            ]);
+        if ($authority === null || $authority->action !== $type->value) {
+            throw new DomainException('Administrative Service entitlement grant authority is unavailable.');
+        }
+        if ($authority->targets_resolved_at !== null
+            || $authority->remote_snapshot_hash !== null
+            || $authority->target_expires_at !== null
+            || $authority->target_data_limit_bytes !== null) {
+            throw new DomainException('Administrative Service entitlement grant target was already resolved and requires reconciliation.');
+        }
+
+        $targetExpiry = null;
+        if (in_array($type, [ServiceMutationType::GrantDays, ServiceMutationType::GrantDataDays], true)) {
+            $durationDays = $this->positiveDatabaseInt($authority->duration_days, 'Service entitlement grant duration days');
+            if ($remote->expiresAt === null) {
+                throw new DomainException('Administrative duration grant cannot safely extend an unlimited/unknown remote expiry.');
+            }
+            $now = $this->clock->now()->setTimezone(new DateTimeZone('UTC'));
+            $base = $remote->expiresAt > $now ? $remote->expiresAt : $now;
+            $targetExpiry = $base->modify('+'.$durationDays.' days');
+            if (! $targetExpiry instanceof DateTimeImmutable || $targetExpiry <= $base) {
+                throw new RuntimeException('Administrative duration grant target overflowed.');
+            }
+        }
+
+        $targetDataLimit = null;
+        if (in_array($type, [ServiceMutationType::GrantData, ServiceMutationType::GrantDataDays], true)) {
+            $dataBytes = $this->positiveDatabaseInt($authority->data_bytes, 'Service entitlement grant data bytes');
+            if ($remote->dataLimitBytes === null) {
+                throw new DomainException('Administrative data grant cannot safely extend an unlimited/unknown remote allowance.');
+            }
+            if ($remote->dataLimitBytes > PHP_INT_MAX - $dataBytes) {
+                throw new RuntimeException('Administrative data grant target overflowed.');
+            }
+            $targetDataLimit = $remote->dataLimitBytes + $dataBytes;
+        }
+
+        return [
+            'snapshot_hash' => $remote->canonicalHash,
+            'target_expires_at' => $targetExpiry,
+            'target_data_limit_bytes' => $targetDataLimit,
+        ];
+    }
+
+    /**
      * @param  MutationOperation  $locator
      * @param  PaidTarget  $target
      * @return MutationOperation|null
@@ -914,6 +1009,92 @@ final readonly class ServiceMutationExecutor
         }, 3);
     }
 
+    /**
+     * @param  MutationOperation  $locator
+     * @param  GrantTarget  $target
+     * @return MutationOperation|null
+     */
+    private function markGrantProviderBoundary(object $locator, ServiceMutationType $type, array $target): ?object
+    {
+        if (! $type->isAdministrativeEntitlementGrant()) {
+            throw new RuntimeException('Non-grant mutation reached the administrative entitlement provider boundary.');
+        }
+
+        return $this->database->connection()->transaction(function (Connection $connection) use ($locator, $type, $target): ?object {
+            $operation = $this->operationById($connection, (int) $locator->id, true);
+            if ($this->state($operation->state) !== ProvisioningState::Running
+                || $operation->remote_effect_started_at !== null
+                || $operation->remote_effect_completed_at !== null) {
+                throw new DomainException('Administrative Service entitlement grant provider boundary cannot be entered from the current state.');
+            }
+
+            $service = $this->serviceByIdOn($connection, (int) $operation->service_subscription_id, true);
+            if (! $this->serviceMatchesOperation($service, $operation, $type)) {
+                return null;
+            }
+
+            /** @var GrantAuthority|null $authority */
+            $authority = $connection->table('service_entitlement_grant_authorities')
+                ->where('provisioning_operation_id', (int) $operation->id)
+                ->lockForUpdate()
+                ->first([
+                    'id', 'provisioning_operation_id', 'action', 'duration_days', 'data_bytes',
+                    'remote_snapshot_hash', 'target_expires_at', 'target_data_limit_bytes', 'targets_resolved_at',
+                ]);
+            if ($authority === null
+                || $authority->action !== $type->value
+                || $authority->targets_resolved_at !== null
+                || $authority->remote_snapshot_hash !== null
+                || $authority->target_expires_at !== null
+                || $authority->target_data_limit_bytes !== null) {
+                return null;
+            }
+
+            $now = $this->timestamp();
+            $this->setGrantTargetAuthority($connection, $operation, $target);
+            try {
+                $updatedAuthority = $connection->table('service_entitlement_grant_authorities')
+                    ->where('id', (int) $authority->id)
+                    ->whereNull('targets_resolved_at')
+                    ->whereNull('remote_snapshot_hash')
+                    ->whereNull('target_expires_at')
+                    ->whereNull('target_data_limit_bytes')
+                    ->update([
+                        'remote_snapshot_hash' => $target['snapshot_hash'],
+                        'target_expires_at' => $target['target_expires_at']?->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
+                        'target_data_limit_bytes' => $target['target_data_limit_bytes'],
+                        'targets_resolved_at' => $now,
+                    ]);
+                if ($updatedAuthority !== 1) {
+                    throw new RuntimeException('Administrative Service entitlement grant target resolution lost its authority.');
+                }
+            } finally {
+                $this->clearGrantTargetAuthority($connection);
+            }
+
+            $this->setEffectAuthority($connection, $operation);
+            try {
+                $updated = $connection->table('provisioning_operations')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', ProvisioningState::Running->value)
+                    ->where('state_version', (int) $operation->state_version)
+                    ->whereNull('remote_effect_started_at')
+                    ->update([
+                        'state_version' => (int) $operation->state_version + 1,
+                        'remote_effect_started_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Administrative Service entitlement grant provider boundary lost its authority.');
+                }
+
+                return $this->operationById($connection, (int) $operation->id, true);
+            } finally {
+                $this->clearEffectAuthority($connection);
+            }
+        }, 3);
+    }
+
     /** @param PaidTarget $target */
     private function invokePaid(
         PanelAdapter $adapter,
@@ -943,6 +1124,38 @@ final readonly class ServiceMutationExecutor
                 )
                 : throw new RuntimeException('Atomic combined Service mutation adapter is unavailable.'),
             default => throw new RuntimeException('Non-paid Service mutation reached the paid provider path.'),
+        };
+    }
+
+    /** @param GrantTarget $target */
+    private function invokeGrant(
+        PanelAdapter $adapter,
+        ServiceMutationType $type,
+        string $idempotencyKey,
+        string $remoteId,
+        array $target,
+    ): PanelOperationResult {
+        return match ($type) {
+            ServiceMutationType::GrantDays => $adapter->updateExpiry(
+                $idempotencyKey,
+                $remoteId,
+                $target['target_expires_at'] ?? throw new RuntimeException('Administrative grant expiry target is unavailable.'),
+            ),
+            ServiceMutationType::GrantData => $adapter->updateDataAllowance(
+                $idempotencyKey,
+                $remoteId,
+                $target['target_data_limit_bytes'] ?? throw new RuntimeException('Administrative grant data target is unavailable.'),
+                DataAllowanceMode::Set,
+            ),
+            ServiceMutationType::GrantDataDays => $adapter instanceof AtomicServiceEntitlementAdapter
+                ? $adapter->updateServiceEntitlements(
+                    $idempotencyKey,
+                    $remoteId,
+                    $target['target_expires_at'] ?? throw new RuntimeException('Administrative combined grant expiry target is unavailable.'),
+                    $target['target_data_limit_bytes'] ?? throw new RuntimeException('Administrative combined grant data target is unavailable.'),
+                )
+                : throw new RuntimeException('Atomic combined Service entitlement grant adapter is unavailable.'),
+            default => throw new RuntimeException('Non-grant Service mutation reached the administrative entitlement provider path.'),
         };
     }
 
@@ -1052,6 +1265,7 @@ final readonly class ServiceMutationExecutor
         string $now,
     ): void {
         if ($type->isPaidCommercialMutation()
+            || $type->isAdministrativeEntitlementGrant()
             || in_array($type, [ServiceMutationType::ResetUsage, ServiceMutationType::RotateSubscriptionLink], true)) {
             return;
         }
@@ -1118,6 +1332,9 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::AddDays,
             ServiceMutationType::AddDataDays,
             ServiceMutationType::Reconfigure => in_array($service->lifecycle_state, ['active', 'suspended'], true),
+            ServiceMutationType::GrantData,
+            ServiceMutationType::GrantDays,
+            ServiceMutationType::GrantDataDays => $service->lifecycle_state === 'active',
         };
     }
 
@@ -1133,7 +1350,10 @@ final readonly class ServiceMutationExecutor
             ServiceMutationType::AddData,
             ServiceMutationType::AddDays,
             ServiceMutationType::AddDataDays,
-            ServiceMutationType::Reconfigure => throw new RuntimeException('Paid Service mutation reached the manual provider path.'),
+            ServiceMutationType::GrantData,
+            ServiceMutationType::GrantDays,
+            ServiceMutationType::GrantDataDays,
+            ServiceMutationType::Reconfigure => throw new RuntimeException('Entitlement or paid Service mutation reached the manual provider path.'),
         };
     }
 
@@ -1303,6 +1523,27 @@ final readonly class ServiceMutationExecutor
         $connection->statement('SET @app_service_paid_mutation_snapshot_hash = NULL');
         $connection->statement('SET @app_service_paid_mutation_target_expires_at = NULL');
         $connection->statement('SET @app_service_paid_mutation_target_data_limit = NULL');
+    }
+
+    /**
+     * @param  MutationOperation  $operation
+     * @param  GrantTarget  $target
+     */
+    private function setGrantTargetAuthority(Connection $connection, object $operation, array $target): void
+    {
+        $this->operationalDatabaseCapability->apply($connection);
+        $connection->statement('SET @app_service_entitlement_grant_target_authority = ?', ['service_entitlement_grant_target_v1']);
+        $connection->statement('SET @app_service_entitlement_grant_operation_id = ?', [(int) $operation->id]);
+        $connection->statement('SET @app_service_entitlement_grant_snapshot_hash = ?', [$target['snapshot_hash']]);
+        $connection->statement('SET @app_service_entitlement_grant_target_expires_at = ?', [
+            $target['target_expires_at']?->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
+        ]);
+        $connection->statement('SET @app_service_entitlement_grant_target_data_limit = ?', [$target['target_data_limit_bytes']]);
+    }
+
+    private function clearGrantTargetAuthority(Connection $connection): void
+    {
+        $this->operationalDatabaseCapability->clear($connection);
     }
 
     /** @param MutationOperation $operation */
