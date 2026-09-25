@@ -24,6 +24,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
+use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMediaMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageButtonBuilder;
@@ -631,7 +632,7 @@ final class TelegramNavigationCustomerPurchaseDiscountQuote implements TelegramC
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
-        ?\App\Modules\Telegram\Application\TelegramActionMembershipPreflight $membership = null,
+        ?TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview {
         $this->calls[] = [
             'actor_user_id' => $actorUserId,
@@ -2003,6 +2004,114 @@ final class TelegramNavigationEntryTest extends TestCase
         self::assertSame(1, DB::table('audit_logs')
             ->where('action', 'telegram.menu.rollback')
             ->count());
+    }
+
+    /** @requirement CHN-001 ACL-002 DAT-003 SEC-001 SEC-002 QUA-001 QUA-004 */
+    public function test_admin_membership_configuration_creates_channel_without_secret_projection_and_rechecks_permission(): void
+    {
+        $telegramUserId = 9620;
+        $username = 'membership_admin';
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $secretJoinUrl = 'https://t.me/+MembershipSecretToken01';
+
+        $this->accept($this->payload(6150, $telegramUserId, $username, 'en', '/start'));
+        $processor->process('123456789', 6150);
+        $account = DB::table('telegram_accounts')
+            ->where('telegram_user_id', $telegramUserId)
+            ->first(['id', 'user_id']);
+        self::assertNotNull($account);
+        $this->salesContentAdministratorForUser((int) $account->user_id);
+
+        $this->accept($this->payload(6151, $telegramUserId, $username, 'en', '/menu'));
+        $processor->process('123456789', 6151);
+        $adminToken = $this->callbackToken('navigation.admin', (int) $account->id);
+        $this->accept($this->callbackPayload(6152, $telegramUserId, $username, 'en', $adminToken));
+        $processor->process('123456789', 6152);
+
+        $membershipToken = $this->callbackToken('navigation.admin.membership', (int) $account->id);
+        $this->accept($this->callbackPayload(6153, $telegramUserId, $username, 'en', $membershipToken));
+        $this->processTelegramUpdateOrFail($processor, 6153);
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_membership_configuration', (string) $session->state);
+        self::assertSame('{}', (string) $session->payload);
+        self::assertStringContainsString('Channel Membership Configuration', $this->latestConfidentialPresentation());
+
+        $editToken = $this->callbackToken('navigation.admin.membership.edit', (int) $account->id);
+        $this->accept($this->callbackPayload(6154, $telegramUserId, $username, 'en', $editToken));
+        $this->processTelegramUpdateOrFail($processor, 6154);
+        self::assertSame('admin_membership_configuration_edit', (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+
+        $command = implode("\n", [
+            'operation=channel.create',
+            'channel_key=required_support',
+            'chat_id=-1002600000001',
+            'chat_type=channel',
+            'visibility=private',
+            'title=Required Support',
+            'join_url='.$secretJoinUrl,
+            'sort_order=10',
+            'reason=Verify Telegram membership administration',
+        ]);
+        $this->accept($this->payload(6155, $telegramUserId, $username, 'en', $command));
+        $this->processTelegramUpdateOrFail($processor, 6155);
+
+        $channel = DB::table('required_channels')
+            ->where('channel_key', 'required_support')
+            ->first(['id', 'state', 'version', 'join_url_ciphertext', 'join_url_hash']);
+        self::assertNotNull($channel);
+        self::assertSame('draft', (string) $channel->state);
+        self::assertSame(1, (int) $channel->version);
+        self::assertNotSame($secretJoinUrl, (string) $channel->join_url_ciphertext);
+        self::assertSame(hash('sha256', $secretJoinUrl), (string) $channel->join_url_hash);
+        self::assertSame(
+            $secretJoinUrl,
+            $this->app->make(StringEncrypter::class)->decryptString((string) $channel->join_url_ciphertext),
+        );
+
+        $session = DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->first(['id', 'state', 'payload']);
+        self::assertNotNull($session);
+        self::assertSame('admin_membership_configuration', (string) $session->state);
+        self::assertSame('{}', (string) $session->payload);
+        self::assertStringNotContainsString($secretJoinUrl, (string) $session->payload);
+        self::assertStringNotContainsString($secretJoinUrl, $this->latestConfidentialPresentation());
+        self::assertStringNotContainsString(
+            $secretJoinUrl,
+            $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId),
+        );
+
+        $audit = DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->first();
+        self::assertNotNull($audit);
+        $auditText = json_encode([$audit->before_safe_data, $audit->after_safe_data, $audit->reason], JSON_THROW_ON_ERROR);
+        self::assertStringNotContainsString($secretJoinUrl, $auditText);
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->count());
+
+        $processor->process('123456789', 6155);
+        self::assertSame(1, DB::table('required_channels')->where('channel_key', 'required_support')->count());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->count());
+
+        $editAfterCreate = $this->callbackToken('navigation.admin.membership.edit', (int) $account->id);
+        $roleId = DB::table('roles')->where('code', 'sales_content')->value('id');
+        $permissionId = DB::table('permissions')->where('code', 'telegram.membership.manage')->value('id');
+        self::assertIsNumeric($roleId);
+        self::assertIsNumeric($permissionId);
+        DB::table('role_permissions')
+            ->where('role_id', (int) $roleId)
+            ->where('permission_id', (int) $permissionId)
+            ->delete();
+
+        $this->accept($this->callbackPayload(6156, $telegramUserId, $username, 'en', $editAfterCreate));
+        $this->processTelegramUpdateOrFail($processor, 6156);
+        self::assertSame(TelegramNavigationEntryGateway::STATE, (string) DB::table('telegram_interaction_sessions')
+            ->where('telegram_account_id', (int) $account->id)
+            ->value('state'));
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'telegram.required_channel.create')->count());
     }
 
     /** @requirement SUP-002 CNT-001 CNT-002 SEC-002 QUA-001 QUA-004 */

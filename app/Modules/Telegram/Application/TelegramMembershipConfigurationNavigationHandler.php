@@ -518,7 +518,8 @@ TEXT;
     {
         $message = $exception->getMessage();
 
-        return str_starts_with($message, 'Telegram required')
+        return str_starts_with($message, 'Telegram configuration')
+            || str_starts_with($message, 'Telegram required')
             || str_starts_with($message, 'Telegram membership')
             || str_starts_with($message, 'Active Telegram')
             || str_starts_with($message, 'Stored Telegram');

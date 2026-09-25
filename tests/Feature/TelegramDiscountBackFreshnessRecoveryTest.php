@@ -8,6 +8,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
+use App\Modules\Telegram\Application\TelegramActionMembershipPreflight;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseDiscountQuotePreview;
@@ -164,7 +165,7 @@ final class StaleDiscountBackDiscountQuote implements TelegramCustomerPurchaseDi
         string $code,
         DateTimeImmutable $acceptedAt,
         string $operationKey,
-        ?\App\Modules\Telegram\Application\TelegramActionMembershipPreflight $membership = null,
+        ?TelegramActionMembershipPreflight $membership = null,
     ): TelegramCustomerPurchaseDiscountQuotePreview {
         throw new RuntimeException('Stale-Back recovery must not invoke discount re-Quote authority.');
     }

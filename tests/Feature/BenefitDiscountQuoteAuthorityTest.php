@@ -23,6 +23,10 @@ use App\Modules\Promotions\Domain\PromotionRuleDefinition;
 use App\Modules\Promotions\Domain\PromotionRuleState;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseDiscountQuote;
+use App\Modules\Telegram\Application\TelegramActionMembershipChanged;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleDefinition;
+use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
+use App\Modules\Telegram\Application\TelegramConfigurationChangeContext;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseCatalogPage;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseOffering;
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseQuoteRefreshRequired;
@@ -732,6 +736,36 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
         self::assertSame(1, DB::table('benefit_code_discount_quote_consumptions')->count());
     }
 
+    /** @requirement CHN-001 BUY-002 PRO-002 DAT-003 SEC-001 SEC-002 QUA-001 */
+    public function test_required_gift_code_membership_blocks_before_any_discount_financial_effect_without_preflight(): void
+    {
+        $fixture = $this->discountFixture('membership-fence');
+        $offeringCode = (string) DB::table('plan_offerings')->where('id', $fixture['offering']['id'])->value('code');
+        $offering = $this->telegramOffering($offeringCode, 1_000_000);
+        $catalog = new SequencedDiscountPurchaseCatalog($offering, $offering);
+        $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $this->activateGiftCodeMembershipRule('financial-boundary');
+        $service = $this->app->make(TelegramCustomerPurchaseDiscountQuote::class);
+
+        $this->assertExpectedException(fn () => $service->requoteForSelf(
+            $fixture['user_id'],
+            $fixture['user_id'],
+            $offering->selectionToken,
+            $fixture['source_quote']->quotePublicId,
+            $fixture['source_quote']->configurationSnapshotHash,
+            $fixture['code'],
+            $this->utcNow(),
+            hash('sha256', 'gift-membership-financial-boundary'),
+        ), TelegramActionMembershipChanged::class);
+
+        self::assertSame(0, $catalog->offeringCalls, 'Membership must be fenced before catalog or discount authority work.');
+        self::assertSame(0, DB::table('benefit_code_redemptions')->count());
+        self::assertSame(0, DB::table('benefit_code_discount_grants')->count());
+        self::assertSame(0, DB::table('pricing_rule_resolutions')->count());
+        self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
+        self::assertSame(1, DB::table('quotes')->count());
+    }
+
     public function test_full_discount_requote_path_exact_replay_returns_same_quote_and_consumption_with_accepted_time_expiry(): void
     {
         $fixture = $this->discountFixture('full-replay');
@@ -815,6 +849,75 @@ final class BenefitDiscountQuoteAuthorityTest extends TestCase
         self::assertSame(0, DB::table('pricing_rule_resolutions')->count());
         self::assertSame(0, DB::table('benefit_code_discount_quote_consumptions')->count());
         self::assertSame(1, DB::table('quotes')->count());
+    }
+
+    private function activateGiftCodeMembershipRule(string $suffix): int
+    {
+        $now = now('UTC');
+        $channelId = (int) DB::table('required_channels')->insertGetId([
+            'channel_key' => 'gift-code-'.substr(hash('sha256', $suffix), 0, 20),
+            'telegram_chat_id' => -1002700000001,
+            'chat_type' => 'channel',
+            'visibility' => 'private',
+            'display_title' => 'Gift code membership fixture',
+            'join_url_ciphertext' => str_repeat('c', 64),
+            'join_url_hash' => hash('sha256', 'gift-membership-'.$suffix),
+            'sort_order' => 10,
+            'state' => 'draft',
+            'version' => 1,
+            'verified_bot_id' => null,
+            'verification_result_code' => null,
+            'verified_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('required_channels')->where('id', $channelId)->update([
+            'state' => 'active',
+            'version' => 2,
+            'verified_bot_id' => 123456789,
+            'verification_result_code' => 'telegram_membership_administrator',
+            'verified_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = $this->app->make(TelegramChannelMembershipRuleService::class);
+        $definition = new TelegramChannelMembershipRuleDefinition(
+            'gift-code-'.substr(hash('sha256', $suffix), 0, 20),
+            'gift_code_use',
+            'customers',
+            null,
+            null,
+            null,
+            'all',
+            'fail_closed',
+            100,
+            null,
+            null,
+            [$channelId],
+        );
+        $created = $service->create(
+            $definition,
+            new TelegramConfigurationChangeContext(
+                'gift-membership-create-'.substr(hash('sha256', $suffix), 0, 32),
+                'gift-membership-correlation-'.substr(hash('sha256', $suffix), 0, 24),
+                'benefit_discount_quote_test',
+                'Create a required gift-code membership rule for the financial boundary test.',
+                $this->benefitOwner(),
+            ),
+        );
+        $service->activate(
+            $created->targetId,
+            1,
+            new TelegramConfigurationChangeContext(
+                'gift-membership-activate-'.substr(hash('sha256', $suffix), 0, 30),
+                'gift-membership-active-corr-'.substr(hash('sha256', $suffix), 0, 24),
+                'benefit_discount_quote_test',
+                'Activate the required gift-code membership rule for the financial boundary test.',
+                $this->benefitOwner(),
+            ),
+        );
+
+        return $created->targetId;
     }
 
     /** @return array{user_id:int,offering:array{id:int,product_id:int,server_id:int},rule:object,code:string,source_quote:QuoteReceipt} */

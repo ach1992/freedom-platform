@@ -11,6 +11,8 @@ use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseQuote;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use App\Modules\Telegram\Application\TelegramActionMembershipChanged;
+use App\Modules\Telegram\Application\TelegramActionMembershipService;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluationDecision;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleDefinition;
@@ -347,6 +349,69 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
         self::assertSame(0, DB::table('quotes')->count());
     }
 
+    public function test_generic_action_membership_fences_gift_code_and_service_view_without_provider_io_in_transactions(): void
+    {
+        $userId = $this->membershipUser('customer');
+        $this->telegramAccount($userId, 710000010);
+        $giftRuleId = $this->activeActionRule('gift_code_use', 'customers', 'fail_closed', 'gift-code-action');
+        $giftLookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::Member,
+            'telegram_membership_member',
+        ));
+        $this->bindMembershipLookup($giftLookup);
+        $membership = $this->app->make(TelegramActionMembershipService::class);
+
+        $gift = $membership->forSelf($userId, $userId, 'gift_code_use', 'fa');
+        self::assertSame(TelegramChannelMembershipEvaluationDecision::Satisfied, $gift->decision);
+        self::assertTrue($gift->allowsAction());
+        self::assertNull($gift->joinReference);
+        self::assertSame([0], $giftLookup->transactionLevels);
+
+        DB::transaction(function ($connection) use ($membership, $userId, $gift): void {
+            $membership->assertCurrentForUpdate($connection, $userId, $userId, 'gift_code_use', $gift);
+        });
+        self::assertSame([0], $giftLookup->transactionLevels, 'Transaction-time fence must not repeat Telegram provider I/O.');
+
+        $this->app->make(TelegramChannelMembershipRuleService::class)->disable(
+            $giftRuleId,
+            2,
+            $this->membershipContext('disable-gift-code-action'),
+        );
+        try {
+            DB::transaction(function ($connection) use ($membership, $userId, $gift): void {
+                $membership->assertCurrentForUpdate($connection, $userId, $userId, 'gift_code_use', $gift);
+            });
+            self::fail('Configuration drift after provider verification must reject gift-code use.');
+        } catch (TelegramActionMembershipChanged $exception) {
+            self::assertStringContainsString('membership authority changed', $exception->getMessage());
+        }
+
+        $serviceRuleId = $this->activeActionRule('service_view', 'customers', 'fail_closed', 'service-view-action');
+        self::assertGreaterThan(0, $serviceRuleId);
+        $serviceLookup = $this->lookup(static fn (): TelegramMembershipLookupResult => new TelegramMembershipLookupResult(
+            TelegramMembershipEvidence::NotMember,
+            'telegram_membership_left',
+        ));
+        $this->bindMembershipLookup($serviceLookup);
+        $membership = $this->app->make(TelegramActionMembershipService::class);
+
+        $serviceView = $membership->forSelf($userId, $userId, 'service_view', 'en');
+        self::assertSame(TelegramChannelMembershipEvaluationDecision::Unsatisfied, $serviceView->decision);
+        self::assertFalse($serviceView->allowsAction());
+        self::assertNotNull($serviceView->joinReference);
+        self::assertTrue($serviceView->joinReference->isMembershipJoinPrompt());
+        self::assertSame([0], $serviceLookup->transactionLevels);
+
+        try {
+            DB::transaction(function ($connection) use ($membership, $userId): void {
+                $membership->assertCurrentForUpdate($connection, $userId, $userId, 'service_view', null);
+            });
+            self::fail('A current required service-view rule must reject execution without a provider preflight.');
+        } catch (TelegramActionMembershipChanged $exception) {
+            self::assertSame('Telegram action membership preflight is required.', $exception->getMessage());
+        }
+    }
+
     /** @return array{int,TelegramPurchaseMembershipCatalog,string} */
     private function purchaseOffering(string $suffix, string $accountType = 'customer'): array
     {
@@ -383,10 +448,15 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
     private function bindCatalogAndLookup(TelegramCustomerPurchaseCatalog $catalog, TelegramPurchaseMembershipLookup $lookup): void
     {
         $this->app->instance(TelegramCustomerPurchaseCatalog::class, $catalog);
+        $this->bindMembershipLookup($lookup);
+        $this->app->forgetInstance(TelegramCustomerPurchaseQuote::class);
+    }
+
+    private function bindMembershipLookup(TelegramPurchaseMembershipLookup $lookup): void
+    {
         $this->app->instance(TelegramMembershipLookup::class, $lookup);
         $this->app->forgetInstance(TelegramChannelMembershipEvaluator::class);
         $this->app->forgetInstance(TelegramChannelMembershipRuleResolver::class);
-        $this->app->forgetInstance(TelegramCustomerPurchaseQuote::class);
     }
 
     private function lookup(Closure $callback): TelegramPurchaseMembershipLookup
@@ -439,11 +509,21 @@ final class TelegramCustomerPurchaseMembershipTest extends TestCase
 
     private function activeRule(int $offeringId, string $audience, string $failurePolicy, string $suffix): int
     {
+        return $this->activeActionRule('purchase', $audience, $failurePolicy, $suffix, $offeringId);
+    }
+
+    private function activeActionRule(
+        string $action,
+        string $audience,
+        string $failurePolicy,
+        string $suffix,
+        ?int $offeringId = null,
+    ): int {
         $channelId = $this->channel($suffix, -1002500000000 - $this->mutationSequence - 1);
         $service = $this->app->make(TelegramChannelMembershipRuleService::class);
         $definition = new TelegramChannelMembershipRuleDefinition(
-            'purchase-'.substr(hash('sha256', $suffix), 0, 20),
-            'purchase',
+            $action.'-'.substr(hash('sha256', $suffix), 0, 20),
+            $action,
             $audience,
             null,
             null,
