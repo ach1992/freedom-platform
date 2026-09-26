@@ -1240,7 +1240,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'mutation_generation', 'remote_deleted_at',
         ]);
         $freshQuote = DB::table('quotes')->where('public_id', $quote->quotePublicId)->first([
-            'user_id', 'service_subscription_public_id', 'service_target_id_snapshot',
+            'user_id', 'action_snapshot', 'service_subscription_id', 'service_subscription_public_id', 'service_target_id_snapshot',
             'service_remote_identity_generation_snapshot', 'service_lifecycle_version_snapshot',
             'service_mutation_generation_snapshot', 'service_source_route_selection_id_snapshot',
             'service_reconfiguration_preview_id', 'service_reconfiguration_preview_public_id',
@@ -1250,6 +1250,10 @@ final class ServiceOperationalAuthorityTest extends TestCase
         ]);
         self::assertNotNull($freshService);
         self::assertNotNull($freshQuote);
+        self::assertSame('reconfigure', $freshQuote->action_snapshot);
+        self::assertSame((int) $before->id, (int) $freshQuote->service_subscription_id);
+        self::assertNotNull($freshQuote->service_lifecycle_version_snapshot);
+        self::assertNotNull($freshQuote->service_mutation_generation_snapshot);
         $serviceFreshness = [
             'user_id' => (int) $freshService->user_id,
             'service_public_id' => $freshService->public_id,
