@@ -27,23 +27,8 @@ return new class extends Migration
             }
         }
 
-        Schema::table('service_reconfiguration_previews', function (Blueprint $table): void {
-            $table->foreignId('actor_administrator_id')->nullable()->after('actor_user_id');
-            $table->foreign('actor_administrator_id', 'srp_admin_actor_fk')
-                ->references('id')->on('administrators')->restrictOnDelete();
-            $table->string('administrator_reason_code', 64)->nullable()->after('actor_administrator_id');
-            $table->text('administrator_reason')->nullable()->after('administrator_reason_code');
-            $table->index(['actor_administrator_id', 'created_at'], 'srp_admin_created_idx');
-        });
-
-        Schema::table('service_reconfiguration_authorities', function (Blueprint $table): void {
-            $table->foreignId('actor_administrator_id')->nullable()->after('authorization_mode');
-            $table->foreign('actor_administrator_id', 'sra_admin_actor_fk')
-                ->references('id')->on('administrators')->restrictOnDelete();
-            $table->foreignId('audit_log_id')->nullable()->after('actor_administrator_id');
-            $table->foreign('audit_log_id', 'sra_admin_audit_fk')
-                ->references('id')->on('audit_logs')->restrictOnDelete();
-        });
+        $this->ensurePreviewColumnsAndBindings();
+        $this->ensureAuthorityColumnsAndBindings();
 
         $this->replaceCheck(
             'service_reconfiguration_previews',
@@ -111,6 +96,92 @@ return new class extends Migration
                 'actor_administrator_id',
             ]);
         });
+    }
+
+    private function ensurePreviewColumnsAndBindings(): void
+    {
+        $columns = ['actor_administrator_id', 'administrator_reason_code', 'administrator_reason'];
+        $present = array_values(array_filter(
+            $columns,
+            static fn (string $column): bool => Schema::hasColumn('service_reconfiguration_previews', $column),
+        ));
+
+        if ($present === []) {
+            Schema::table('service_reconfiguration_previews', function (Blueprint $table): void {
+                $table->foreignId('actor_administrator_id')->nullable()->after('actor_user_id');
+                $table->string('administrator_reason_code', 64)->nullable()->after('actor_administrator_id');
+                $table->text('administrator_reason')->nullable()->after('administrator_reason_code');
+            });
+        } elseif (count($present) !== count($columns)) {
+            throw new RuntimeException(
+                'Administrator Service reconfiguration preview columns are partially applied and cannot be safely normalized.',
+            );
+        }
+
+        if (! $this->foreignKeyExists('service_reconfiguration_previews', 'srp_admin_actor_fk')) {
+            Schema::table('service_reconfiguration_previews', function (Blueprint $table): void {
+                $table->foreign('actor_administrator_id', 'srp_admin_actor_fk')
+                    ->references('id')->on('administrators')->restrictOnDelete();
+            });
+        }
+        if (! $this->indexExists('service_reconfiguration_previews', 'srp_admin_created_idx')) {
+            Schema::table('service_reconfiguration_previews', function (Blueprint $table): void {
+                $table->index(['actor_administrator_id', 'created_at'], 'srp_admin_created_idx');
+            });
+        }
+    }
+
+    private function ensureAuthorityColumnsAndBindings(): void
+    {
+        $columns = ['actor_administrator_id', 'audit_log_id'];
+        $present = array_values(array_filter(
+            $columns,
+            static fn (string $column): bool => Schema::hasColumn('service_reconfiguration_authorities', $column),
+        ));
+
+        if ($present === []) {
+            Schema::table('service_reconfiguration_authorities', function (Blueprint $table): void {
+                $table->foreignId('actor_administrator_id')->nullable()->after('authorization_mode');
+                $table->foreignId('audit_log_id')->nullable()->after('actor_administrator_id');
+            });
+        } elseif (count($present) !== count($columns)) {
+            throw new RuntimeException(
+                'Administrator Service reconfiguration authority columns are partially applied and cannot be safely normalized.',
+            );
+        }
+
+        if (! $this->foreignKeyExists('service_reconfiguration_authorities', 'sra_admin_actor_fk')) {
+            Schema::table('service_reconfiguration_authorities', function (Blueprint $table): void {
+                $table->foreign('actor_administrator_id', 'sra_admin_actor_fk')
+                    ->references('id')->on('administrators')->restrictOnDelete();
+            });
+        }
+        if (! $this->foreignKeyExists('service_reconfiguration_authorities', 'sra_admin_audit_fk')) {
+            Schema::table('service_reconfiguration_authorities', function (Blueprint $table): void {
+                $table->foreign('audit_log_id', 'sra_admin_audit_fk')
+                    ->references('id')->on('audit_logs')->restrictOnDelete();
+            });
+        }
+    }
+
+    private function foreignKeyExists(string $table, string $constraint): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = ?',
+            [$table, $constraint, 'FOREIGN KEY'],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
+    }
+
+    private function indexExists(string $table, string $index): bool
+    {
+        $row = DB::selectOne(
+            'SELECT COUNT(*) AS aggregate FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?',
+            [$table, $index],
+        );
+
+        return $row !== null && (int) $row->aggregate > 0;
     }
 
     private function replaceCheck(string $table, string $constraint, string $definition): void

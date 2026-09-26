@@ -974,6 +974,25 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'administrator_no_charge',
             $this->triggerBody('service_reconfiguration_authorities_insert_guard'),
         );
+
+        // Re-entry on the accepted current schema must be idempotent while still reinstalling
+        // current checks and guards after any historical predecessor has been replayed.
+        $migration->up();
+
+        self::assertTrue(
+            Schema::hasColumn('service_reconfiguration_previews', 'actor_administrator_id'),
+        );
+        self::assertTrue(
+            Schema::hasColumn('service_reconfiguration_authorities', 'actor_administrator_id'),
+        );
+        self::assertStringContainsString(
+            'services.reconfigure',
+            $this->triggerBody('audit_logs_service_operational_insert_guard'),
+        );
+        self::assertStringContainsString(
+            'administrator_no_charge',
+            $this->triggerBody('service_reconfiguration_authorities_insert_guard'),
+        );
     }
 
     public function test_zero_cost_administrator_service_reconfiguration_is_permissioned_audited_and_uses_canonical_executor(): void
