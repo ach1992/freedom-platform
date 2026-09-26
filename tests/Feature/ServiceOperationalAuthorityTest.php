@@ -109,6 +109,14 @@ final class ServiceOperationalAuthorityTest extends TestCase
         $migration = require database_path('migrations/2026_08_19_000140_enable_service_operational_authority.php');
         $migration->up();
         $this->app->make(ServiceOperationalAuthorityGuard::class)->assertFinalized();
+        self::assertStringContainsString(
+            'service_entitlement_grant_queue_v1',
+            $this->triggerBody('service_subscriptions_update_guard'),
+        );
+        self::assertStringContainsString(
+            'services.reconfigure',
+            $this->triggerBody('audit_logs_service_operational_insert_guard'),
+        );
 
         /** @var Migration $serviceMutation */
         $serviceMutation = require database_path('migrations/2026_08_17_000300_enable_service_mutation_authority.php');
