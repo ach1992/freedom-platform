@@ -565,6 +565,7 @@ return [
         'nowpayments_reconciliation_findings' => 'Payments',
         'nowpayments_terminal_conflict_upgrade_fence' => 'Payments',
         'purchase_provider_mutation_attempts' => 'Payments',
+        'zarinpal_wallet_top_up_upgrade_fence' => 'Payments',
         'order_items' => 'Orders',
         'order_source_authorizations' => 'Orders',
         'order_state_histories' => 'Orders',
