@@ -259,15 +259,20 @@ final readonly class PurchaseProviderMutationBarrier
 
     private function assertUpgradeFenceInactive(Connection $connection): void
     {
-        if (! $connection->getSchemaBuilder()->hasTable('nowpayments_terminal_conflict_upgrade_fence')) {
-            return;
-        }
+        foreach ([
+            'nowpayments_terminal_conflict_upgrade_fence',
+            'zarinpal_wallet_top_up_upgrade_fence',
+        ] as $fenceTable) {
+            if (! $connection->getSchemaBuilder()->hasTable($fenceTable)) {
+                continue;
+            }
 
-        if ($connection->table('nowpayments_terminal_conflict_upgrade_fence')
-            ->where('id', 1)
-            ->where('active', 1)
-            ->exists()) {
-            throw new RuntimeException('Purchase provider mutation is blocked by an active financial migration.');
+            if ($connection->table($fenceTable)
+                ->where('id', 1)
+                ->where('active', 1)
+                ->exists()) {
+                throw new RuntimeException('Purchase provider mutation is blocked by an active financial migration.');
+            }
         }
     }
 
