@@ -191,7 +191,11 @@ final readonly class ServicePurchaseMutationQueueService
                     || $quote->service_target_protocol_profile_version_snapshot === null
                 ))
                 || ($type !== ServiceMutationType::Reconfigure && $quote->service_mutation_generation_snapshot !== null)) {
-                throw new DomainException('Service changed after the paid mutation Quote and requires reconciliation before mutation.');
+                throw new DomainException(
+                    $type === ServiceMutationType::Reconfigure
+                        ? 'Service changed after the paid reconfiguration Quote and requires reconciliation before mutation.'
+                        : 'Service changed after the paid package Quote and requires reconciliation before mutation.',
+                );
             }
 
             /** @var object{provisioning_operation_id:int|string}|null $existingAuthority */

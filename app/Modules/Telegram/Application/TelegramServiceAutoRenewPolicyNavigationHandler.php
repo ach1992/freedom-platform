@@ -391,7 +391,7 @@ final readonly class TelegramServiceAutoRenewPolicyNavigationHandler
             $action->telegramUserId,
             $this->presentations->fromSource($source),
             'tg-admin-service-auto-policy-delivery:'.hash('sha256', $action->requestKey.':'.$surface),
-            'tg-admin-service-auto-policy:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 40),
+            'tg-admin-auto-policy:'.substr(hash('sha256', $action->botId.':'.$action->updateId.':'.$surface), 0, 40),
             $keyboard,
         );
     }

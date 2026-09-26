@@ -21,6 +21,11 @@ return new class extends Migration
     public function up(): void
     {
         $this->repairInterruptedRollbackIfNeeded();
+        if ($this->entitlementGrantSuccessorIsExact()) {
+            // A later migration owns the canonical mutation shape. Historical re-entry must not
+            // downgrade its operation types or SQL guards during focused authority tests/recovery.
+            return;
+        }
         $this->assertPrerequisites();
         $this->failClosedDuringUpgrade();
         $this->addColumns();
@@ -50,6 +55,47 @@ return new class extends Migration
         $this->failClosedDuringUpgrade();
         $this->dropMutationShape();
         $this->restorePreviousInitialAuthority();
+    }
+
+    private function entitlementGrantSuccessorIsExact(): bool
+    {
+        foreach ([
+            'service_entitlement_grant_batches',
+            'service_entitlement_grant_items',
+            'service_entitlement_grant_authorities',
+        ] as $table) {
+            if (! Schema::hasTable($table)) {
+                return false;
+            }
+        }
+
+        return $this->constraintContains(
+            'provisioning_operations',
+            'provisioning_operations_type_chk',
+            "'grant_data'",
+        )
+            && $this->constraintContains(
+                'provisioning_operations',
+                'provisioning_operations_type_chk',
+                "'grant_days'",
+            )
+            && $this->constraintContains(
+                'provisioning_operations',
+                'provisioning_operations_type_chk',
+                "'grant_data_days'",
+            )
+            && $this->triggerContains(
+                'provisioning_operations_insert_guard',
+                'service_entitlement_grant_queue_v1',
+            )
+            && $this->triggerContains(
+                'service_subscriptions_update_guard',
+                'service_entitlement_grant_queue_v1',
+            )
+            && $this->triggerContains(
+                'service_entitlement_grant_authorities_insert_guard',
+                'service_entitlement_grant_queue_v1',
+            );
     }
 
     private function repairInterruptedRollbackIfNeeded(): void
@@ -539,6 +585,26 @@ SQL);
             throw new RuntimeException('Service mutation authority SQL asset is unavailable: '.$file);
         }
         DB::connection()->getPdo()->exec($sql);
+    }
+
+    private function constraintContains(string $table, string $constraint, string $needle): bool
+    {
+        $row = DB::selectOne(
+            <<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TABLE_CONSTRAINTS table_constraint
+INNER JOIN information_schema.CHECK_CONSTRAINTS check_constraint
+    ON check_constraint.CONSTRAINT_SCHEMA = table_constraint.CONSTRAINT_SCHEMA
+   AND check_constraint.CONSTRAINT_NAME = table_constraint.CONSTRAINT_NAME
+WHERE table_constraint.CONSTRAINT_SCHEMA = DATABASE()
+  AND table_constraint.TABLE_NAME = ?
+  AND table_constraint.CONSTRAINT_NAME = ?
+  AND LOCATE(?, check_constraint.CHECK_CLAUSE) > 0
+SQL,
+            [$table, $constraint, $needle],
+        );
+
+        return $row !== null && (int) $row->aggregate === 1;
     }
 
     private function constraintExists(string $table, string $constraint): bool
