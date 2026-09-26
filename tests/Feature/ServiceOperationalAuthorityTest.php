@@ -1807,7 +1807,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
             $service->resume($created->batchPublicId, $wrongReasonContext);
             self::fail('Batch resume must preserve the accepted reason-code identity.');
         } catch (DomainException $exception) {
-            self::assertSame('Service batch grant request identity conflicts with existing evidence.', $exception->getMessage());
+            self::assertSame('Service batch grant administrator/reason context conflicts with existing evidence.', $exception->getMessage());
         }
         self::assertSame(0, DB::table('order_source_authorizations')->count());
     }
