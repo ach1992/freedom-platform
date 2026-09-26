@@ -107,7 +107,7 @@ final class IdentityTelegramPhoneRuntimeWiringTest extends TestCase
         self::assertIsString($sessionPayload['challenge_id']);
 
         $challenge = DB::table('otp_challenges')
-            ->where('public_id', $sessionPayload['challenge_id'])
+            ->where('id', $sessionPayload['challenge_id'])
             ->first(['request_ip_hash', 'code_hash']);
         self::assertNotNull($challenge);
         self::assertSame($expectedIpHash, (string) $challenge->request_ip_hash);

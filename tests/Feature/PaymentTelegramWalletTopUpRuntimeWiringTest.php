@@ -26,6 +26,18 @@ final class PaymentTelegramWalletTopUpRuntimeWiringTest extends TestCase
         $telegramUserId = 98103;
         [$processor, $accountId, $userId] = $this->openMyAccount(8300, $telegramUserId, 'wallet_topup');
 
+        $now = now('UTC');
+        DB::table('ledger_accounts')->insert([
+            'code' => 'wallet.cash.telegram-runtime.'.$userId,
+            'account_class' => 'liability',
+            'owner_user_id' => $userId,
+            'wallet_bucket' => 'cash',
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
         $topUpToken = $this->telegramRuntimeCallbackToken('navigation.wallet.top_up', $accountId);
         $this->acceptTelegramRuntime($this->telegramRuntimeCallbackPayload(
             8302,

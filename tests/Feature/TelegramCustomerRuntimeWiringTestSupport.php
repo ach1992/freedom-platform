@@ -30,7 +30,9 @@ use Illuminate\Support\Facades\Queue;
 final class TelegramRuntimeSmsProvider implements SmsProvider
 {
     public ?string $lastCode = null;
+
     public ?string $lastDestination = null;
+
     public int $calls = 0;
 
     public function __construct(private readonly string $providerCode) {}
@@ -55,6 +57,7 @@ final class TelegramRuntimeZarinpalTransport implements ZarinpalTransport
     public const AUTHORITY = 'A99999999999999999999999999999999999';
 
     public int $requestCalls = 0;
+
     public int $verifyCalls = 0;
 
     public function request(
@@ -90,6 +93,7 @@ final class TelegramRuntimeZarinpalTransport implements ZarinpalTransport
 trait TelegramCustomerRuntimeWiringTestSupport
 {
     private TelegramRuntimeSmsProvider $sms;
+
     private TelegramRuntimeZarinpalTransport $zarinpal;
 
     private function setUpTelegramRuntimeWiring(): void
