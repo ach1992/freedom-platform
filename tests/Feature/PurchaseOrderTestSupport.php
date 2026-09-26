@@ -181,6 +181,28 @@ SQL);
                 $nonPaidAuthorityMigration->up();
 
                 $paidMutationAuthorityMigration?->up();
+
+                // Historical DDL fault harnesses may require a paid/base repair, but the shared
+                // test environment must always leave the next test on the accepted current
+                // Service authority graph rather than a paid-only predecessor.
+                if ($paidMutationAuthorityMigration !== null) {
+                    /** @var Migration $serviceReconfigurationQuoteMigration */
+                    $serviceReconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
+                    /** @var Migration $serviceReconfigurationRemoteEffectMigration */
+                    $serviceReconfigurationRemoteEffectMigration = require database_path('migrations/2026_09_25_000320_enable_service_reconfiguration_remote_effect.php');
+                    /** @var Migration $serviceEntitlementGrantMigration */
+                    $serviceEntitlementGrantMigration = require database_path('migrations/2026_09_26_000100_enable_service_entitlement_grant_authority.php');
+                    /** @var Migration $serviceEntitlementGrantNotificationMigration */
+                    $serviceEntitlementGrantNotificationMigration = require database_path('migrations/2026_09_26_000110_enable_service_entitlement_grant_notification_delivery.php');
+                    /** @var Migration $administratorServiceReconfigurationMigration */
+                    $administratorServiceReconfigurationMigration = require database_path('migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php');
+
+                    $serviceReconfigurationQuoteMigration->up();
+                    $serviceReconfigurationRemoteEffectMigration->up();
+                    $serviceEntitlementGrantMigration->up();
+                    $serviceEntitlementGrantNotificationMigration->up();
+                    $administratorServiceReconfigurationMigration->up();
+                }
             });
         }
 
