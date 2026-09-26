@@ -347,7 +347,7 @@ final readonly class TelegramInteractionDispatcher
         );
     }
 
-    /** @param array<string,mixed> $message */
+    /** @param  array<string,mixed>  $message */
     private function privateMediaCaption(
         array $message,
         TelegramPrivateMediaInput $media,
@@ -480,7 +480,7 @@ final readonly class TelegramInteractionDispatcher
         ];
     }
 
-    /** @param array<string,mixed> $message */
+    /** @param  array<string,mixed>  $message */
     private function privateMediaFromMessage(array $message): ?TelegramPrivateMediaInput
     {
         foreach (self::UNSUPPORTED_COMPATIBILITY_MEDIA_FIELDS as $field) {
@@ -582,7 +582,7 @@ final readonly class TelegramInteractionDispatcher
             && preg_match('/[\x00-\x20\x7F]/', $value) !== 1;
     }
 
-    /** @param array<string,mixed> $message */
+    /** @param  array<string,mixed>  $message */
     private function isPrivateActorChat(array $message, int $telegramUserId): bool
     {
         $chat = $message['chat'] ?? null;

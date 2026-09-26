@@ -27,8 +27,7 @@ final readonly class TelegramWebhookIngestor
         string $rawPayload,
         string $correlationId,
         ?string $requestIp = null,
-    ): TelegramWebhookReceipt
-    {
+    ): TelegramWebhookReceipt {
         $payload = $this->decode($rawPayload);
         $updateId = $payload['update_id'] ?? null;
 

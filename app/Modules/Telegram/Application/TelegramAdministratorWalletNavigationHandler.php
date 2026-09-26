@@ -9,6 +9,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTarg
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\AdministratorWalletCorrectionPreview;
 use App\Modules\Wallet\Application\AdministratorWalletOperationsService;
+use App\Modules\Wallet\Application\AdministratorWalletRefundCandidate;
 use App\Modules\Wallet\Domain\WalletCorrectionDirection;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -613,7 +614,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
     }
 
     /**
-     * @param list<\App\Modules\Wallet\Application\AdministratorWalletRefundCandidate> $candidates
+     * @param  list<AdministratorWalletRefundCandidate>  $candidates
      */
     private function renderRefundList(
         TelegramInteractionAction $action,
@@ -986,7 +987,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         TelegramInteractionAction $action,
         string $customerPublicId,
         string $source,
-    ): ?\App\Modules\Wallet\Application\AdministratorWalletRefundCandidate {
+    ): ?AdministratorWalletRefundCandidate {
         foreach ($this->wallet->refundablePurchases($action->userId, $customerPublicId, 20) as $candidate) {
             if (hash_equals($candidate->selectionToken, $source)) {
                 return $candidate;

@@ -1047,7 +1047,7 @@ final readonly class ZarinpalPaymentService
     }
 
     /**
-     * @param list<stdClass> $concurrentObservations
+     * @param  list<stdClass>  $concurrentObservations
      */
     private function settleWalletTopUp(
         Connection $connection,

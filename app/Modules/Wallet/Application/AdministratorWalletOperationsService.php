@@ -15,7 +15,6 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use InvalidArgumentException;
-use RuntimeException;
 
 final readonly class AdministratorWalletOperationsService
 {
@@ -182,8 +181,8 @@ final readonly class AdministratorWalletOperationsService
                 'telegram_admin_wallet_correction',
                 $reason,
             ),
-            'customer_account',
-            $customerPublicId,
+            null,
+            null,
         );
 
         $approvalId = null;
