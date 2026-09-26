@@ -23,7 +23,7 @@ final class ServiceLifecyclePermissionSeedTest extends TestCase
         $technicalRoleId = (int) DB::table('roles')->where('code', 'technical')->value('id');
         self::assertGreaterThan(0, $technicalRoleId);
 
-        foreach (['services.operate', 'services.rotate_link', 'services.retire'] as $permissionCode) {
+        foreach (['services.operate', 'services.rotate_link', 'services.retire', 'services.reconfigure'] as $permissionCode) {
             $permission = DB::table('permissions')->where('code', $permissionCode)->first([
                 'id', 'module', 'risk_level', 'requires_approval',
             ]);

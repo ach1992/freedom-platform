@@ -73,6 +73,14 @@ final class PanelsAccessFoundationSeeder extends Seeder
                 'updated_at' => $now,
             ],
             [
+                'code' => 'services.reconfigure',
+                'module' => 'provisioning',
+                'risk_level' => 'high',
+                'requires_approval' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
                 'code' => 'services.import',
                 'module' => 'provisioning',
                 'risk_level' => 'high',
@@ -109,7 +117,14 @@ final class PanelsAccessFoundationSeeder extends Seeder
         foreach (['support', 'technical', 'sales_content'] as $roleCode) {
             $this->grant($roleCode, 'servers.view', $now);
         }
-        foreach (['panels.manage', 'panels.test', 'services.operate', 'services.rotate_link', 'services.retire'] as $permissionCode) {
+        foreach ([
+            'panels.manage',
+            'panels.test',
+            'services.operate',
+            'services.rotate_link',
+            'services.retire',
+            'services.reconfigure',
+        ] as $permissionCode) {
             $this->grant('technical', $permissionCode, $now);
         }
     }

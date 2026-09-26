@@ -69,6 +69,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Tests\Support\CreatesBenefitCodeFixtures;
 use Tests\TestCase;
@@ -922,6 +923,230 @@ final class ServiceOperationalAuthorityTest extends TestCase
             self::assertSame('no_charge', DB::table('service_reconfiguration_authorities')
                 ->where('provisioning_operation_id', $operationId)->value('authorization_mode'));
         }
+    }
+
+    public function test_administrator_reconfiguration_migration_clean_rollback_and_reentry_restore_exact_guards(): void
+    {
+        /** @var Migration $migration */
+        $migration = require database_path(
+            'migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php',
+        );
+
+        try {
+            $migration->down();
+
+            self::assertFalse(
+                Schema::hasColumn('service_reconfiguration_previews', 'actor_administrator_id'),
+            );
+            self::assertFalse(
+                Schema::hasColumn('service_reconfiguration_authorities', 'actor_administrator_id'),
+            );
+            self::assertStringNotContainsString(
+                'services.reconfigure',
+                $this->triggerBody('audit_logs_service_operational_insert_guard'),
+            );
+            self::assertStringNotContainsString(
+                'administrator_no_charge',
+                $this->triggerBody('service_reconfiguration_authorities_insert_guard'),
+            );
+        } finally {
+            if (! Schema::hasColumn('service_reconfiguration_previews', 'actor_administrator_id')) {
+                $migration->up();
+            }
+        }
+
+        self::assertTrue(
+            Schema::hasColumn('service_reconfiguration_previews', 'actor_administrator_id'),
+        );
+        self::assertTrue(
+            Schema::hasColumn('service_reconfiguration_authorities', 'actor_administrator_id'),
+        );
+        self::assertStringContainsString(
+            'services.reconfigure',
+            $this->triggerBody('audit_logs_service_operational_insert_guard'),
+        );
+        self::assertStringContainsString(
+            'administrator_enabled',
+            $this->triggerBody('service_reconfiguration_previews_insert_guard'),
+        );
+        self::assertStringContainsString(
+            'administrator_no_charge',
+            $this->triggerBody('service_reconfiguration_authorities_insert_guard'),
+        );
+    }
+
+    public function test_zero_cost_administrator_service_reconfiguration_is_permissioned_audited_and_uses_canonical_executor(): void
+    {
+        $fixture = $this->reconfigurationFixture('administrator-no-charge-effect', 0, 0);
+        $attached = $this->attachedService(
+            $fixture,
+            'remote-reconfiguration-administrator-no-charge',
+            'reconfiguration-administrator-user',
+            'reconfiguration-administrator-import',
+        );
+        self::assertIsString($attached->serviceSubscriptionPublicId);
+        $servicePublicId = $attached->serviceSubscriptionPublicId;
+        $before = DB::table('service_subscriptions')->where('public_id', $servicePublicId)->first([
+            'id', 'user_id', 'route_selection_id', 'service_target_id', 'remote_service_id',
+            'remote_identity_generation', 'lifecycle_version', 'mutation_generation',
+        ]);
+        self::assertNotNull($before);
+
+        $context = new ServiceOperationalContext(
+            'service.administrator.reconfiguration.000001',
+            'service-administrator-reconfiguration-000001',
+            'administrator_reconfigure',
+            'Administrator approved a zero-cost Service reconfiguration.',
+            $fixture['owner_id'],
+        );
+        $preview = $this->app->make(ServiceReconfigurationPreviewService::class)->previewForAdministrator(
+            $context,
+            $servicePublicId,
+            $fixture['offering_code'],
+            $fixture['server_code'],
+            $fixture['alternate_profile_code'],
+        );
+        self::assertTrue($preview->isFree());
+        self::assertSame(0, $preview->totalPriceIrr);
+
+        $storedPreview = DB::table('service_reconfiguration_previews')
+            ->where('public_id', $preview->previewPublicId)
+            ->first([
+                'actor_user_id', 'actor_administrator_id', 'administrator_reason_code',
+                'administrator_reason', 'request_key_hash', 'correlation_id',
+            ]);
+        self::assertNotNull($storedPreview);
+        self::assertSame($fixture['user_id'], (int) $storedPreview->actor_user_id);
+        self::assertSame($fixture['owner_id'], (int) $storedPreview->actor_administrator_id);
+        self::assertSame($context->reasonCode, $storedPreview->administrator_reason_code);
+        self::assertSame($context->reason, $storedPreview->administrator_reason);
+        self::assertSame($context->requestHash(), $storedPreview->request_key_hash);
+        self::assertSame($context->correlationId, $storedPreview->correlation_id);
+
+        $queue = $this->app->make(ServiceReconfigurationNoChargeQueueService::class);
+        try {
+            $queue->queueForSelf(
+                $fixture['user_id'],
+                $preview->previewPublicId,
+                'service.administrator.reconfiguration.self.000001',
+                'service-administrator-reconfiguration-self',
+            );
+            self::fail('Administrator reconfiguration preview must never execute through self-service authority.');
+        } catch (DomainException) {
+            // Expected actor-shape fence.
+        }
+
+        $financialCounts = [
+            'quotes' => DB::table('quotes')->count(),
+            'payment_intents' => DB::table('payment_intents')->count(),
+            'purchase_settlements' => DB::table('purchase_settlements')->count(),
+            'orders' => DB::table('orders')->count(),
+        ];
+
+        $queued = $queue->queueForAdministrator($preview->previewPublicId, $context);
+        $replay = $queue->queueForAdministrator($preview->previewPublicId, $context);
+        self::assertSame(ServiceMutationType::Reconfigure, $queued->type);
+        self::assertSame(ProvisioningState::Queued, $queued->state);
+        self::assertFalse($queued->replayed);
+        self::assertTrue($replay->replayed);
+        self::assertSame($queued->operationPublicId, $replay->operationPublicId);
+
+        foreach ($financialCounts as $table => $count) {
+            self::assertSame($count, DB::table($table)->count(), $table.' must not gain fake administrator financial authority.');
+        }
+
+        $operationId = (int) DB::table('provisioning_operations')
+            ->where('public_id', $queued->operationPublicId)
+            ->value('id');
+        $authority = DB::table('service_reconfiguration_authorities')
+            ->where('provisioning_operation_id', $operationId)
+            ->first(['authorization_mode', 'actor_administrator_id', 'audit_log_id']);
+        self::assertNotNull($authority);
+        self::assertSame('administrator_no_charge', $authority->authorization_mode);
+        self::assertSame($fixture['owner_id'], (int) $authority->actor_administrator_id);
+        self::assertNotNull($authority->audit_log_id);
+
+        $audit = DB::table('audit_logs')->where('id', (int) $authority->audit_log_id)->first([
+            'actor_type', 'actor_id', 'action', 'target_type', 'target_id',
+            'reason_code', 'reason', 'correlation_id', 'request_fingerprint',
+        ]);
+        self::assertNotNull($audit);
+        self::assertSame('administrator', $audit->actor_type);
+        self::assertSame((string) $fixture['owner_id'], $audit->actor_id);
+        self::assertSame('service.operational.reconfiguration.queued', $audit->action);
+        self::assertSame('service_subscription', $audit->target_type);
+        self::assertSame($servicePublicId, $audit->target_id);
+        self::assertSame($context->reasonCode, $audit->reason_code);
+        self::assertSame($context->reason, $audit->reason);
+        self::assertSame($context->correlationId, $audit->correlation_id);
+        self::assertSame($context->requestHash(), $audit->request_fingerprint);
+
+        $result = $this->app->make(ServiceMutationExecutor::class)->execute($queued->operationPublicId);
+        self::assertSame(ProvisioningState::Succeeded, $result->state);
+        self::assertCount(1, $fixture['adapter']->reconfigurationRequests);
+        self::assertSame(1, DB::table('service_delivery_attempts')
+            ->where('service_subscription_id', (int) $before->id)
+            ->where('purpose', 'resend')
+            ->count());
+
+        $terminalReplay = $this->app->make(ServiceMutationExecutor::class)->execute($queued->operationPublicId);
+        self::assertTrue($terminalReplay->replayed);
+        self::assertCount(
+            1,
+            $fixture['adapter']->reconfigurationRequests,
+            'Terminal administrator reconfiguration replay must never call the provider twice.',
+        );
+    }
+
+    public function test_paid_administrator_reconfiguration_fails_closed_and_releases_held_capacity(): void
+    {
+        $fixture = $this->reconfigurationFixture('administrator-paid-fence');
+        $attached = $this->attachedService(
+            $fixture,
+            'remote-reconfiguration-administrator-paid',
+            'reconfiguration-administrator-paid-user',
+            'reconfiguration-administrator-paid-import',
+        );
+        self::assertIsString($attached->serviceSubscriptionPublicId);
+
+        $capacityBefore = DB::table('panel_target_capacities')
+            ->where('panel_service_target_id', $fixture['target_id'])
+            ->first(['held_units', 'committed_units']);
+        self::assertNotNull($capacityBefore);
+
+        $context = new ServiceOperationalContext(
+            'service.administrator.reconfiguration.paid.000001',
+            'service-administrator-reconfiguration-paid',
+            'administrator_reconfigure',
+            'Administrator attempted a priced Service reconfiguration.',
+            $fixture['owner_id'],
+        );
+
+        try {
+            $this->app->make(ServiceReconfigurationPreviewService::class)->previewForAdministrator(
+                $context,
+                $attached->serviceSubscriptionPublicId,
+                $fixture['offering_code'],
+                $fixture['server_code'],
+                $fixture['alternate_profile_code'],
+            );
+            self::fail('Priced administrator Service reconfiguration must not bypass purchase authority.');
+        } catch (DomainException) {
+            // Expected paid-path fence.
+        }
+
+        self::assertSame(
+            0,
+            DB::table('service_reconfiguration_previews')
+                ->where('request_key_hash', $context->requestHash())
+                ->count(),
+        );
+        $capacityAfter = DB::table('panel_target_capacities')
+            ->where('panel_service_target_id', $fixture['target_id'])
+            ->first(['held_units', 'committed_units']);
+        self::assertNotNull($capacityAfter);
+        self::assertSame((int) $capacityBefore->held_units, (int) $capacityAfter->held_units);
+        self::assertSame((int) $capacityBefore->committed_units, (int) $capacityAfter->committed_units);
     }
 
     public function test_paid_service_reconfiguration_uses_canonical_purchase_effect_capacity_and_delivery_authorities(): void
@@ -2424,6 +2649,20 @@ final class ServiceOperationalAuthorityTest extends TestCase
         } catch (\RuntimeException $exception) {
             self::assertSame('Service operational authority is not finalized.', $exception->getMessage());
         }
+    }
+
+    private function triggerBody(string $name): string
+    {
+        $row = DB::selectOne(<<<'SQL'
+SELECT ACTION_STATEMENT AS action_statement
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = ?
+SQL, [$name]);
+        self::assertNotNull($row);
+        self::assertIsString($row->action_statement);
+
+        return $row->action_statement;
     }
 
     private function assertServiceOperationalMarkers(): void

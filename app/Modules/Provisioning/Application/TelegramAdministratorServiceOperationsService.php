@@ -20,6 +20,7 @@ final readonly class TelegramAdministratorServiceOperationsService implements Te
         'services.operate',
         'services.rotate_link',
         'services.retire',
+        'services.reconfigure',
         'services.import',
         'services.transfer_ownership',
         'services.repair',
@@ -30,6 +31,8 @@ final readonly class TelegramAdministratorServiceOperationsService implements Te
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
         private ServiceLifecycleCommandService $lifecycle,
+        private ServiceReconfigurationPreviewService $reconfigurationPreviews,
+        private ServiceReconfigurationNoChargeQueueService $reconfigurations,
         private ServiceImportService $imports,
         private ServiceOwnershipTransferService $transfers,
         private ServiceRepairService $repairs,
@@ -63,6 +66,12 @@ final readonly class TelegramAdministratorServiceOperationsService implements Te
 
         return match ($command) {
             'lifecycle' => $this->prepareLifecycle($actorUserId, $rest),
+            'reconfigure' => $this->prepareReconfiguration(
+                $actorUserId,
+                $rest,
+                $requestKey,
+                $correlationId,
+            ),
             'transfer' => $this->prepareTransfer($actorUserId, $rest),
             'repair' => $this->prepareRepair($actorUserId, $rest, $requestKey, $correlationId),
             'import' => $this->prepareImport($actorUserId, $rest, $requestKey, $correlationId),
@@ -101,6 +110,7 @@ final readonly class TelegramAdministratorServiceOperationsService implements Te
 
         return match ($kind) {
             'lifecycle' => $this->executeLifecycle($actorUserId, $payload, $requestKey, $correlationId),
+            'reconfiguration_confirm' => $this->executeReconfiguration($actorUserId, $payload),
             'transfer' => $this->executeTransfer($actorUserId, $payload, $requestKey, $correlationId),
             'repair_apply' => $this->executeRepairApply($actorUserId, $payload),
             'import_attach' => $this->executeImportAttach($actorUserId, $payload),
@@ -139,6 +149,60 @@ final readonly class TelegramAdministratorServiceOperationsService implements Te
                 'kind' => 'lifecycle',
                 'action' => $action,
                 'service' => $servicePublicId,
+                'reason_code' => $reasonCode,
+                'reason' => $reason,
+            ],
+        );
+    }
+
+    private function prepareReconfiguration(
+        int $actorUserId,
+        string $rest,
+        string $requestKey,
+        string $correlationId,
+    ): TelegramAdministratorServiceOperationPreview {
+        [$servicePublicId, $targetOfferingCode, $serverCode, $protocolCode, $reasonCode, $reason] =
+            $this->fixedWithReason($rest, 5);
+        $administratorId = $this->administratorId($actorUserId, 'services.reconfigure');
+        $context = $this->operationalContext(
+            $administratorId,
+            $requestKey,
+            $correlationId,
+            $reasonCode,
+            $reason,
+        );
+        $receipt = $this->reconfigurationPreviews->previewForAdministrator(
+            $context,
+            $servicePublicId,
+            $targetOfferingCode,
+            $serverCode === '-' ? null : $serverCode,
+            $protocolCode === '-' ? null : $protocolCode,
+        );
+        if (! $receipt->isFree()) {
+            throw new DomainException(
+                'Paid administrator Service reconfiguration must use the canonical purchase path.',
+            );
+        }
+
+        return new TelegramAdministratorServiceOperationPreview(
+            sprintf(
+                'Reconfiguration preview %s: service=%s, offering=%s, server=%s, protocol=%s, price=%d IRR, expires=%s. Reason: %s / %s',
+                $receipt->previewPublicId,
+                $receipt->servicePublicId,
+                $receipt->targetOfferingCode,
+                $receipt->targetSalesServerCode,
+                $receipt->targetProtocolProfileCode,
+                $receipt->totalPriceIrr,
+                $receipt->expiresAt,
+                $reasonCode,
+                $reason,
+            ),
+            true,
+            [
+                'kind' => 'reconfiguration_confirm',
+                'preview' => $receipt->previewPublicId,
+                'request_key' => $requestKey,
+                'correlation_id' => $correlationId,
                 'reason_code' => $reasonCode,
                 'reason' => $reason,
             ],
@@ -463,6 +527,36 @@ final readonly class TelegramAdministratorServiceOperationsService implements Te
             $receipt->mutation->type->value,
             $receipt->mutation->state->value,
             $receipt->mutation->replayed ? 'yes' : 'no',
+        ));
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function executeReconfiguration(
+        int $actorUserId,
+        array $payload,
+    ): TelegramAdministratorServiceOperationResult {
+        [$preview, $storedRequestKey, $storedCorrelationId, $reasonCode, $reason] = $this->operationPayload(
+            $payload,
+            ['preview', 'request_key', 'correlation_id', 'reason_code', 'reason'],
+        );
+        $administratorId = $this->administratorId($actorUserId, 'services.reconfigure');
+        $receipt = $this->reconfigurations->queueForAdministrator(
+            $preview,
+            $this->operationalContext(
+                $administratorId,
+                $storedRequestKey,
+                $storedCorrelationId,
+                $reasonCode,
+                $reason,
+            ),
+        );
+
+        return new TelegramAdministratorServiceOperationResult(sprintf(
+            'Administrator reconfiguration queued: service=%s operation=%s state=%s replayed=%s.',
+            $receipt->servicePublicId,
+            $receipt->operationPublicId,
+            $receipt->state->value,
+            $receipt->replayed ? 'yes' : 'no',
         ));
     }
 

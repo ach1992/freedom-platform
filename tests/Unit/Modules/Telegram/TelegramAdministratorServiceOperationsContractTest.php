@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Tests\Unit\Modules\Telegram;
 
 use App\Modules\Provisioning\Application\ServiceBatchGrantService;
+use App\Modules\Provisioning\Application\ServiceMutationExecutor;
+use App\Modules\Provisioning\Application\ServiceReconfigurationNoChargeQueueService;
+use App\Modules\Provisioning\Application\ServiceReconfigurationPreviewService;
 use App\Modules\Provisioning\Application\TelegramAdministratorServiceOperationsService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorServiceOperations;
 use App\Modules\Telegram\Application\TelegramAdministratorServiceOperationsNavigationHandler;
@@ -112,6 +115,8 @@ final class TelegramAdministratorServiceOperationsContractTest extends TestCase
 
         foreach ([
             'ServiceLifecycleCommandService $lifecycle',
+            'ServiceReconfigurationPreviewService $reconfigurationPreviews',
+            'ServiceReconfigurationNoChargeQueueService $reconfigurations',
             'ServiceImportService $imports',
             'ServiceOwnershipTransferService $transfers',
             'ServiceRepairService $repairs',
@@ -160,12 +165,62 @@ final class TelegramAdministratorServiceOperationsContractTest extends TestCase
         self::assertStringNotContainsString('correlation_id', $controlContext);
     }
 
+    public function test_administrator_reconfiguration_reuses_canonical_authority_with_explicit_audit_and_zero_cost_fence(): void
+    {
+        $preview = $this->classSource(ServiceReconfigurationPreviewService::class);
+        $queue = $this->classSource(ServiceReconfigurationNoChargeQueueService::class);
+        $executor = $this->classSource(ServiceMutationExecutor::class);
+        $implementation = $this->classSource(TelegramAdministratorServiceOperationsService::class);
+
+        self::assertStringContainsString('public function previewForAdministrator(', $preview);
+        self::assertStringContainsString("'administrator_enabled' : 'customer_enabled'", $preview);
+        self::assertStringContainsString(
+            'Paid administrator Service reconfiguration must use the canonical Quote, Order, Payment, and Provisioning path.',
+            $preview,
+        );
+        self::assertStringContainsString('public function queueForAdministrator(', $queue);
+        self::assertStringContainsString(
+            "'service.operational.reconfiguration.queued'",
+            $queue,
+        );
+        self::assertStringContainsString("'administrator_no_charge'", $queue);
+        self::assertStringContainsString(
+            "['no_charge', 'administrator_no_charge']",
+            $executor,
+        );
+        self::assertStringContainsString("'reconfiguration_confirm'", $implementation);
+
+        $root = dirname((new ReflectionClass(ServiceReconfigurationPreviewService::class))->getFileName() ?: '', 5);
+        $migration = file_get_contents(
+            $root.'/database/migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php',
+        );
+        $previewGuard = file_get_contents(
+            $root.'/database/sql/service-administrator-reconfiguration/preview-insert-guard-v2.sql',
+        );
+        $authorityGuard = file_get_contents(
+            $root.'/database/sql/service-administrator-reconfiguration/authority-insert-guard-v2.sql',
+        );
+        $auditGuard = file_get_contents(
+            $root.'/database/sql/service-administrator-reconfiguration/audit-insert-guard-v2.sql',
+        );
+        self::assertIsString($migration);
+        self::assertIsString($previewGuard);
+        self::assertIsString($authorityGuard);
+        self::assertIsString($auditGuard);
+        self::assertStringContainsString('services.reconfigure', $auditGuard);
+        self::assertStringContainsString('administrator_enabled = 1', $previewGuard);
+        self::assertStringContainsString('administrator_no_charge', $authorityGuard);
+        self::assertStringContainsString('audit_row.id = NEW.audit_log_id', $authorityGuard);
+        self::assertStringContainsString('srp_admin_shape_chk', $migration);
+    }
+
     public function test_operator_grammar_uses_stable_public_identifiers_and_bounded_batch_payloads(): void
     {
         $implementation = $this->classSource(TelegramAdministratorServiceOperationsService::class);
 
         foreach ([
             "'lifecycle'",
+            "'reconfigure'",
             "'transfer'",
             "'repair'",
             "'import'",

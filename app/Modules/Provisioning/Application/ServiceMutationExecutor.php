@@ -460,9 +460,9 @@ final readonly class ServiceMutationExecutor
     /** @param ReconfigurationExecutionAuthority $authority */
     private function reconfigurationFinanciallyInvalidated(Connection $connection, object $authority): bool
     {
-        if ($authority->authorization_mode === 'no_charge') {
+        if (in_array($authority->authorization_mode, ['no_charge', 'administrator_no_charge'], true)) {
             if ($authority->purchase_settlement_id !== null || $authority->payment_intent_id !== null) {
-                throw new RuntimeException('Zero-cost Service reconfiguration has conflicting financial authority.');
+                throw new RuntimeException('Non-paid Service reconfiguration has conflicting financial authority.');
             }
 
             return false;

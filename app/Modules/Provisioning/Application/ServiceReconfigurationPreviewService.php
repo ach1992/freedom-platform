@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Catalog\Application\PlanOfferingRouteSelector;
 use App\Modules\Catalog\Application\RouteSelectionContext;
 use App\Modules\Catalog\Application\RouteSelectionRequest;
@@ -37,8 +38,11 @@ final readonly class ServiceReconfigurationPreviewService
 
     private const HOLD_MINUTES = 15;
 
+    private const ADMIN_PERMISSION = 'services.reconfigure';
+
     public function __construct(
         private DatabaseManager $database,
+        private AdministratorPermissionAuthorizer $administratorAuthorizer,
         private Clock $clock,
         private PlanOfferingRouteSelector $routes,
         private TargetCapacityAllocator $capacity,
@@ -48,6 +52,51 @@ final readonly class ServiceReconfigurationPreviewService
 
     public function previewForSelf(
         int $actorUserId,
+        string $servicePublicId,
+        string $targetOfferingCode,
+        ?string $requestedSalesServerCode,
+        ?string $requestedProtocolProfileCode,
+        string $requestKey,
+        string $correlationId,
+    ): ServiceReconfigurationPreviewReceipt {
+        return $this->preview(
+            $actorUserId,
+            null,
+            $servicePublicId,
+            $targetOfferingCode,
+            $requestedSalesServerCode,
+            $requestedProtocolProfileCode,
+            $requestKey,
+            $correlationId,
+        );
+    }
+
+    /** @requirement SVC-005 ADM-002 ARCH-003 ARCH-004 DAT-003 SEC-002 QUA-004 */
+    public function previewForAdministrator(
+        ServiceOperationalContext $context,
+        string $servicePublicId,
+        string $targetOfferingCode,
+        ?string $requestedSalesServerCode,
+        ?string $requestedProtocolProfileCode,
+    ): ServiceReconfigurationPreviewReceipt {
+        $this->operationalAuthority->assertFinalized();
+        $this->administratorAuthorizer->authorize($context->actorAdministratorId, self::ADMIN_PERMISSION);
+
+        return $this->preview(
+            $this->ownerUserId($servicePublicId),
+            $context,
+            $servicePublicId,
+            $targetOfferingCode,
+            $requestedSalesServerCode,
+            $requestedProtocolProfileCode,
+            $context->requestKey,
+            $context->correlationId,
+        );
+    }
+
+    private function preview(
+        int $actorUserId,
+        ?ServiceOperationalContext $administratorContext,
         string $servicePublicId,
         string $targetOfferingCode,
         ?string $requestedSalesServerCode,
@@ -72,6 +121,9 @@ final readonly class ServiceReconfigurationPreviewService
         $requestHash = hash('sha256', $requestKey);
         $payloadHash = hash('sha256', json_encode([
             'actor_user_id' => $actorUserId,
+            'actor_administrator_id' => $administratorContext?->actorAdministratorId,
+            'administrator_reason_code' => $administratorContext?->reasonCode,
+            'administrator_reason' => $administratorContext?->reason,
             'service_public_id' => $servicePublicId,
             'target_offering_code' => $targetOfferingCode,
             'requested_sales_server_code' => $requestedSalesServerCode,
@@ -144,20 +196,33 @@ final readonly class ServiceReconfigurationPreviewService
             throw new DomainException('Service reconfiguration destination matches the current Service configuration.');
         }
 
-        [$fee, $discountEligible] = $this->operationPolicy(
-            (int) $baseline->source_plan_offering_id,
-            (int) $baseline->service_target_id,
-            $changesPlan,
-            $changesTarget,
-            $changesProtocol,
-        );
+        try {
+            [$fee, $discountEligible] = $this->operationPolicy(
+                (int) $baseline->source_plan_offering_id,
+                (int) $baseline->service_target_id,
+                $changesPlan,
+                $changesTarget,
+                $changesProtocol,
+                $administratorContext !== null,
+            );
+        } catch (Throwable $exception) {
+            $this->releaseHeldRoute($route->capacityReservationKey, $correlationId, $requestHash);
+            throw $exception;
+        }
         $priceDifference = max(0, (int) $targetOffering->base_price_irr - (int) $baseline->source_base_price_irr);
         $totalPrice = $priceDifference + $fee;
         $discountEligible = $discountEligible && (bool) $targetOffering->discount_eligible;
+        if ($administratorContext !== null && $totalPrice !== 0) {
+            $this->releaseHeldRoute($route->capacityReservationKey, $correlationId, $requestHash);
+            throw new DomainException(
+                'Paid administrator Service reconfiguration must use the canonical Quote, Order, Payment, and Provisioning path.',
+            );
+        }
 
         try {
             $receipt = $this->database->connection()->transaction(function (Connection $connection) use (
                 $actorUserId,
+                $administratorContext,
                 $baseline,
                 $targetOffering,
                 $route,
@@ -187,6 +252,9 @@ final readonly class ServiceReconfigurationPreviewService
                         'request_key_hash' => $requestHash,
                         'payload_hash' => $payloadHash,
                         'actor_user_id' => $actorUserId,
+                        'actor_administrator_id' => $administratorContext?->actorAdministratorId,
+                        'administrator_reason_code' => $administratorContext?->reasonCode,
+                        'administrator_reason' => $administratorContext?->reason,
                         'service_subscription_id' => (int) $baseline->service_id,
                         'source_plan_offering_id' => (int) $baseline->source_plan_offering_id,
                         'source_route_selection_id' => $baseline->route_selection_id === null ? null : (int) $baseline->route_selection_id,
@@ -235,6 +303,25 @@ final readonly class ServiceReconfigurationPreviewService
         }
 
         return $receipt;
+    }
+
+    private function ownerUserId(string $servicePublicId): int
+    {
+        if (! Str::isUlid($servicePublicId)) {
+            throw new DomainException('Service public ID is invalid.');
+        }
+        $owner = $this->database->connection()->table('service_subscriptions')
+            ->where('public_id', $servicePublicId)
+            ->value('user_id');
+        if (! is_int($owner) && ! is_string($owner)) {
+            throw new DomainException('Service Subscription does not exist.');
+        }
+        $ownerId = (int) $owner;
+        if ($ownerId < 1) {
+            throw new RuntimeException('Stored Service owner is invalid.');
+        }
+
+        return $ownerId;
     }
 
     /** @return object{service_id:int|string,account_type:string,route_selection_id:int|string|null,service_target_id:int|string,source_panel_connection_id:int|string,source_plan_offering_id:int|string,source_protocol_profile_id:int|string|null,source_capacity_state:?string,source_base_price_irr:int|string,remote_identity_generation:int|string,lifecycle_version:int|string,mutation_generation:int|string} */
@@ -333,6 +420,7 @@ final readonly class ServiceReconfigurationPreviewService
         bool $changesPlan,
         bool $changesTarget,
         bool $changesProtocol,
+        bool $administrator,
     ): array {
         $codes = [];
         if ($changesPlan) {
@@ -347,10 +435,14 @@ final readonly class ServiceReconfigurationPreviewService
         $rows = $this->database->connection()->table('plan_offering_operations')
             ->where('plan_offering_id', $sourceOfferingId)
             ->whereIn('operation_code', $codes)
-            ->where('customer_enabled', true)
+            ->where($administrator ? 'administrator_enabled' : 'customer_enabled', true)
             ->get(['operation_code', 'price_irr', 'discount_eligible', 'required_capability_code']);
         if ($rows->count() !== count($codes)) {
-            throw new DomainException('Current Plan Offering does not allow the requested Service reconfiguration.');
+            throw new DomainException(
+                $administrator
+                    ? 'Current Plan Offering does not allow the requested administrator Service reconfiguration.'
+                    : 'Current Plan Offering does not allow the requested Service reconfiguration.',
+            );
         }
         $fee = 0;
         $discountEligible = true;

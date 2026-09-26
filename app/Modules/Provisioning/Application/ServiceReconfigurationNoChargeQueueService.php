@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Provisioning\Application;
 
+use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Shared\Application\Clock;
@@ -23,11 +24,13 @@ use RuntimeException;
  *
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,order_id:int|string,order_item_id:int|string,user_id:int|string,route_selection_id:int|string|null,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type OperationRow object{id:int|string,public_id:string,operation_type:string,service_subscription_id:int|string,state:string,state_version:int|string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,request_key_hash:?string}
- * @phpstan-type PreviewRow object{id:int|string,public_id:string,actor_user_id:int|string,service_subscription_id:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,source_remote_identity_generation:int|string,source_lifecycle_version:int|string,source_mutation_generation:int|string,target_plan_offering_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,target_capacity_reservation_key:string,total_price_irr:int|string,state:string,expires_at:string,target_offering_code:string,target_offering_version:int|string,target_offering_state:string,target_offering_visibility:string,target_selection_plan_offering_id:int|string,target_selection_service_target_id:int|string,target_selection_protocol_profile_id:int|string,target_selection_capacity_reservation_id:int|string,target_reservation_state:string,target_reservation_units:int|string,target_reservation_key:string,target_reservation_version:int|string,target_reservation_expires_at:string,target_reference:string,current_target_version:int|string,target_state:string,target_capability_status:string,target_connection_id:int|string,target_protocol_profile_code:string,current_profile_version:int|string,target_profile_state:string,source_connection_id:int|string,source_reservation_state:?string}
+ * @phpstan-type PreviewRow object{id:int|string,public_id:string,request_key_hash:string,actor_user_id:int|string,actor_administrator_id:int|string|null,administrator_reason_code:?string,administrator_reason:?string,correlation_id:string,service_subscription_id:int|string,source_route_selection_id:int|string|null,source_service_target_id:int|string,source_remote_identity_generation:int|string,source_lifecycle_version:int|string,source_mutation_generation:int|string,target_plan_offering_id:int|string,target_route_selection_id:int|string,target_service_target_id:int|string,target_service_target_version:int|string,target_protocol_profile_id:int|string,target_protocol_profile_version:int|string,target_capacity_reservation_id:int|string,target_capacity_reservation_key:string,total_price_irr:int|string,state:string,expires_at:string,target_offering_code:string,target_offering_version:int|string,target_offering_state:string,target_offering_visibility:string,target_selection_plan_offering_id:int|string,target_selection_service_target_id:int|string,target_selection_protocol_profile_id:int|string,target_selection_capacity_reservation_id:int|string,target_reservation_state:string,target_reservation_units:int|string,target_reservation_key:string,target_reservation_version:int|string,target_reservation_expires_at:string,target_reference:string,current_target_version:int|string,target_state:string,target_capability_status:string,target_connection_id:int|string,target_protocol_profile_code:string,current_profile_version:int|string,target_profile_state:string,source_connection_id:int|string,source_reservation_state:?string}
  */
 final readonly class ServiceReconfigurationNoChargeQueueService
 {
     private const QUEUE_AUTHORITY = 'service_reconfiguration_no_charge_queue_v1';
+
+    private const ADMIN_PERMISSION = 'services.reconfigure';
 
     /** @var list<string> */
     private const TERMINAL_STATES = ['succeeded', 'failed_final', 'compensated'];
@@ -36,11 +39,48 @@ final readonly class ServiceReconfigurationNoChargeQueueService
         private DatabaseManager $database,
         private Clock $clock,
         private OutboxPublisher $outbox,
+        private AdministratorPermissionAuthorizer $administratorAuthorizer,
+        private ServiceOperationalAudit $audit,
     ) {}
 
     /** @requirement SVC-005 PRV-002 PRV-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 */
     public function queueForSelf(
         int $actorUserId,
+        string $previewPublicId,
+        string $requestKey,
+        string $correlationId,
+    ): ServiceMutationReceipt {
+        return $this->queue(
+            $actorUserId,
+            null,
+            $previewPublicId,
+            $requestKey,
+            $correlationId,
+        );
+    }
+
+    /** @requirement SVC-005 ADM-002 ACL-002 PRV-002 PRV-003 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 */
+    public function queueForAdministrator(
+        string $previewPublicId,
+        ServiceOperationalContext $context,
+    ): ServiceMutationReceipt {
+        $this->administratorAuthorizer->authorize(
+            $context->actorAdministratorId,
+            self::ADMIN_PERMISSION,
+        );
+
+        return $this->queue(
+            $this->previewOwnerUserId($previewPublicId),
+            $context,
+            $previewPublicId,
+            $context->requestKey,
+            $context->correlationId,
+        );
+    }
+
+    private function queue(
+        int $actorUserId,
+        ?ServiceOperationalContext $administratorContext,
         string $previewPublicId,
         string $requestKey,
         string $correlationId,
@@ -54,6 +94,7 @@ final readonly class ServiceReconfigurationNoChargeQueueService
 
         return $this->database->connection()->transaction(function (Connection $connection) use (
             $actorUserId,
+            $administratorContext,
             $previewPublicId,
             $requestHash,
             $correlationId,
@@ -83,7 +124,24 @@ final readonly class ServiceReconfigurationNoChargeQueueService
             if ((int) $preview->actor_user_id !== $actorUserId
                 || (int) $preview->service_subscription_id !== (int) $service->id
                 || (int) $service->user_id !== $actorUserId) {
-                throw new DomainException('Service reconfiguration preview is not owned by this customer.');
+                throw new DomainException('Service reconfiguration preview owner authority changed.');
+            }
+            if ($administratorContext === null) {
+                if ($preview->actor_administrator_id !== null
+                    || $preview->administrator_reason_code !== null
+                    || $preview->administrator_reason !== null) {
+                    throw new DomainException('Administrator Service reconfiguration preview cannot execute as self-service.');
+                }
+            } else {
+                if ((int) $preview->actor_administrator_id !== $administratorContext->actorAdministratorId
+                    || ! is_string($preview->administrator_reason_code)
+                    || ! hash_equals($preview->administrator_reason_code, $administratorContext->reasonCode)
+                    || ! is_string($preview->administrator_reason)
+                    || ! hash_equals($preview->administrator_reason, $administratorContext->reason)
+                    || ! hash_equals($preview->request_key_hash, $administratorContext->requestHash())
+                    || ! hash_equals($preview->correlation_id, $administratorContext->correlationId)) {
+                    throw new DomainException('Administrator Service reconfiguration context conflicts with preview evidence.');
+                }
             }
 
             /** @var object{provisioning_operation_id:int|string,authorization_mode:string}|null $existingAuthority */
@@ -92,8 +150,9 @@ final readonly class ServiceReconfigurationNoChargeQueueService
                 ->lockForUpdate()
                 ->first(['provisioning_operation_id', 'authorization_mode']);
             if ($existingAuthority !== null) {
-                if ($existingAuthority->authorization_mode !== 'no_charge') {
-                    throw new DomainException('Service reconfiguration preview is already bound to paid purchase authority.');
+                $expectedMode = $administratorContext === null ? 'no_charge' : 'administrator_no_charge';
+                if ($existingAuthority->authorization_mode !== $expectedMode) {
+                    throw new DomainException('Service reconfiguration preview is already bound to different execution authority.');
                 }
                 $operation = $this->operation($connection, (int) $existingAuthority->provisioning_operation_id);
                 if ($operation->request_key_hash === null || ! hash_equals($operation->request_key_hash, $requestHash)) {
@@ -147,6 +206,30 @@ final readonly class ServiceReconfigurationNoChargeQueueService
             }
 
             $timestamp = $this->timestamp();
+            $auditId = null;
+            if ($administratorContext !== null) {
+                $auditId = $this->audit->record(
+                    $connection,
+                    'service.operational.reconfiguration.queued',
+                    'service_subscription',
+                    (string) $service->public_id,
+                    $administratorContext,
+                    [
+                        'preview_public_id' => $preview->public_id,
+                        'source_service_target_id' => (int) $preview->source_service_target_id,
+                        'source_remote_identity_generation' => (int) $preview->source_remote_identity_generation,
+                        'source_lifecycle_version' => (int) $preview->source_lifecycle_version,
+                        'source_mutation_generation' => (int) $preview->source_mutation_generation,
+                    ],
+                    [
+                        'target_route_selection_id' => (int) $preview->target_route_selection_id,
+                        'target_service_target_id' => (int) $preview->target_service_target_id,
+                        'target_protocol_profile_id' => (int) $preview->target_protocol_profile_id,
+                        'total_price_irr' => 0,
+                    ],
+                );
+            }
+
             $this->setQueueAuthority(
                 $connection,
                 $generation,
@@ -191,7 +274,11 @@ final readonly class ServiceReconfigurationNoChargeQueueService
                     'public_id' => (string) Str::ulid(),
                     'provisioning_operation_id' => $operationId,
                     'service_subscription_id' => (int) $service->id,
-                    'authorization_mode' => 'no_charge',
+                    'authorization_mode' => $administratorContext === null
+                        ? 'no_charge'
+                        : 'administrator_no_charge',
+                    'actor_administrator_id' => $administratorContext?->actorAdministratorId,
+                    'audit_log_id' => $auditId,
                     'source_quote_id' => null,
                     'purchase_order_id' => null,
                     'purchase_order_item_id' => null,
@@ -240,6 +327,24 @@ final readonly class ServiceReconfigurationNoChargeQueueService
         }, 3);
     }
 
+    private function previewOwnerUserId(string $previewPublicId): int
+    {
+        $this->assertUlid($previewPublicId, 'Service reconfiguration preview public ID');
+        $owner = $this->database->connection()->table('service_reconfiguration_previews as preview')
+            ->join('service_subscriptions as service', 'service.id', '=', 'preview.service_subscription_id')
+            ->where('preview.public_id', $previewPublicId)
+            ->value('service.user_id');
+        if (! is_int($owner) && ! is_string($owner)) {
+            throw new DomainException('Service reconfiguration preview does not exist.');
+        }
+        $ownerId = (int) $owner;
+        if ($ownerId < 1) {
+            throw new RuntimeException('Stored Service reconfiguration owner is invalid.');
+        }
+
+        return $ownerId;
+    }
+
     /** @return PreviewRow */
     private function preview(Connection $connection, string $publicId): object
     {
@@ -256,7 +361,9 @@ final readonly class ServiceReconfigurationNoChargeQueueService
             ->where('preview.public_id', $publicId)
             ->lockForUpdate()
             ->first([
-                'preview.id', 'preview.public_id', 'preview.actor_user_id', 'preview.service_subscription_id',
+                'preview.id', 'preview.public_id', 'preview.request_key_hash', 'preview.actor_user_id',
+                'preview.actor_administrator_id', 'preview.administrator_reason_code', 'preview.administrator_reason',
+                'preview.correlation_id', 'preview.service_subscription_id',
                 'preview.source_route_selection_id', 'preview.source_service_target_id',
                 'preview.source_remote_identity_generation', 'preview.source_lifecycle_version', 'preview.source_mutation_generation',
                 'preview.target_plan_offering_id', 'preview.target_route_selection_id', 'preview.target_service_target_id',
