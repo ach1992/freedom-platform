@@ -96,6 +96,17 @@ trait TelegramCustomerRuntimeWiringTestSupport
 
     private TelegramRuntimeZarinpalTransport $zarinpal;
 
+    protected function tearDown(): void
+    {
+        try {
+            if (DB::connection()->getDriverName() === 'mysql') {
+                $this->truncateTablesForAllConnections();
+            }
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     private function setUpTelegramRuntimeWiring(): void
     {
         if (DB::connection()->getDriverName() !== 'mysql') {
