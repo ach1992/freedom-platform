@@ -32,6 +32,35 @@ final readonly class CustomerTierAutomaticRecalculationService
             throw new DomainException('Customer tier purchase trigger identity is invalid.');
         }
 
+        return $this->recalculate(
+            $userId,
+            'tier:purchase:'.$purchaseSettlementPublicId,
+            'successful_purchase',
+            $correlationId,
+        );
+    }
+
+    /** @requirement USR-002 DAT-002 DAT-003 QUA-001 */
+    public function daily(int $userId, string $dateKey): ?CustomerMutationReceipt
+    {
+        if ($userId < 1 || preg_match('/\\A[0-9]{8}\\z/', $dateKey) !== 1) {
+            throw new DomainException('Customer tier daily trigger identity is invalid.');
+        }
+
+        return $this->recalculate(
+            $userId,
+            'tier:daily:'.$dateKey.':'.$userId,
+            'daily_recalculation',
+            'tier-daily-'.$dateKey.'-'.$userId,
+        );
+    }
+
+    private function recalculate(
+        int $userId,
+        string $requestFingerprint,
+        string $reasonCode,
+        string $correlationId,
+    ): ?CustomerMutationReceipt {
         $user = $this->database->connection()->table('users')
             ->where('id', $userId)
             ->first(['account_type', 'first_seen_at', 'created_at']);
@@ -59,9 +88,9 @@ final readonly class CustomerTierAutomaticRecalculationService
                 $purchase->totalSpendIrr,
             ),
             new CustomerChangeContext(
-                'tier:purchase:'.$purchaseSettlementPublicId,
+                $requestFingerprint,
                 $this->customerCorrelationId($correlationId),
-                'successful_purchase',
+                $reasonCode,
             ),
         );
     }

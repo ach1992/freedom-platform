@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Customers\Presentation\Console\RecalculateCustomerTiersCommand;
 use App\Modules\Installer\Presentation\Console\IssueInstallerTokenCommand;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
@@ -15,6 +16,7 @@ use App\Modules\Payments\Presentation\Console\AlternativePaymentMaintenanceComma
 use App\Modules\Payments\Presentation\Console\PurchasePaymentMaintenanceCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceAutoRenewalsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceNotificationsCommand;
+use App\Modules\Promotions\Presentation\Console\ProcessReferralRewardsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceSynchronizationsCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\ProcessTelegramBroadcastsCommand;
@@ -46,6 +48,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withCommands([
         CheckOutboxContractRetirementCommand::class,
         CheckWorkerHeartbeatsCommand::class,
+        RecalculateCustomerTiersCommand::class,
         ConfigureTelegramWebhookCommand::class,
         DispatchOutboxCommand::class,
         RequeueTelegramUpdatesCommand::class,
@@ -54,6 +57,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ProcessServiceAutoRenewalsCommand::class,
         ProcessServiceNotificationsCommand::class,
         ProcessServiceSynchronizationsCommand::class,
+        ProcessReferralRewardsCommand::class,
         RecordWorkerHeartbeatCommand::class,
         AlternativePaymentMaintenanceCommand::class,
         PurchasePaymentMaintenanceCommand::class,
