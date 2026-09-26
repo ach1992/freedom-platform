@@ -60,9 +60,13 @@ final readonly class TelegramDeliveryQueueService
         ?NonRestrictedTelegramPresentation $presentation,
         string $requestKey,
         string $correlationId,
-        ?TelegramInlineKeyboardSnapshot $inlineKeyboard = null,
+        TelegramInlineKeyboardSnapshot|TelegramContactRequestKeyboardSnapshot|null $inlineKeyboard = null,
     ): TelegramDeliveryOperationReceipt {
         TelegramPresentationProvenanceGuard::assertQueueSource($this->database->connection());
+        if ($inlineKeyboard instanceof TelegramContactRequestKeyboardSnapshot
+            && $action !== TelegramDeliveryAction::Send) {
+            throw new DomainException('Telegram contact-request keyboards support send mutations only.');
+        }
 
         $request = new TelegramMutationRequest($action, $recipientChatId, $targetMessageId, $presentation);
         $contractVersion = $inlineKeyboard === null
@@ -278,11 +282,11 @@ final readonly class TelegramDeliveryQueueService
         ?ConfidentialTelegramPresentation $confidentialPresentation,
         string $requestKey,
         string $correlationId,
-        ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
+        TelegramInlineKeyboardSnapshot|TelegramContactRequestKeyboardSnapshot|null $inlineKeyboard,
         int $contractVersion,
     ): TelegramDeliveryOperationReceipt {
         if ($inlineKeyboard !== null && $request->action === TelegramDeliveryAction::Delete) {
-            throw new DomainException('Telegram delete delivery cannot carry an inline keyboard.');
+            throw new DomainException('Telegram delete delivery cannot carry interactive reply markup.');
         }
         if ($contractVersion === self::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL) {
             if (! $request->presentation instanceof ConfidentialTelegramPresentation
@@ -397,7 +401,7 @@ final readonly class TelegramDeliveryQueueService
         string $fingerprint,
         string $correlationId,
         string $botId,
-        ?TelegramInlineKeyboardSnapshot $inlineKeyboard,
+        TelegramInlineKeyboardSnapshot|TelegramContactRequestKeyboardSnapshot|null $inlineKeyboard,
         int $contractVersion,
     ): TelegramDeliveryOperationReceipt {
         $publicId = (string) Str::ulid();

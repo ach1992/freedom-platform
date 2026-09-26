@@ -7,7 +7,7 @@ namespace App\Modules\Telegram\Application;
 final readonly class TelegramResolvedInteractivePresentation
 {
     public function __construct(
-        public TelegramResolvedInlineKeyboardMarkup $keyboard,
+        public TelegramResolvedInlineKeyboardMarkup|TelegramResolvedContactRequestMarkup $keyboard,
         public string $snapshotHash,
     ) {}
 

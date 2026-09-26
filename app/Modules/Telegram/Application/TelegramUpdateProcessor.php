@@ -52,7 +52,13 @@ final readonly class TelegramUpdateProcessor
             if ($userId !== null) {
                 $this->referralAttribution->bindFirstStart($botId, $updateId, $userId);
             }
-            $this->interactionDispatcher->dispatch($botId, $updateId, $userId, $payload);
+            $this->interactionDispatcher->dispatch(
+                $botId,
+                $updateId,
+                $userId,
+                $payload,
+                $record['request_ip_hash'],
+            );
             $now = now('UTC')->format('Y-m-d H:i:s.u');
 
             $this->database->connection()->table('processed_telegram_updates')
@@ -83,7 +89,7 @@ final readonly class TelegramUpdateProcessor
         }
     }
 
-    /** @return array{payload_hash: string, payload_ciphertext: string}|null */
+    /** @return array{payload_hash: string, payload_ciphertext: string, request_ip_hash: ?string}|null */
     private function claim(string $botId, int $updateId): ?array
     {
         return $this->database->connection()->transaction(function () use ($botId, $updateId): ?array {
@@ -94,6 +100,7 @@ final readonly class TelegramUpdateProcessor
                 ->first([
                     'payload_hash',
                     'payload_ciphertext',
+                    'request_ip_hash',
                     'state',
                     'processing_started_at',
                 ]);
@@ -130,9 +137,17 @@ final readonly class TelegramUpdateProcessor
                     'updated_at' => $now,
                 ]);
 
+            $requestIpHash = $row->request_ip_hash;
+            if ($requestIpHash !== null
+                && (! is_string($requestIpHash)
+                    || preg_match('/\A[0-9a-f]{64}\z/', $requestIpHash) !== 1)) {
+                throw new RuntimeException('Telegram request IP abuse-control scope is invalid.');
+            }
+
             return [
                 'payload_hash' => (string) $row->payload_hash,
                 'payload_ciphertext' => $row->payload_ciphertext,
+                'request_ip_hash' => $requestIpHash,
             ];
         });
     }

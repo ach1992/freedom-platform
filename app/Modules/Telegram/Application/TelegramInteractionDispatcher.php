@@ -43,8 +43,16 @@ final readonly class TelegramInteractionDispatcher
     ) {}
 
     /** @param array<string, mixed> $update */
-    public function dispatch(string $botId, int $updateId, ?int $userId, array $update): TelegramInteractionDispatchResult
-    {
+    public function dispatch(
+        string $botId,
+        int $updateId,
+        ?int $userId,
+        array $update,
+        ?string $requestIpHash = null,
+    ): TelegramInteractionDispatchResult {
+        if ($requestIpHash !== null && preg_match('/\A[0-9a-f]{64}\z/', $requestIpHash) !== 1) {
+            throw new RuntimeException('Telegram request IP abuse-control scope is invalid.');
+        }
         if ($userId === null) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
         }
@@ -64,6 +72,7 @@ final readonly class TelegramInteractionDispatcher
                 $updateId,
                 (int) $account->telegram_user_id,
                 $callbackQuery,
+                $requestIpHash,
             );
         }
 
@@ -73,7 +82,9 @@ final readonly class TelegramInteractionDispatcher
         }
 
         $text = $message['text'] ?? null;
-        if (! $this->isSourceCaptureNavigationCommand($text)
+        $contact = $this->contactFromMessage($message);
+        if ($contact === null
+            && ! $this->isSourceCaptureNavigationCommand($text)
             && $this->sourceMessageGateway->awaitingSource((int) $account->id)) {
             if (! $this->isPrivateActorChat($message, (int) $account->telegram_user_id)) {
                 return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
@@ -122,19 +133,24 @@ final readonly class TelegramInteractionDispatcher
             );
         }
 
-        if (! is_string($text)) {
+        if ($contact !== null && is_string($text)) {
+            return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
+        }
+        if ($contact === null && ! is_string($text)) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Ignored);
         }
-        if (mb_strlen($text) > 4096) {
+        if (is_string($text) && mb_strlen($text) > 4096) {
             return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Rejected);
         }
 
-        $trimmed = trim($text);
-        $isCancel = preg_match('/\A\/cancel(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
-        $isBack = preg_match('/\A\/back(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
+        $trimmed = is_string($text) ? trim($text) : '';
+        $isCancel = $contact === null
+            && preg_match('/\A\/cancel(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
+        $isBack = $contact === null
+            && preg_match('/\A\/back(?:@[A-Za-z0-9_]+)?\z/u', $trimmed) === 1;
         $kind = $isCancel ? 'cancel' : ($isBack ? 'back' : 'message');
         $requestKey = $this->updateRequestKey($botId, $updateId, $kind);
-        $binding = $this->navigationEntry->matchesEntryCommand($trimmed)
+        $binding = $contact === null && $this->navigationEntry->matchesEntryCommand($trimmed)
             ? $this->updateBindings->existing(
                 $botId,
                 $updateId,
@@ -145,15 +161,17 @@ final readonly class TelegramInteractionDispatcher
             : null;
 
         if ($binding === null) {
-            $this->navigationEntry->startIfEligible(
-                $botId,
-                $updateId,
-                $userId,
-                (int) $account->id,
-                (int) $account->telegram_user_id,
-                $message,
-                $trimmed,
-            );
+            if ($contact === null) {
+                $this->navigationEntry->startIfEligible(
+                    $botId,
+                    $updateId,
+                    $userId,
+                    (int) $account->id,
+                    (int) $account->telegram_user_id,
+                    $message,
+                    $trimmed,
+                );
+            }
             $binding = $this->updateBindings->bind(
                 $botId,
                 $updateId,
@@ -219,6 +237,8 @@ final readonly class TelegramInteractionDispatcher
             $binding->replayed,
             null,
             $binding->acceptedAt,
+            $contact,
+            $requestIpHash,
         ));
 
         return new TelegramInteractionDispatchResult(TelegramInteractionDispatchStatus::Handled, $binding->sessionPublicId);
@@ -357,6 +377,7 @@ final readonly class TelegramInteractionDispatcher
         int $updateId,
         int $telegramUserId,
         array $callbackQuery,
+        ?string $requestIpHash,
     ): TelegramInteractionDispatchResult {
         $data = $callbackQuery['data'] ?? null;
         if (! is_string($data) || ! str_starts_with($data, 'i_')) {
@@ -411,6 +432,9 @@ final readonly class TelegramInteractionDispatcher
             $callback->payload,
             $callback->replayed,
             $callback->acceptedAt,
+            null,
+            null,
+            $requestIpHash,
         ));
         $this->callbacks->complete($callback->publicId);
 
@@ -419,6 +443,41 @@ final readonly class TelegramInteractionDispatcher
             $callback->sessionPublicId,
             $callback->publicId,
         );
+    }
+
+    /**
+     * Keep only the two contact fields required by ONB-004. Names, vCards and
+     * any other Telegram contact metadata remain confined to the encrypted raw
+     * Update retention boundary and never enter session state or Outbox data.
+     *
+     * @param array<string,mixed> $message
+     * @return array{phone_number:string,user_id:int}|null
+     */
+    private function contactFromMessage(array $message): ?array
+    {
+        if (! array_key_exists('contact', $message)) {
+            return null;
+        }
+
+        $contact = $message['contact'];
+        if (! is_array($contact) || array_is_list($contact)) {
+            return null;
+        }
+
+        $phoneNumber = $contact['phone_number'] ?? null;
+        $userId = $contact['user_id'] ?? null;
+        if (! is_string($phoneNumber)
+            || $phoneNumber === ''
+            || strlen($phoneNumber) > 32
+            || ! is_int($userId)
+            || $userId < 1) {
+            return null;
+        }
+
+        return [
+            'phone_number' => $phoneNumber,
+            'user_id' => $userId,
+        ];
     }
 
     /** @param array<string,mixed> $message */

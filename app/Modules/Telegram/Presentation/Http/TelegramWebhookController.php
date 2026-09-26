@@ -30,7 +30,7 @@ final readonly class TelegramWebhookController
         }
 
         try {
-            $this->ingestor->ingest($content, $correlationId);
+            $this->ingestor->ingest($content, $correlationId, $request->ip());
         } catch (InvalidTelegramWebhookPayload) {
             return new JsonResponse(['ok' => false], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (TelegramUpdateCollision) {
