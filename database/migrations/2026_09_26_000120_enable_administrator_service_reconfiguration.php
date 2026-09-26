@@ -103,8 +103,8 @@ return new class extends Migration
             $table->dropColumn(['audit_log_id', 'actor_administrator_id']);
         });
         Schema::table('service_reconfiguration_previews', function (Blueprint $table): void {
-            $table->dropIndex('srp_admin_created_idx');
             $table->dropForeign('srp_admin_actor_fk');
+            $table->dropIndex('srp_admin_created_idx');
             $table->dropColumn([
                 'administrator_reason',
                 'administrator_reason_code',

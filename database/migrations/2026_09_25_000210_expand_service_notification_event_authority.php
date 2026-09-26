@@ -39,6 +39,7 @@ return new class extends Migration
 
         DB::unprepared($this->insertGuardV2());
         DB::unprepared($this->updateGuardV2());
+        DB::unprepared($this->deliveryAttemptInsertGuardV2());
     }
 
     public function down(): void
@@ -56,6 +57,7 @@ return new class extends Migration
             throw new RuntimeException('Cannot roll back Service notification event authority while sync freshness evidence exists.');
         }
 
+        DB::unprepared($this->deliveryAttemptInsertGuardV1());
         DB::unprepared($this->insertGuardV1());
         DB::unprepared($this->updateGuardV1());
         if ($this->constraintExists('service_notification_states', 'sns_sync_freshness_chk')) {
@@ -1250,6 +1252,217 @@ BEGIN
         END IF;
     ELSE
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service notification state update authority is invalid.';
+    END IF;
+END
+SQL;
+    }
+
+    /** @return literal-string */
+    private function deliveryAttemptInsertGuardV2(): string
+    {
+        return <<<'SQL'
+CREATE OR REPLACE TRIGGER service_delivery_attempts_insert_guard
+BEFORE INSERT ON service_delivery_attempts
+FOR EACH ROW
+BEGIN
+    DECLARE valid_service_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE valid_terminal_notification_count INT DEFAULT 0;
+    DECLARE valid_outbox_count INT DEFAULT 0;
+    DECLARE unresolved_mutation_count INT DEFAULT 0;
+
+    IF COALESCE(@app_service_delivery_authority, '') <> 'service_delivery_queue_v1'
+       OR NEW.service_subscription_id <> COALESCE(@app_service_delivery_service_id, 0)
+       OR BINARY NEW.purpose <> BINARY COALESCE(@app_service_delivery_purpose, '')
+       OR BINARY NEW.request_key_hash <> BINARY COALESCE(@app_service_delivery_request_hash, '')
+       OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_delivery_correlation_id, '')
+       OR BINARY NEW.public_id <> BINARY COALESCE(@app_service_delivery_attempt_public_id, '')
+       OR BINARY NEW.outbox_event_id <> BINARY COALESCE(@app_service_delivery_outbox_event_id, '') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt creation authority is invalid.';
+    END IF;
+
+    SELECT service_row.id INTO valid_service_id
+    FROM service_subscriptions service_row
+    WHERE service_row.id = NEW.service_subscription_id
+      AND service_row.provisioned_at IS NOT NULL
+      AND service_row.service_target_id IS NOT NULL
+      AND service_row.remote_service_id IS NOT NULL
+      AND CHAR_LENGTH(service_row.remote_service_id) > 0
+      AND service_row.remote_deleted_at IS NULL
+      AND service_row.lifecycle_state IN ('active','suspended')
+      AND service_row.remote_identity_generation = NEW.target_remote_identity_generation
+      AND service_row.lifecycle_version = NEW.target_lifecycle_version
+    LIMIT 1 FOR UPDATE;
+
+    IF valid_service_id IS NULL AND BINARY NEW.purpose = BINARY 'notification' THEN
+        SELECT COUNT(*) INTO valid_terminal_notification_count
+        FROM service_notification_states state_row
+        INNER JOIN provisioning_operations operation_row ON operation_row.id = state_row.source_id
+        INNER JOIN service_subscriptions service_row ON service_row.id = state_row.service_subscription_id
+        WHERE state_row.service_subscription_id = NEW.service_subscription_id
+          AND state_row.state = 'triggered'
+          AND state_row.notification_type = 'service_state'
+          AND state_row.threshold_code = 'state_deleted'
+          AND state_row.source_type = 'provisioning_operation'
+          AND state_row.source_id IS NOT NULL
+          AND operation_row.service_subscription_id = service_row.id
+          AND operation_row.operation_type = 'delete'
+          AND operation_row.state = 'succeeded'
+          AND operation_row.operation_generation = service_row.mutation_generation
+          AND operation_row.target_remote_identity_generation = service_row.remote_identity_generation
+          AND operation_row.target_lifecycle_version + 1 = service_row.lifecycle_version
+          AND service_row.provisioned_at IS NOT NULL
+          AND service_row.service_target_id IS NOT NULL
+          AND service_row.remote_service_id IS NOT NULL
+          AND CHAR_LENGTH(service_row.remote_service_id) > 0
+          AND service_row.remote_deleted_at IS NOT NULL
+          AND service_row.lifecycle_state = 'retired'
+          AND service_row.remote_identity_generation = NEW.target_remote_identity_generation
+          AND service_row.lifecycle_version = NEW.target_lifecycle_version
+          AND COALESCE(state_row.latest_retry_ordinal + 1, 0) <= state_row.max_retries
+          AND BINARY state_row.cycle_key_hash = BINARY SHA2(CONCAT_WS('|',
+              'service-notification-state-cycle-v1',
+              service_row.id,
+              operation_row.id,
+              operation_row.operation_generation,
+              service_row.lifecycle_version
+          ), 256)
+          AND BINARY state_row.episode_key_hash = BINARY SHA2(CONCAT_WS('|',
+              'service-notification-episode-v1',
+              service_row.id,
+              state_row.notification_type,
+              state_row.threshold_code,
+              state_row.cycle_key_hash
+          ), 256)
+          AND BINARY NEW.request_key_hash = BINARY SHA2(CONCAT(
+              'service-notification:',
+              state_row.public_id,
+              ':',
+              COALESCE(state_row.latest_retry_ordinal + 1, 0)
+          ), 256)
+          AND BINARY NEW.correlation_id = BINARY CONCAT(
+              'service-notification:',
+              state_row.public_id,
+              ':',
+              COALESCE(state_row.latest_retry_ordinal + 1, 0)
+          );
+    END IF;
+
+    IF valid_service_id IS NULL AND valid_terminal_notification_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt must match the current provisioned Service identity and lifecycle.';
+    END IF;
+
+    SELECT COUNT(*) INTO unresolved_mutation_count
+    FROM provisioning_operations operation_row
+    WHERE operation_row.service_subscription_id = NEW.service_subscription_id
+      AND operation_row.operation_type <> 'initial_provision'
+      AND operation_row.state NOT IN ('succeeded','failed_final','compensated');
+
+    IF unresolved_mutation_count <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt is blocked by an unresolved Service mutation.';
+    END IF;
+
+    SELECT COUNT(*) INTO valid_outbox_count
+    FROM outbox_messages outbox_row
+    WHERE BINARY outbox_row.id = BINARY NEW.outbox_event_id
+      AND BINARY outbox_row.event_type = BINARY 'provisioning.service_delivery.requested'
+      AND BINARY outbox_row.event_key = BINARY CONCAT('provisioning-service-delivery-requested:', NEW.public_id)
+      AND BINARY outbox_row.aggregate_type = BINARY 'service_delivery_attempt'
+      AND BINARY outbox_row.aggregate_id = BINARY NEW.public_id
+      AND BINARY outbox_row.correlation_id = BINARY NEW.correlation_id
+      AND outbox_row.dispatch_state = 'authority_pending'
+      AND outbox_row.processed_at IS NULL
+      AND outbox_row.lease_token IS NULL
+      AND outbox_row.leased_until IS NULL
+      AND outbox_row.attempts = 0
+      AND outbox_row.review_reason IS NULL
+      AND outbox_row.last_error_class IS NULL
+      AND outbox_row.last_error_code IS NULL
+      AND COALESCE(JSON_TYPE(outbox_row.payload), '') = 'OBJECT'
+      AND COALESCE(JSON_LENGTH(outbox_row.payload), -1) = 1
+      AND BINARY COALESCE(JSON_UNQUOTE(JSON_EXTRACT(outbox_row.payload, '$.service_delivery_attempt_public_id')), '') = BINARY NEW.public_id
+      AND HEX(CAST(outbox_row.payload AS CHAR)) = HEX(CONCAT('{"service_delivery_attempt_public_id":"', NEW.public_id, '"}'))
+      AND HEX(outbox_row.payload_hash) = HEX(LOWER(SHA2(CAST(outbox_row.payload AS CHAR), 256)));
+
+    IF valid_outbox_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt requires one exact quarantined Outbox command.';
+    END IF;
+END
+SQL;
+    }
+
+    /** @return literal-string */
+    private function deliveryAttemptInsertGuardV1(): string
+    {
+        return <<<'SQL'
+CREATE OR REPLACE TRIGGER service_delivery_attempts_insert_guard
+BEFORE INSERT ON service_delivery_attempts
+FOR EACH ROW
+BEGIN
+    DECLARE valid_service_id BIGINT UNSIGNED DEFAULT NULL;
+    DECLARE valid_outbox_count INT DEFAULT 0;
+    DECLARE unresolved_mutation_count INT DEFAULT 0;
+
+    IF COALESCE(@app_service_delivery_authority, '') <> 'service_delivery_queue_v1'
+       OR NEW.service_subscription_id <> COALESCE(@app_service_delivery_service_id, 0)
+       OR BINARY NEW.purpose <> BINARY COALESCE(@app_service_delivery_purpose, '')
+       OR BINARY NEW.request_key_hash <> BINARY COALESCE(@app_service_delivery_request_hash, '')
+       OR BINARY NEW.correlation_id <> BINARY COALESCE(@app_service_delivery_correlation_id, '')
+       OR BINARY NEW.public_id <> BINARY COALESCE(@app_service_delivery_attempt_public_id, '')
+       OR BINARY NEW.outbox_event_id <> BINARY COALESCE(@app_service_delivery_outbox_event_id, '') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt creation authority is invalid.';
+    END IF;
+
+    SELECT service_row.id INTO valid_service_id
+    FROM service_subscriptions service_row
+    WHERE service_row.id = NEW.service_subscription_id
+      AND service_row.provisioned_at IS NOT NULL
+      AND service_row.service_target_id IS NOT NULL
+      AND service_row.remote_service_id IS NOT NULL
+      AND CHAR_LENGTH(service_row.remote_service_id) > 0
+      AND service_row.remote_deleted_at IS NULL
+      AND service_row.lifecycle_state IN ('active','suspended')
+      AND service_row.remote_identity_generation = NEW.target_remote_identity_generation
+      AND service_row.lifecycle_version = NEW.target_lifecycle_version
+    LIMIT 1 FOR UPDATE;
+
+    IF valid_service_id IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt must match the current provisioned Service identity and lifecycle.';
+    END IF;
+
+    SELECT COUNT(*) INTO unresolved_mutation_count
+    FROM provisioning_operations operation_row
+    WHERE operation_row.service_subscription_id = NEW.service_subscription_id
+      AND operation_row.operation_type <> 'initial_provision'
+      AND operation_row.state NOT IN ('succeeded','failed_final','compensated');
+
+    IF unresolved_mutation_count <> 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt is blocked by an unresolved Service mutation.';
+    END IF;
+
+    SELECT COUNT(*) INTO valid_outbox_count
+    FROM outbox_messages outbox_row
+    WHERE BINARY outbox_row.id = BINARY NEW.outbox_event_id
+      AND BINARY outbox_row.event_type = BINARY 'provisioning.service_delivery.requested'
+      AND BINARY outbox_row.event_key = BINARY CONCAT('provisioning-service-delivery-requested:', NEW.public_id)
+      AND BINARY outbox_row.aggregate_type = BINARY 'service_delivery_attempt'
+      AND BINARY outbox_row.aggregate_id = BINARY NEW.public_id
+      AND BINARY outbox_row.correlation_id = BINARY NEW.correlation_id
+      AND outbox_row.dispatch_state = 'authority_pending'
+      AND outbox_row.processed_at IS NULL
+      AND outbox_row.lease_token IS NULL
+      AND outbox_row.leased_until IS NULL
+      AND outbox_row.attempts = 0
+      AND outbox_row.review_reason IS NULL
+      AND outbox_row.last_error_class IS NULL
+      AND outbox_row.last_error_code IS NULL
+      AND COALESCE(JSON_TYPE(outbox_row.payload), '') = 'OBJECT'
+      AND COALESCE(JSON_LENGTH(outbox_row.payload), -1) = 1
+      AND BINARY COALESCE(JSON_UNQUOTE(JSON_EXTRACT(outbox_row.payload, '$.service_delivery_attempt_public_id')), '') = BINARY NEW.public_id
+      AND HEX(CAST(outbox_row.payload AS CHAR)) = HEX(CONCAT('{"service_delivery_attempt_public_id":"', NEW.public_id, '"}'))
+      AND HEX(outbox_row.payload_hash) = HEX(LOWER(SHA2(CAST(outbox_row.payload AS CHAR), 256)));
+
+    IF valid_outbox_count <> 1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Service Delivery Attempt requires one exact quarantined Outbox command.';
     END IF;
 END
 SQL;

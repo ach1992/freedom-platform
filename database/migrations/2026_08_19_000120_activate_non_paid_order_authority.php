@@ -10,6 +10,13 @@ return new class extends Migration
     /** @requirement BUY-001 BUY-002 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function up(): void
     {
+        // Re-entering this historical migration on a fully composed successor schema must not
+        // replace later paid/reconfiguration/grant Service authority. The non-paid Order surface
+        // itself is still verified before this shortcut is allowed.
+        if ($this->laterComposedServiceAuthorityFinalized()) {
+            return;
+        }
+
         // Re-entry can start from the already-enabled #150 fence. Close non-purchase creation as
         // the first durable DDL statement so every restart/repair remains fail-closed until the
         // complete predecessor + source-aware graph passes readiness below.
@@ -1486,6 +1493,66 @@ SQL);
             && (int) $row->ready_count === 1
             && (int) $row->blocked_count === 0
             && (int) $row->bootstrap_trigger_count === 0;
+    }
+
+    private function laterComposedServiceAuthorityFinalized(): bool
+    {
+        /** @var object{aggregate:int|string}|null $triggerRow */
+        $triggerRow = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME IN (
+      'orders_insert_guard',
+      'order_items_insert_guard',
+      'orders_initial_history',
+      'order_state_histories_insert_guard',
+      'service_subscriptions_insert_guard',
+      'service_subscriptions_update_guard',
+      'provisioning_operations_insert_guard',
+      'provisioning_operations_update_guard',
+      'provisioning_operation_histories_insert_guard',
+      'provisioning_operation_initial_history',
+      'provisioning_remote_effect_events_insert_guard',
+      'orders_update_guard',
+      'orders_provisioning_history',
+      'orders_provisioning_outbox_envelope_guard',
+      'outbox_initial_provision_envelope_update_guard',
+      'orders_unimplemented_source_insert_guard'
+  )
+SQL);
+
+        if ($triggerRow === null || (int) $triggerRow->aggregate !== 16
+            || ! $this->sourceAuthorizationAuthorityFinalized()
+            || ! $this->constraintExists('orders', 'orders_source_type_chk')
+            || ! $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk')
+            || ! $this->triggerContains('service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid')
+            || ! $this->triggerContains('service_subscriptions_insert_guard', 'clean local lifecycle and no remote binding')
+            || ! $this->triggerContains('provisioning_operations_insert_guard', 'Initial Provisioning Operation zero-cost authority shape is invalid')
+            || ! $this->triggerContains('provisioning_operations_insert_guard', 'service_mutation_queue_v1')
+            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_queue_v1')
+            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'service_mutation_effect_v1')
+            || ! $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition')
+            || ! $this->triggerContains('provisioning_operation_histories_insert_guard', 'service_mutation_requested')
+            || ! $this->triggerContains('provisioning_operation_initial_history', 'service_mutation_requested')
+            || ! $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1')) {
+            return false;
+        }
+
+        foreach ([
+            'service_entitlement_grant_queue_v1',
+            'service_reconfiguration_no_charge_queue_v1',
+            'service_paid_mutation_queue_v1',
+        ] as $successorAuthority) {
+            if ($this->triggerContains('provisioning_operations_insert_guard', $successorAuthority)
+                && $this->triggerContains('service_subscriptions_update_guard', $successorAuthority)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function replaceConstraint(string $table, string $constraint, string $definition): void

@@ -212,6 +212,12 @@ final class TelegramAdministratorServiceOperationsContractTest extends TestCase
         self::assertStringContainsString('administrator_no_charge', $authorityGuard);
         self::assertStringContainsString('audit_row.id = NEW.audit_log_id', $authorityGuard);
         self::assertStringContainsString('srp_admin_shape_chk', $migration);
+
+        $previewForeignDrop = strpos($migration, '$table->dropForeign(\'srp_admin_actor_fk\')');
+        $previewIndexDrop = strpos($migration, '$table->dropIndex(\'srp_admin_created_idx\')');
+        self::assertIsInt($previewForeignDrop);
+        self::assertIsInt($previewIndexDrop);
+        self::assertLessThan($previewIndexDrop, $previewForeignDrop);
     }
 
     public function test_operator_grammar_uses_stable_public_identifiers_and_bounded_batch_payloads(): void

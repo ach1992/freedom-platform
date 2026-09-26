@@ -35,6 +35,19 @@ return new class extends Migration
             return;
         }
 
+        // DatabaseTruncation may clear only the immutable capability singleton while leaving a
+        // later composed Service authority (paid/reconfiguration/grant) intact. Reconstruct that
+        // fail-closed singleton without reinstalling this historical migration's predecessor
+        // Service update guard over the accepted successor graph.
+        if ($this->authorityStructureFinalized()) {
+            $this->ensureOperationalCapability();
+            if (! $this->authorityFinalized()) {
+                throw new RuntimeException('Service operational capability-only re-entry did not restore final authority.');
+            }
+
+            return;
+        }
+
         foreach ([
             'service_subscriptions', 'provisioning_operations', 'order_source_authorizations', 'orders',
             'users', 'administrators', 'plan_offerings', 'panel_connections', 'panel_service_targets',
@@ -1424,6 +1437,11 @@ SQL);
 
     private function authorityFinalized(): bool
     {
+        return $this->operationalCapabilityReady() && $this->authorityStructureFinalized();
+    }
+
+    private function authorityStructureFinalized(): bool
+    {
         foreach (self::READY_CHECKS as $table => $ready) {
             if (! Schema::hasTable($table)
                 || ! $this->constraintExists($table, $ready)
@@ -1431,7 +1449,7 @@ SQL);
                 return false;
             }
         }
-        if (! $this->operationalCapabilityReady() || ! $this->remoteIdentityIndexCompatible()) {
+        if (! $this->remoteIdentityIndexCompatible()) {
             return false;
         }
 

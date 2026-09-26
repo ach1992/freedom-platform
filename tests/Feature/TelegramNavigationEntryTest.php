@@ -8247,9 +8247,9 @@ SQL);
     public function test_admin_service_auto_renew_policy_is_permission_filtered_confirmation_gated_and_replay_safe(): void
     {
         $telegramUserId = 9698;
-        $processor = $this->app->make(TelegramUpdateProcessor::class);
         $manager = new TelegramNavigationServiceAutoRenewPolicyManager;
         $this->app->instance(TelegramServiceAutoRenewPolicyManager::class, $manager);
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
 
         $this->accept($this->payload(6980, $telegramUserId, 'navigation_admin_auto_policy', 'en', '/start'));
         $processor->process('123456789', 6980);
