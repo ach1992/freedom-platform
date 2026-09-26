@@ -2398,6 +2398,19 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 'updated_at' => $now,
             ]);
         }
+        $tierId = (int) DB::table('customer_tiers')->where('code', 'normal')->value('id');
+        if (! DB::table('customer_profiles')->where('user_id', $userId)->exists()) {
+            DB::table('customer_profiles')->insert([
+                'user_id' => $userId,
+                'current_tier_id' => $tierId,
+                'tier_locked' => false,
+                'tier_lock_reason_code' => null,
+                'phone_verification_status' => 'verified',
+                'identity_verification_status' => 'verified',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
         if (! DB::table('customer_tag_assignments')->where('user_id', $userId)->where('tag_id', $tagId)->exists()) {
             DB::table('customer_tag_assignments')->insert([
                 'user_id' => $userId,
