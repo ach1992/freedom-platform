@@ -1,4 +1,4 @@
-CREATE TRIGGER quotes_insert_guard
+CREATE OR REPLACE TRIGGER quotes_insert_guard
 BEFORE INSERT ON quotes
 FOR EACH ROW
 BEGIN
