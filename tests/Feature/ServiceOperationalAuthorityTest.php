@@ -2173,6 +2173,20 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+        if (! DB::table('panel_target_capabilities')
+            ->where('panel_service_target_id', $targetId)
+            ->where('capability_code', 'reconfigure_service')
+            ->exists()) {
+            DB::table('panel_target_capabilities')->insert([
+                'panel_service_target_id' => $targetId,
+                'capability_code' => 'reconfigure_service',
+                'verification_status' => 'declared',
+                'evidence_hash' => null,
+                'verified_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
         $offeringCode = 'svc-reconfig-'.substr(hash('sha256', $suffix), 0, 18);
         $definition = new PlanOfferingDefinition(
             $offeringCode,
@@ -2352,20 +2366,6 @@ final class ServiceOperationalAuthorityTest extends TestCase
         ]);
         $connectionVersion = (int) DB::table('panel_connections')->where('id', $connectionId)->value('version');
         $evidenceHash = hash('sha256', 'service-reconfiguration-evidence:'.$suffix);
-        if (! DB::table('panel_target_capabilities')
-            ->where('panel_service_target_id', $targetId)
-            ->where('capability_code', 'reconfigure_service')
-            ->exists()) {
-            DB::table('panel_target_capabilities')->insert([
-                'panel_service_target_id' => $targetId,
-                'capability_code' => 'reconfigure_service',
-                'verification_status' => 'declared',
-                'evidence_hash' => null,
-                'verified_at' => null,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-        }
         DB::table('panel_target_capabilities')->where('panel_service_target_id', $targetId)->update([
             'verification_status' => 'verified',
             'evidence_hash' => $evidenceHash,

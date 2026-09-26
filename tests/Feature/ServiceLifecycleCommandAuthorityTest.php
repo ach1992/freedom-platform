@@ -462,14 +462,6 @@ SQL);
             ]),
             $this->catalogContext($ownerId, 'service-lifecycle-command-route-'.$suffix),
         );
-        DB::table('plan_offerings')->where('id', $offeringId)->update([
-            'state' => 'active',
-            'visibility' => 'visible',
-            'server_selection_mode' => 'system_selects',
-            'protocol_selection_mode' => 'system_selects',
-            'updated_at' => $now,
-        ]);
-
         foreach (['reset_usage', 'suspend', 'activate', 'rotate_subscription_link', 'refresh_details', 'delete'] as $operationCode) {
             DB::table('plan_offering_operations')->insertOrIgnore([
                 'plan_offering_id' => $offeringId,
@@ -499,5 +491,13 @@ SQL);
                 ]);
             }
         }
+        DB::table('plan_offerings')->where('id', $offeringId)->update([
+            'state' => 'active',
+            'visibility' => 'visible',
+            'server_selection_mode' => 'system_selects',
+            'protocol_selection_mode' => 'system_selects',
+            'updated_at' => $now,
+        ]);
+
     }
 }
