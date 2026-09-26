@@ -747,6 +747,8 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
         $quoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         /** @var Migration $paidMutationMigration */
         $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+        /** @var Migration $reconfigurationQuoteMigration */
+        $reconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
 
         try {
             $quoteMigration->up();
@@ -785,6 +787,7 @@ SQL);
         } finally {
             $quoteMigration->up();
             $paidMutationMigration->up();
+            $reconfigurationQuoteMigration->up();
         }
 
         self::assertTrue(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));

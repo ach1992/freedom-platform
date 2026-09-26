@@ -109,6 +109,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $nonPaidAuthorityMigration = require database_path('migrations/2026_08_19_000120_activate_non_paid_order_authority.php');
         $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+        $serviceReconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
 
         try {
             $paidServiceMutationMigration->down();
@@ -139,6 +140,7 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             $nonPaidAuthorityMigration->up();
             $servicePackageQuoteMigration->up();
             $paidServiceMutationMigration->up();
+            $serviceReconfigurationQuoteMigration->up();
         }
 
         $this->assertServiceMutationAuthoritySurface();

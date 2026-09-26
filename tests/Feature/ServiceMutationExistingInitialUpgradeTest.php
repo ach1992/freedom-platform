@@ -44,6 +44,8 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
         $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         /** @var Migration $paidServiceMutationMigration */
         $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+        /** @var Migration $serviceReconfigurationQuoteMigration */
+        $serviceReconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
         $upgraded = false;
 
         try {
@@ -138,6 +140,7 @@ SQL);
             }
             $servicePackageQuoteMigration->up();
             $paidServiceMutationMigration->up();
+            $serviceReconfigurationQuoteMigration->up();
         }
     }
 }
