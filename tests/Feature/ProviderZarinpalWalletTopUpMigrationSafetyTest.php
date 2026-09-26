@@ -255,7 +255,7 @@ final class ProviderZarinpalWalletTopUpMigrationSafetyTest extends TestCase
         self::assertFalse(Schema::hasTable('zarinpal_wallet_top_up_verifications'));
         self::assertFalse(Schema::hasTable('zarinpal_wallet_top_up_upgrade_fence'));
         self::assertStringNotContainsString(
-            "wallet_top_up",
+            'wallet_top_up',
             $this->triggerAction('zarinpal_payment_requests_insert_guard'),
         );
         self::assertTrue($this->triggerExists('zarinpal_payment_requests_promotion_update_guard'));
@@ -265,7 +265,7 @@ final class ProviderZarinpalWalletTopUpMigrationSafetyTest extends TestCase
         self::assertTrue(Schema::hasTable('zarinpal_wallet_top_up_verifications'));
         self::assertFalse(Schema::hasTable('zarinpal_wallet_top_up_upgrade_fence'));
         self::assertStringContainsString(
-            "wallet_top_up",
+            'wallet_top_up',
             $this->triggerAction('zarinpal_payment_requests_insert_guard'),
         );
         self::assertTrue($this->triggerExists('zarinpal_payment_requests_promotion_update_guard'));
