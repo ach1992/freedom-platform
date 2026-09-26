@@ -85,6 +85,7 @@ return [
         'app/Modules/Telegram/Application/TelegramSupportRoutingNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramTrialNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramWalletTopUpNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramWalletTransferNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
     ],
