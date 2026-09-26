@@ -26,6 +26,7 @@ use App\Modules\Payments\Application\AlternativePaymentReviewService;
 use App\Modules\Payments\Application\Contracts\AlternativePaymentProviderResolver;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\CustomerTierPurchaseMetricsSourceService;
+use App\Modules\Payments\Application\PurchaseWalletRefundAuthorityService;
 use App\Modules\Payments\Application\TelegramAdministratorPaymentSearchSource;
 use App\Modules\Payments\Application\TelegramCustomerPurchaseWalletPaymentService;
 use App\Modules\Payments\Application\TelegramSupportOwnedPaymentIntentProjectionService;
@@ -99,6 +100,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceRefere
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use App\Modules\Wallet\Application\Contracts\PurchaseWalletRefundAuthority;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
@@ -151,6 +153,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerPurchaseNowPaymentsPayment::class, TelegramCustomerPurchaseNowPaymentsPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseZarinpalPayment::class, TelegramCustomerPurchaseZarinpalPaymentService::class);
         $this->app->bind(TelegramCustomerWalletTopUpPayment::class, TelegramCustomerWalletTopUpZarinpalService::class);
+        $this->app->bind(PurchaseWalletRefundAuthority::class, PurchaseWalletRefundAuthorityService::class);
         $this->app->bind(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
         $this->app->bind(TelegramCustomerPurchaseWalletPayment::class, TelegramCustomerPurchaseWalletPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseOrder::class, TelegramCustomerPurchaseOrderService::class);

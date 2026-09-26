@@ -58,6 +58,7 @@ return [
         'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorServiceOperationsNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramAdministratorWalletNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
         'app/Modules/Telegram/Application/TelegramBroadcastNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAgentBulkPurchaseNavigationHandler.php',

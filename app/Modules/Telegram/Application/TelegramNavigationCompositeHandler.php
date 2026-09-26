@@ -19,6 +19,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramAdministratorAccessNavigationHandler $adminAccess,
         private TelegramAlternativePaymentReviewNavigationHandler $adminPayments,
         private TelegramAdministratorSearchNavigationHandler $adminSearch,
+        private TelegramAdministratorWalletNavigationHandler $adminWallet,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramAdministratorServiceOperationsNavigationHandler $adminServiceOperations,
         private TelegramBroadcastNavigationResolver $broadcastResolver,
@@ -112,6 +113,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->adminSearch->supports($action)) {
             $this->adminSearch->handle($action);
+
+            return;
+        }
+        if ($this->adminWallet->supports($action)) {
+            $this->adminWallet->handle($action);
 
             return;
         }

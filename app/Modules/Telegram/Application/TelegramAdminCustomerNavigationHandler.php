@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Modules\Wallet\Application\AdministratorWalletOperationsService;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
@@ -61,6 +62,7 @@ final readonly class TelegramAdminCustomerNavigationHandler
         private TelegramInteractionCallbackService $callbacks,
         private TelegramAdministratorCustomerTargetDiscovery $targets,
         private TelegramAdministratorDirectMessageService $directMessages,
+        private AdministratorWalletOperationsService $walletOperations,
         private TelegramPrivateMediaIngestor $privateMedia,
         private TelegramNavigationHandler $navigation,
         private DatabaseManager $database,
@@ -1221,6 +1223,20 @@ final readonly class TelegramAdminCustomerNavigationHandler
         string $locale,
     ): TelegramInlineKeyboardSnapshot {
         $rows = [];
+        if ($this->walletOperations->availableFor($action->userId)) {
+            $wallet = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdministratorWalletNavigationHandler::ACTION_ENTRY,
+                [],
+                'tg-admin-customer-wallet-entry:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram_admin_wallet.entry_button', $locale),
+                $wallet->publicId,
+            )];
+        }
+
         if ($this->directMessages->availableFor($action->userId)) {
             $message = $this->callbacks->issue(
                 $action->sessionPublicId,
