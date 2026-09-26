@@ -143,7 +143,6 @@ BEGIN
        OR NOT (NEW.request_key <=> OLD.request_key)
        OR NOT (NEW.payload_hash <=> OLD.payload_hash)
        OR NOT (NEW.payment_intent_id <=> OLD.payment_intent_id)
-       OR NOT (NEW.promotion_usage_reservation_id <=> OLD.promotion_usage_reservation_id)
        OR NOT (NEW.merchant_configuration_hash <=> OLD.merchant_configuration_hash)
        OR NOT (NEW.amount_irr <=> OLD.amount_irr)
        OR NOT (NEW.currency <=> OLD.currency)
