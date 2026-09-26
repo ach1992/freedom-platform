@@ -33,7 +33,9 @@ return new class extends Migration
         $this->executeRepositorySql('02_insert_guard.sql');
         $this->executeRepositorySql('03_update_guard.sql');
         $this->executeRepositorySql('04_delete_guard.sql');
-        $this->executeRepositorySql('05_mutation_insert_fence.sql');
+        if (! $this->laterMutationInsertFencePresent()) {
+            $this->executeRepositorySql('05_mutation_insert_fence.sql');
+        }
         $this->executeRepositorySql('06_delivery_attempt_insert_fence.sql');
     }
 
@@ -56,6 +58,20 @@ return new class extends Migration
         DB::unprepared('DROP TRIGGER IF EXISTS service_delivery_effects_insert_guard');
         Schema::dropIfExists('service_initial_delivery_fences');
         Schema::dropIfExists('service_delivery_effects');
+    }
+
+    private function laterMutationInsertFencePresent(): bool
+    {
+        /** @var object{aggregate:int|string}|null $row */
+        $row = DB::selectOne(<<<'SQL'
+SELECT COUNT(*) AS aggregate
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA = DATABASE()
+  AND TRIGGER_NAME = 'provisioning_operations_delivery_effect_insert_guard'
+  AND LOCATE('add_data_days', ACTION_STATEMENT) > 0
+SQL);
+
+        return $row !== null && (int) $row->aggregate === 1;
     }
 
     private function assertHistoricalInitialDeliveryAuthority(): void

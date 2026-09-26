@@ -129,8 +129,29 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
         ));
         self::assertSame(1, $sync->syncOne($servicePublicId)->processed);
         $boundary = $notifications->processBatch(1);
-        self::assertSame(1, $boundary->triggered);
-        self::assertSame(1, $boundary->queued);
+        self::assertSame(2, $boundary->triggered);
+        self::assertSame(2, $boundary->queued);
+
+        $serviceId = (int) DB::table('service_subscriptions')
+            ->where('public_id', $servicePublicId)
+            ->value('id');
+        $entitlementAnomaly = DB::table('service_sync_anomalies')
+            ->where('service_subscription_id', $serviceId)
+            ->where('classification', 'unexpected_entitlement')
+            ->first(['id', 'severity', 'state']);
+        self::assertNotNull($entitlementAnomaly);
+        self::assertSame('warning', $entitlementAnomaly->severity);
+        self::assertSame('open', $entitlementAnomaly->state);
+
+        $syncIssue = DB::table('service_notification_states')
+            ->where('service_subscription_id', $serviceId)
+            ->where('notification_type', 'sync_issue')
+            ->where('threshold_code', 'sync_issue')
+            ->first(['state', 'source_type', 'source_id']);
+        self::assertNotNull($syncIssue);
+        self::assertSame('triggered', $syncIssue->state);
+        self::assertSame('service_sync_anomaly', $syncIssue->source_type);
+        self::assertSame((int) $entitlementAnomaly->id, (int) $syncIssue->source_id);
 
         $sevenDay = DB::table('service_notification_states')
             ->where('notification_type', 'expiry')
