@@ -13,6 +13,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorServiceOperations;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
@@ -185,6 +186,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
         private TelegramAdministratorCustomerTargetDiscovery $administratorCustomerTargets,
+        private TelegramAdministratorServiceOperations $administratorServiceOperations,
         private AdministratorAccessManagementQueryService $administratorAccess,
         private AdministratorUserPermissionAuthorizer $administratorUsers,
         private TelegramSupportContactConfiguration $supportContact,
@@ -1256,6 +1258,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.customer_search', $locale),
                 $customerSearch->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+
+        if ($this->administratorServiceOperations->availableFor($action->userId)) {
+            $serviceOperations = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdministratorServiceOperationsNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-service-operations:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.service_operations', $locale),
+                $serviceOperations->publicId,
                 TelegramInlineButtonStyle::Primary,
             )];
         }

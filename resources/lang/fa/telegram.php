@@ -102,6 +102,7 @@ return [
                 'menus' => 'منوها و دکمه‌ها',
                 'membership' => 'عضویت کانال‌ها',
                 'service_auto_renew_policy' => 'سیاست تمدید خودکار سرویس',
+                'service_operations' => 'عملیات سرویس',
             ],
             'payment_reviews' => [
                 'list' => "بررسی پرداخت‌های جایگزین\n\n:items\n\nیک بررسی در انتظار را انتخاب کنید. مجوز هر تصمیم هنگام اجرا دوباره کنترل می‌شود.",
@@ -171,6 +172,13 @@ return [
 دکمه‌های پیش‌نمایش عمداً هیچ action واقعی اجرا نمی‌کنند.',
                 'yes' => 'بله',
                 'no' => 'خیر',
+            ],
+            'service_operations' => [
+                'prompt' => "عملیات سرویس\n\nیک دستور با یکی از قالب‌های زیر ارسال کنید:\nlifecycle <reset_usage|suspend|activate|rotate_link|delete> <service_ulid> <reason_code> <reason>\ntransfer <service_ulid> <target_user_ulid> <reason_code> <reason>\nrepair <service_ulid> <remote_service_id> <reason_code> <reason>\nimport <subscription_link> <target_code> <user_ulid> <offering_code> <reason_code> <reason>\ngrant-services <user_ulid:offering_code,...> <reason_code> <reason>\nservice-batch status <batch_ulid>\nservice-batch <resume|pause|activate|cancel> <batch_ulid> <reason_code> <reason>\ngrant-entitlement <service_ulid,...> <data_mb|-> <days|-> <notify|silent> <reason_code> <reason>\ngrant-entitlement-server <server_code> <data_mb|-> <days|-> <notify|silent> <reason_code> <reason>\nentitlement-batch status <batch_ulid> <reason_code> <reason>\nentitlement-batch <resume|pause|activate|cancel> <batch_ulid> <reason_code> <reason>\n\nمجوز هر تغییر هنگام اجرا دوباره بررسی می‌شود. در import و repair فقط شناسه پیش‌نمایش durable در session نگه داشته می‌شود و subscription link ارسالی وارد callback/session payload نمی‌شود.",
+                'invalid' => 'دستور نامعتبر، stale، بدون مجوز یا ناسازگار با authority سرویس است. هیچ تغییری اعمال نشد. دوباره از قالب‌های بالا استفاده کنید.',
+                'confirm' => "عملیات سرویس را بررسی کنید:\n\n:summary\n\nاجرا تأیید شود؟",
+                'confirm_button' => 'تأیید عملیات سرویس',
+                'result' => "نتیجه عملیات سرویس:\n\n:summary",
             ],
             'auto_renew_policy' => [
                 'prompt' => "سیاست تمدید خودکار سرویس\n\nیک دستور با یکی از قالب‌های زیر ارسال کنید:\n<offering_code> stop\n<offering_code> continue\n<offering_code> within_limit <absolute_irr|-> <percentage_bps|->\n\nبرای within_limit حداقل یکی از دو محدودیت باید مقدار داشته باشد.",

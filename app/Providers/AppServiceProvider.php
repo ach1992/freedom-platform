@@ -47,6 +47,7 @@ use App\Modules\Payments\Zarinpal\Application\TelegramCustomerPurchaseZarinpalPa
 use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Promotions\Application\BenefitCodeDiscountQuoteAuthority;
 use App\Modules\Promotions\Application\PurchasePromotionUsageAuthorityService;
+use App\Modules\Provisioning\Application\TelegramAdministratorServiceOperationsService;
 use App\Modules\Provisioning\Application\TelegramAdministratorServiceSearchSource;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialClaimService;
 use App\Modules\Provisioning\Application\TelegramCustomerTrialProvisioningStatusService;
@@ -59,6 +60,7 @@ use App\Modules\Provisioning\Application\TelegramServiceAutoRenewPolicyService;
 use App\Modules\Provisioning\Application\TelegramServiceNotificationPreferenceService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorServiceOperations;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
@@ -154,6 +156,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramOwnedServiceAutoRenewManager::class, TelegramOwnedServiceAutoRenewService::class);
         $this->app->bind(TelegramOwnedServiceDeliveryResender::class, TelegramOwnedServiceDeliveryResendService::class);
         $this->app->bind(TelegramOwnedServiceLifecycleExecutor::class, TelegramOwnedServiceLifecycleService::class);
+        $this->app->bind(TelegramAdministratorServiceOperations::class, TelegramAdministratorServiceOperationsService::class);
         $this->app->bind(TelegramServiceAutoRenewPolicyManager::class, TelegramServiceAutoRenewPolicyService::class);
         $this->app->bind(TelegramServiceNotificationPreferenceManager::class, TelegramServiceNotificationPreferenceService::class);
         $this->app->bind(TelegramManagedUsdtRateSettings::class, TelegramManagedUsdtRateSettingsService::class);

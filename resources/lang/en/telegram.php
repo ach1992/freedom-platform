@@ -102,6 +102,7 @@ Referral locked: :referral_locked',
                 'menus' => 'Menus & Buttons',
                 'membership' => 'Channel Membership',
                 'service_auto_renew_policy' => 'Service Auto-renew Policy',
+                'service_operations' => 'Service Operations',
             ],
             'payment_reviews' => [
                 'list' => "Alternative Payment Reviews\n\n:items\n\nSelect a pending review. Every decision is authorized again at execution time.",
@@ -171,6 +172,13 @@ Active: :active
 Preview buttons intentionally execute no real action.',
                 'yes' => 'Yes',
                 'no' => 'No',
+            ],
+            'service_operations' => [
+                'prompt' => "Service operations\n\nSend one command using one of these forms:\nlifecycle <reset_usage|suspend|activate|rotate_link|delete> <service_ulid> <reason_code> <reason>\ntransfer <service_ulid> <target_user_ulid> <reason_code> <reason>\nrepair <service_ulid> <remote_service_id> <reason_code> <reason>\nimport <subscription_link> <target_code> <user_ulid> <offering_code> <reason_code> <reason>\ngrant-services <user_ulid:offering_code,...> <reason_code> <reason>\nservice-batch status <batch_ulid>\nservice-batch <resume|pause|activate|cancel> <batch_ulid> <reason_code> <reason>\ngrant-entitlement <service_ulid,...> <data_mb|-> <days|-> <notify|silent> <reason_code> <reason>\ngrant-entitlement-server <server_code> <data_mb|-> <days|-> <notify|silent> <reason_code> <reason>\nentitlement-batch status <batch_ulid> <reason_code> <reason>\nentitlement-batch <resume|pause|activate|cancel> <batch_ulid> <reason_code> <reason>\n\nEvery mutation is permission-checked again at execution. Import/repair keep only their durable preview identity in session; the submitted subscription link is not retained in callback/session payloads.",
+                'invalid' => 'The command is invalid, stale, unauthorized, or failed a Service authority check. No mutation was applied. Send a command using the documented form.',
+                'confirm' => "Review the Service operation:\n\n:summary\n\nConfirm execution?",
+                'confirm_button' => 'Confirm Service operation',
+                'result' => "Service operation result:\n\n:summary",
             ],
             'auto_renew_policy' => [
                 'prompt' => "Service auto-renew policy\n\nSend one command using one of these forms:\n<offering_code> stop\n<offering_code> continue\n<offering_code> within_limit <absolute_irr|-> <percentage_bps|->\n\nFor within_limit at least one limit must be set.",
