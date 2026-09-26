@@ -177,7 +177,13 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         }
 
         $target = $this->resolveTarget($action, $selection);
-        $candidate = $this->candidateByToken($action, $target->accountPublicId, $source);
+        try {
+            $candidate = $this->candidateByToken($action, $target->accountPublicId, $source);
+        } catch (AuthorizationException) {
+            $this->returnHome($action);
+
+            return;
+        }
         if ($candidate === null) {
             $this->showRefundList($action, $selection, 'refund_unavailable');
 
