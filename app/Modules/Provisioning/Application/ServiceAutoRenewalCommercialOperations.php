@@ -429,7 +429,7 @@ trait ServiceAutoRenewalCommercialOperations
         try {
             $mutation = $this->mutationQueue->queueFromSettlement(
                 (string) $settlement->public_id,
-                'service.auto-renew.mutation.'.substr((string) $attempt->cycle_key, 0, 64),
+                ServicePurchaseMutationQueueService::canonicalRequestKeyForSettlement((string) $settlement->public_id),
                 (string) $attempt->correlation_id,
             );
         } catch (DomainException $exception) {

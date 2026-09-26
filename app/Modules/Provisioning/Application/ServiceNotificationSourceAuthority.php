@@ -44,10 +44,12 @@ use RuntimeException;
  *     renewal_attempt_id:int|string|null
  * }
  * @phpstan-type RenewalAttemptRow object{id:int|string,service_subscription_id:int|string,state:string}
+ * @phpstan-type MutationOperationRow object{id:int|string,service_subscription_id:int|string,operation_type:string,state:string,operation_generation:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
  * @phpstan-type SourceLock array{
  *     locator:SourceLocator,
  *     wallet_balance:?WalletBalanceSnapshot,
- *     renewal_attempt:?RenewalAttemptRow
+ *     renewal_attempt:?RenewalAttemptRow,
+ *     mutation_operation:?MutationOperationRow
  * }
  * @phpstan-type NotificationSourceState object{
  *     id:int|string,
@@ -58,14 +60,19 @@ use RuntimeException;
  *     cycle_key_hash:string,
  *     source_type:string,
  *     source_id:int|string|null,
- *     low_balance_threshold_irr:int|string|null
+ *     low_balance_threshold_irr:int|string|null,
+ *     expiry_snapshot_max_age_seconds:int|string|null,
+ *     sync_snapshot_max_age_seconds:int|string|null
  * }
  * @phpstan-type NotificationSourceService object{
  *     id:int|string,
  *     user_id:int|string,
+ *     provisioned_at:?string,
+ *     lifecycle_state:string,
  *     lifecycle_version:int|string,
  *     remote_identity_generation:int|string,
- *     mutation_generation:int|string
+ *     mutation_generation:int|string,
+ *     remote_deleted_at:?string
  * }
  */
 final readonly class ServiceNotificationSourceAuthority
@@ -132,6 +139,13 @@ final readonly class ServiceNotificationSourceAuthority
             return null;
         }
         if ($row->notification_state_id === null) {
+            $grantBinding = $connection->table('service_entitlement_grant_notification_bindings')
+                ->where('service_delivery_attempt_id', $deliveryAttemptId)
+                ->exists();
+            if ($grantBinding) {
+                return null;
+            }
+
             throw new ServiceNotificationCandidateInvalidatedException('Notification Delivery Attempt lost its durable source binding.');
         }
 
@@ -148,6 +162,7 @@ final readonly class ServiceNotificationSourceAuthority
     {
         $walletBalance = null;
         $renewalAttempt = null;
+        $mutationOperation = null;
 
         if ($locator['source_type'] === 'wallet_balance') {
             try {
@@ -174,12 +189,25 @@ final readonly class ServiceNotificationSourceAuthority
             if ($renewalAttempt === null) {
                 throw new ServiceNotificationCandidateInvalidatedException('Service renewal notification Attempt no longer exists.');
             }
+        } elseif ($locator['source_type'] === 'provisioning_operation') {
+            /** @var MutationOperationRow|null $mutationOperation */
+            $mutationOperation = $connection->table('provisioning_operations')
+                ->where('id', $locator['source_id'])
+                ->lockForUpdate()
+                ->first([
+                    'id', 'service_subscription_id', 'operation_type', 'state', 'operation_generation',
+                    'target_remote_identity_generation', 'target_lifecycle_version',
+                ]);
+            if ($mutationOperation === null) {
+                throw new ServiceNotificationCandidateInvalidatedException('Service state notification mutation authority no longer exists.');
+            }
         }
 
         return [
             'locator' => $locator,
             'wallet_balance' => $walletBalance,
             'renewal_attempt' => $renewalAttempt,
+            'mutation_operation' => $mutationOperation,
         ];
     }
 
@@ -207,8 +235,11 @@ final readonly class ServiceNotificationSourceAuthority
 
         match ($state->notification_type) {
             ServiceNotificationType::Expiry->value => $this->assertExpiryCurrent($connection, $service, $state),
+            ServiceNotificationType::Usage->value => $this->assertUsageCurrent($connection, $service, $state),
             ServiceNotificationType::LowBalance->value => $this->assertLowBalanceCurrent($connection, $service, $state, $sourceLock),
             ServiceNotificationType::RenewalFailure->value => $this->assertRenewalCurrent($connection, $service, $state, $sourceLock),
+            ServiceNotificationType::ServiceState->value => $this->assertServiceStateCurrent($service, $state, $sourceLock),
+            ServiceNotificationType::SyncIssue->value => $this->assertSyncIssueCurrent($connection, $service, $state),
             default => throw new RuntimeException('Stored Service notification type is invalid.'),
         };
     }
@@ -267,6 +298,149 @@ final readonly class ServiceNotificationSourceAuthority
         if ($crossedNextBoundary) {
             throw new ServiceNotificationCandidateInvalidatedException('Service expiry notification crossed its durable episode boundary.');
         }
+    }
+
+    /**
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
+     */
+    private function assertUsageCurrent(Connection $connection, object $service, object $state): void
+    {
+        if ($state->source_type !== 'service_sync_snapshot' || $state->sync_snapshot_max_age_seconds === null) {
+            throw new RuntimeException('Stored Service usage notification source authority is invalid.');
+        }
+        if ($service->provisioned_at === null
+            || $service->remote_deleted_at !== null
+            || ! in_array($service->lifecycle_state, ['active', 'suspended'], true)) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service usage notification Service authority is no longer deliverable.');
+        }
+        $maxAge = ServiceNotificationSyncFreshnessPolicy::storedMaxAgeSeconds($state->sync_snapshot_max_age_seconds);
+        /** @var object{remote_disposition:string,remote_data_limit_bytes:int|string|null,remote_used_bytes:int|string|null,observed_at:string}|null $snapshot */
+        $snapshot = $connection->table('service_sync_snapshots')
+            ->where('service_subscription_id', (int) $service->id)
+            ->where('local_lifecycle_version', (int) $service->lifecycle_version)
+            ->where('local_remote_identity_generation', (int) $service->remote_identity_generation)
+            ->where('local_mutation_generation', (int) $service->mutation_generation)
+            ->orderByDesc('observed_at')
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->first(['remote_disposition', 'remote_data_limit_bytes', 'remote_used_bytes', 'observed_at']);
+        if ($snapshot === null
+            || $snapshot->remote_disposition !== 'present'
+            || $snapshot->remote_data_limit_bytes === null
+            || $snapshot->remote_used_bytes === null
+            || (int) $snapshot->remote_data_limit_bytes < 1
+            || ! ServiceNotificationSyncFreshnessPolicy::isFresh($snapshot->observed_at, $this->clock->now(), $maxAge)) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service usage notification snapshot is no longer authoritative.');
+        }
+        $limit = (int) $snapshot->remote_data_limit_bytes;
+        $used = max(0, (int) $snapshot->remote_used_bytes);
+        $remaining = max(0, $limit - min($used, $limit));
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-usage-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+            (string) $limit,
+        ]));
+        $this->assertIdentity($service, $state, ServiceNotificationType::Usage, $state->threshold_code, $cycle);
+        $ratio = $remaining / $limit;
+        $current = match ($state->threshold_code) {
+            'usage_20pct' => $ratio <= 0.20 && $ratio > 0.10,
+            'usage_10pct' => $ratio <= 0.10 && $remaining > 0,
+            'usage_exhausted' => $remaining === 0,
+            default => throw new RuntimeException('Stored Service usage notification threshold is invalid.'),
+        };
+        if (! $current) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service usage notification crossed its durable threshold boundary.');
+        }
+    }
+
+    /**
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
+     * @param  SourceLock  $sourceLock
+     */
+    private function assertServiceStateCurrent(object $service, object $state, array $sourceLock): void
+    {
+        if ($state->source_type !== 'provisioning_operation' || $sourceLock['mutation_operation'] === null) {
+            throw new RuntimeException('Stored Service state notification source authority is invalid.');
+        }
+        $operation = $sourceLock['mutation_operation'];
+        if ((int) $operation->id !== (int) $state->source_id
+            || (int) $operation->service_subscription_id !== (int) $service->id
+            || $operation->state !== 'succeeded'
+            || (int) $operation->operation_generation !== (int) $service->mutation_generation
+            || (int) $operation->target_remote_identity_generation !== (int) $service->remote_identity_generation
+            || (int) $operation->target_lifecycle_version + 1 !== (int) $service->lifecycle_version) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service state notification mutation authority changed before delivery.');
+        }
+        $threshold = match ($operation->operation_type) {
+            'suspend' => 'state_suspended',
+            'delete' => 'state_deleted',
+            default => throw new RuntimeException('Stored Service state notification mutation type is invalid.'),
+        };
+        $current = $operation->operation_type === 'suspend'
+            ? $service->lifecycle_state === 'suspended' && $service->remote_deleted_at === null
+            : $service->lifecycle_state === 'retired' && $service->remote_deleted_at !== null;
+        if (! $current) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service state notification lifecycle authority changed before delivery.');
+        }
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-state-cycle-v1',
+            (string) $service->id,
+            (string) $operation->id,
+            (string) $operation->operation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+        $this->assertIdentity($service, $state, ServiceNotificationType::ServiceState, $threshold, $cycle);
+    }
+
+    /**
+     * @param  NotificationSourceService  $service
+     * @param  NotificationSourceState  $state
+     */
+    private function assertSyncIssueCurrent(Connection $connection, object $service, object $state): void
+    {
+        if ($state->source_type !== 'service_sync_anomaly') {
+            throw new RuntimeException('Stored Service sync issue notification source type is invalid.');
+        }
+        /** @var object{service_subscription_id:int|string,anomaly_key:string,classification:string,severity:string,state:string}|null $anomaly */
+        $anomaly = $connection->table('service_sync_anomalies')
+            ->where('id', (int) $state->source_id)
+            ->lockForUpdate()
+            ->first(['service_subscription_id', 'anomaly_key', 'classification', 'severity', 'state']);
+        if ($anomaly === null
+            || (int) $anomaly->service_subscription_id !== (int) $service->id
+            || ! in_array($anomaly->severity, ['warning', 'critical'], true)
+            || ! in_array($anomaly->state, ['open', 'manual_review', 'action_requested'], true)
+            || ! $this->syncAnomalyMatchesService($service, $anomaly->anomaly_key, $anomaly->classification)) {
+            throw new ServiceNotificationCandidateInvalidatedException('Service sync issue notification source is no longer authoritative.');
+        }
+        $cycle = hash('sha256', implode('|', [
+            'service-notification-sync-issue-cycle-v1',
+            (string) $service->id,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+        $this->assertIdentity($service, $state, ServiceNotificationType::SyncIssue, 'sync_issue', $cycle);
+    }
+
+    /** @param NotificationSourceService $service */
+    private function syncAnomalyMatchesService(object $service, string $anomalyKey, string $classification): bool
+    {
+        $expected = hash('sha256', implode('|', [
+            'service-sync-anomaly-v1',
+            (string) $service->id,
+            $classification,
+            (string) $service->remote_identity_generation,
+            (string) $service->mutation_generation,
+            (string) $service->lifecycle_version,
+        ]));
+
+        return hash_equals($expected, $anomalyKey);
     }
 
     /**
@@ -399,6 +573,8 @@ final readonly class ServiceNotificationSourceAuthority
             'service_sync_snapshot',
             'wallet_balance',
             'auto_renew_notification_intent',
+            'provisioning_operation',
+            'service_sync_anomaly',
         ], true)) {
             throw new RuntimeException('Stored Service notification source locator type is invalid.');
         }

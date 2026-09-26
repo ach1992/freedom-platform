@@ -159,10 +159,35 @@ namespace Tests\Feature {
 
                 $row = DB::table('service_batch_grants')->where('id', $batch->batchId)->first();
                 self::assertNotNull($row);
-                self::assertSame('completed', $row->state);
-                self::assertSame(1, (int) $row->succeeded_count);
-                self::assertSame(0, (int) $row->failed_count);
-                self::assertSame(1, (int) DB::table('service_batch_grant_items')->where('service_batch_grant_id', $batch->batchId)->value('attempt_count'));
+                $itemEvidence = DB::table('service_batch_grant_items')
+                    ->where('service_batch_grant_id', $batch->batchId)
+                    ->first([
+                        'state',
+                        'attempt_count',
+                        'error_code',
+                        'order_source_authorization_id',
+                        'order_id',
+                        'service_subscription_id',
+                        'provisioning_operation_id',
+                    ]);
+                self::assertNotNull($itemEvidence);
+                $convergenceEvidence = json_encode([
+                    'batch_state' => $row->state,
+                    'batch_succeeded' => (int) $row->succeeded_count,
+                    'batch_failed' => (int) $row->failed_count,
+                    'item_state' => $itemEvidence->state,
+                    'item_attempt_count' => (int) $itemEvidence->attempt_count,
+                    'item_error_code' => $itemEvidence->error_code,
+                    'source_authorization_id' => $itemEvidence->order_source_authorization_id,
+                    'order_id' => $itemEvidence->order_id,
+                    'service_subscription_id' => $itemEvidence->service_subscription_id,
+                    'provisioning_operation_id' => $itemEvidence->provisioning_operation_id,
+                    'worker_results' => [$firstResult, $secondResult],
+                ], JSON_THROW_ON_ERROR);
+                self::assertSame('completed', $row->state, $convergenceEvidence);
+                self::assertSame(1, (int) $row->succeeded_count, $convergenceEvidence);
+                self::assertSame(0, (int) $row->failed_count, $convergenceEvidence);
+                self::assertSame(1, (int) $itemEvidence->attempt_count, $convergenceEvidence);
                 self::assertSame(1, DB::table('order_source_authorizations')->where('source_type', 'admin_grant')->count());
                 self::assertSame(1, DB::table('orders')->where('source_type', 'admin_grant')->count());
                 self::assertSame(1, DB::table('service_subscriptions')->count());

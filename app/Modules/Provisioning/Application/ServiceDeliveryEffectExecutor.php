@@ -24,7 +24,7 @@ use Throwable;
  * @phpstan-type DeliveryService object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type TelegramAccount object{id:int|string,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,is_bot:int|string|bool}
  * @phpstan-type DeliveryEffect object{id:int|string,public_id:string,service_delivery_attempt_id:int|string,service_subscription_id:int|string,telegram_account_id:int|string,telegram_bot_id:int|string,telegram_user_id:int|string,state:string,state_version:int|string,provider_boundary_started_at:?string,completed_at:?string,telegram_message_id:int|string|null,result_code:?string,retry_after_seconds:int|string|null}
- * @phpstan-type NotificationSourceState object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null}
+ * @phpstan-type NotificationSourceState object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,expiry_snapshot_max_age_seconds:int|string|null,sync_snapshot_max_age_seconds:int|string|null,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null}
  * @phpstan-type DeliveryContext array{attempt:DeliveryAttempt,service:DeliveryService,account:TelegramAccount,effect:DeliveryEffect}
  */
 final readonly class ServiceDeliveryEffectExecutor
@@ -231,10 +231,18 @@ final readonly class ServiceDeliveryEffectExecutor
 
     private function notificationPresentation(int $attemptId): ProtectedTelegramPresentation
     {
-        /** @var object{presentation_text:string,presentation_hash:string}|null $binding */
-        $binding = $this->database->connection()->table('service_notification_delivery_bindings')
+        /** @var object{presentation_text:string,presentation_hash:string}|null $thresholdBinding */
+        $thresholdBinding = $this->database->connection()->table('service_notification_delivery_bindings')
             ->where('service_delivery_attempt_id', $attemptId)
             ->first(['presentation_text', 'presentation_hash']);
+        /** @var object{presentation_text:string,presentation_hash:string}|null $grantBinding */
+        $grantBinding = $this->database->connection()->table('service_entitlement_grant_notification_bindings')
+            ->where('service_delivery_attempt_id', $attemptId)
+            ->first(['presentation_text', 'presentation_hash']);
+        if (($thresholdBinding === null) === ($grantBinding === null)) {
+            throw new RuntimeException('Service notification delivery must have exactly one durable presentation source.');
+        }
+        $binding = $thresholdBinding ?? $grantBinding;
         if ($binding === null
             || ! hash_equals($binding->presentation_hash, hash('sha256', $binding->presentation_text))) {
             throw new RuntimeException('Service notification presentation evidence is invalid.');
@@ -264,13 +272,49 @@ final readonly class ServiceDeliveryEffectExecutor
             ->first([
                 'state.id', 'state.service_subscription_id', 'state.episode_key_hash', 'state.notification_type',
                 'state.threshold_code', 'state.cycle_key_hash', 'state.source_type', 'state.source_id',
-                'state.low_balance_threshold_irr', 'state.state', 'state.latest_delivery_attempt_id', 'state.latest_retry_ordinal',
+                'state.low_balance_threshold_irr', 'state.expiry_snapshot_max_age_seconds', 'state.sync_snapshot_max_age_seconds',
+                'state.state', 'state.latest_delivery_attempt_id', 'state.latest_retry_ordinal',
             ]);
-        if ($binding === null) {
-            throw new DomainException('Service notification Delivery Attempt lost current threshold authority.');
+        if ($binding !== null) {
+            return $binding;
         }
 
-        return $binding;
+        /** @var object{id:int|string}|null $grantBinding */
+        $grantBinding = $connection->table('service_entitlement_grant_notification_bindings as binding')
+            ->join(
+                'service_entitlement_grant_items as item',
+                'item.id',
+                '=',
+                'binding.service_entitlement_grant_item_id',
+            )
+            ->join(
+                'service_entitlement_grant_batches as batch',
+                'batch.id',
+                '=',
+                'item.service_entitlement_grant_batch_id',
+            )
+            ->join(
+                'provisioning_operations as operation',
+                'operation.id',
+                '=',
+                'item.provisioning_operation_id',
+            )
+            ->where('binding.service_delivery_attempt_id', (int) $attempt->id)
+            ->where('item.service_subscription_id', (int) $attempt->service_subscription_id)
+            ->whereIn('item.state', ['queued', 'succeeded'])
+            ->where('batch.notify_customers', true)
+            ->whereIn('operation.operation_type', ['grant_data', 'grant_days', 'grant_data_days'])
+            ->where('operation.state', 'succeeded')
+            ->whereNotNull('operation.remote_effect_started_at')
+            ->whereNotNull('operation.remote_effect_completed_at')
+            ->whereNotNull('operation.last_result_code')
+            ->lockForUpdate()
+            ->first(['item.id']);
+        if ($grantBinding === null) {
+            throw new DomainException('Service notification Delivery Attempt lost its durable source authority.');
+        }
+
+        return null;
     }
 
     /**

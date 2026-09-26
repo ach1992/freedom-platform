@@ -119,7 +119,7 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
                 'service.id', 'service.public_id', 'service.lifecycle_state', 'service.lifecycle_version',
                 'service.remote_identity_generation', 'service.mutation_generation', 'service.provisioned_at',
                 'service.service_target_id', 'service.remote_service_id', 'service.remote_deleted_at',
-                'item.plan_offering_id',
+                'item.plan_offering_id', 'offering.auto_renew_allowed',
                 'product.name_fa as product_name_fa', 'product.name_en as product_name_en',
                 'variant.name_fa as variant_name_fa', 'variant.name_en as variant_name_en',
                 'server.name_fa as server_name_fa', 'server.name_en as server_name_en',
@@ -228,6 +228,8 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             $expiresAt,
             $observedAt,
             $allowedActions,
+            (bool) ($service->auto_renew_allowed ?? false)
+                && in_array(TelegramOwnedServiceAction::Renew, $allowedActions, true),
         );
     }
 
@@ -302,11 +304,12 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             static fn (TelegramOwnedServiceAction $action): string => $action->value,
             TelegramOwnedServiceAction::ordered(),
         );
+        $reconfigurationCodes = ['change_plan', 'change_location', 'change_protocol'];
 
         $policies = [];
         $policyRows = $connection->table('plan_offering_operations')
             ->where('plan_offering_id', $planOfferingId)
-            ->whereIn('operation_code', $actionCodes)
+            ->whereIn('operation_code', array_values(array_unique([...$actionCodes, ...$reconfigurationCodes])))
             ->get(['operation_code', 'customer_enabled', 'required_capability_code']);
         foreach ($policyRows as $policy) {
             $operationCode = $this->databaseString($policy->operation_code ?? null, 'Service operation policy code');
@@ -334,6 +337,23 @@ final readonly class TelegramOwnedServiceProjectionService implements TelegramOw
             ->pluck('capability_code') as $capabilityCode) {
             $verifiedCapabilities[] = $this->databaseString($capabilityCode, 'Service target capability');
         }
+        $verifiedCapabilitySet = array_fill_keys($verifiedCapabilities, true);
+        $reconfigurationAllowed = false;
+        foreach ($reconfigurationCodes as $code) {
+            $policy = $policies[$code] ?? null;
+            if ($policy === null || ! $policy['customer_enabled']) {
+                continue;
+            }
+            $required = $policy['required_capability_code'];
+            if ($required === null || isset($verifiedCapabilitySet[$required])) {
+                $reconfigurationAllowed = true;
+                break;
+            }
+        }
+        $policies[TelegramOwnedServiceAction::Reconfigure->value] = [
+            'customer_enabled' => $reconfigurationAllowed,
+            'required_capability_code' => null,
+        ];
 
         return $this->allowedActionResolver->resolve(
             $lifecycleState,

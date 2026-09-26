@@ -20,10 +20,16 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramAlternativePaymentReviewNavigationHandler $adminPayments,
         private TelegramAdministratorSearchNavigationHandler $adminSearch,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
+        private TelegramAdministratorServiceOperationsNavigationHandler $adminServiceOperations,
         private TelegramBroadcastNavigationResolver $broadcastResolver,
         private TelegramClientGuideNavigationHandler $clientGuides,
         private TelegramMenuConfigurationNavigationHandler $menuConfiguration,
         private TelegramMembershipConfigurationNavigationHandler $membershipConfiguration,
+        private TelegramServiceAutoRenewNavigationHandler $serviceAutoRenew,
+        private TelegramServiceAutoRenewPolicyNavigationHandler $serviceAutoRenewPolicy,
+        private TelegramServiceLifecycleNavigationHandler $serviceLifecycle,
+        private TelegramServiceReconfigurationNavigationHandler $serviceReconfiguration,
+        private TelegramServiceNotificationPreferenceNavigationHandler $serviceNotifications,
         private TelegramAgentBulkPurchaseNavigationHandler $agentBulk,
         private TelegramAgentNavigationHandler $agent,
         private TelegramTrialNavigationHandler $trial,
@@ -67,6 +73,31 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 
             return;
         }
+        if ($this->serviceAutoRenew->supports($action)) {
+            $this->serviceAutoRenew->handle($action);
+
+            return;
+        }
+        if ($this->serviceAutoRenewPolicy->supports($action)) {
+            $this->serviceAutoRenewPolicy->handle($action);
+
+            return;
+        }
+        if ($this->serviceLifecycle->supports($action)) {
+            $this->serviceLifecycle->handle($action);
+
+            return;
+        }
+        if ($this->serviceReconfiguration->supports($action)) {
+            $this->serviceReconfiguration->handle($action);
+
+            return;
+        }
+        if ($this->serviceNotifications->supports($action)) {
+            $this->serviceNotifications->handle($action);
+
+            return;
+        }
         if ($this->adminAccess->supports($action)) {
             $this->adminAccess->handle($action);
 
@@ -84,6 +115,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->adminCustomers->supports($action)) {
             $this->adminCustomers->handle($action);
+
+            return;
+        }
+        if ($this->adminServiceOperations->supports($action)) {
+            $this->adminServiceOperations->handle($action);
 
             return;
         }

@@ -35,6 +35,19 @@ return new class extends Migration
             return;
         }
 
+        // DatabaseTruncation may clear only the immutable capability singleton while leaving a
+        // later composed Service authority (paid/reconfiguration/grant) intact. Reconstruct that
+        // fail-closed singleton without reinstalling this historical migration's predecessor
+        // Service update guard over the accepted successor graph.
+        if ($this->authorityStructureFinalized()) {
+            $this->ensureOperationalCapability();
+            if (! $this->authorityFinalized()) {
+                throw new RuntimeException('Service operational capability-only re-entry did not restore final authority.');
+            }
+
+            return;
+        }
+
         foreach ([
             'service_subscriptions', 'provisioning_operations', 'order_source_authorizations', 'orders',
             'users', 'administrators', 'plan_offerings', 'panel_connections', 'panel_service_targets',
@@ -47,12 +60,19 @@ return new class extends Migration
             }
         }
 
+        $preserveAuditSuccessor = $this->laterAuditSuccessorPresent();
+        $preserveServiceSuccessor = $this->laterServiceSuccessorPresent();
+
         $this->ensureOperationalCapability();
         $this->ensureBlockedFoundation();
         $this->ensureRemoteIdentityUniqueness();
         $this->installEvidenceGuards();
-        $this->installAuditGuard();
-        $this->installServiceUpdateAuthority();
+        if (! $preserveAuditSuccessor) {
+            $this->installAuditGuard();
+        }
+        if (! $preserveServiceSuccessor) {
+            $this->installServiceUpdateAuthority();
+        }
 
         foreach (self::READY_CHECKS as $table => $constraint) {
             if (! $this->constraintExists($table, $constraint)) {
@@ -1422,7 +1442,35 @@ SQL);
         DB::connection()->getPdo()->exec($sql);
     }
 
+    private function laterAuditSuccessorPresent(): bool
+    {
+        return $this->triggerContains(
+            'audit_logs_service_operational_insert_guard',
+            'services.reconfigure',
+        );
+    }
+
+    private function laterServiceSuccessorPresent(): bool
+    {
+        foreach ([
+            'service_entitlement_grant_queue_v1',
+            'service_reconfiguration_no_charge_queue_v1',
+            'service_paid_mutation_queue_v1',
+        ] as $successorAuthority) {
+            if ($this->triggerContains('service_subscriptions_update_guard', $successorAuthority)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function authorityFinalized(): bool
+    {
+        return $this->operationalCapabilityReady() && $this->authorityStructureFinalized();
+    }
+
+    private function authorityStructureFinalized(): bool
     {
         foreach (self::READY_CHECKS as $table => $ready) {
             if (! Schema::hasTable($table)
@@ -1431,7 +1479,7 @@ SQL);
                 return false;
             }
         }
-        if (! $this->operationalCapabilityReady() || ! $this->remoteIdentityIndexCompatible()) {
+        if (! $this->remoteIdentityIndexCompatible()) {
             return false;
         }
 

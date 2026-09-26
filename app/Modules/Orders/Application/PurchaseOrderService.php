@@ -19,7 +19,7 @@ use RuntimeException;
 /**
  * @phpstan-type SettlementRow object{id:int|string,public_id:string,payment_intent_id:int|string,user_id:int|string,source_quote_id:int|string,source_quote_public_id:string,amount_irr:int|string,currency:string,settled_at:string}
  * @phpstan-type IntentRow object{id:int|string,public_id:string,purpose:string,user_id:int|string,wallet_account_id:int|string|null,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,amount_irr:int|string,currency:string,state:string,captured_at:string|null}
- * @phpstan-type QuoteRow object{id:int|string,public_id:string,user_id:int|string,account_type_snapshot:string,plan_offering_id:int|string,offering_code_snapshot:string,offering_version:int|string,offering_configuration_hash:string,base_price_irr:int|string,override_source:string,override_reference_code:string|null,override_price_irr:int|string|null,effective_price_irr:int|string,discount_reference_code:string|null,discount_irr:int|string,final_price_irr:int|string,currency:string,configuration_snapshot:string,configuration_snapshot_hash:string,valid_from:string,expires_at:string}
+ * @phpstan-type QuoteRow object{id:int|string,public_id:string,user_id:int|string,account_type_snapshot:string,action_snapshot:string,plan_offering_id:int|string,offering_code_snapshot:string,offering_version:int|string,offering_configuration_hash:string,base_price_irr:int|string,override_source:string,override_reference_code:string|null,override_price_irr:int|string|null,effective_price_irr:int|string,discount_reference_code:string|null,discount_irr:int|string,final_price_irr:int|string,currency:string,configuration_snapshot:string,configuration_snapshot_hash:string,valid_from:string,expires_at:string}
  * @phpstan-type OrderRow object{id:int|string,public_id:string,source_type:string,purchase_settlement_id:int|string|null,purchase_settlement_public_id:string|null,payment_intent_id:int|string|null,payment_intent_public_id:string|null,user_id:int|string,source_quote_id:int|string|null,source_quote_public_id:string|null,source_quote_configuration_hash:string|null,state:string,state_version:int|string,total_amount_irr:int|string,settled_amount_irr:int|string|null,currency:string,paid_at:string|null}
  * @phpstan-type OrderItemRow object{id:int|string,public_id:string,order_id:int|string,line_number:int|string,source_quote_id:int|string,source_quote_public_id:string,account_type_snapshot:string,plan_offering_id:int|string,offering_code_snapshot:string,offering_version:int|string,offering_configuration_hash:string,base_price_irr:int|string,override_source:string,override_reference_code:string|null,override_price_irr:int|string|null,effective_price_irr:int|string,discount_reference_code:string|null,discount_irr:int|string,final_price_irr:int|string,currency:string,configuration_snapshot:string,configuration_snapshot_hash:string}
  */
@@ -32,6 +32,7 @@ final readonly class PurchaseOrderService
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private PaidServiceMutationOrderOutboxPublisher $paidServiceMutations,
     ) {}
 
     /** @requirement BUY-001 BUY-002 PAY-001 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
@@ -291,6 +292,13 @@ final readonly class PurchaseOrderService
 
         $this->insertOrderItem($connection, $orderId, $itemPublicId, $quote, $timestamp);
         $this->recordPaidAudit($connection, $orderPublicId, $settlement, $intent, $correlationId, true);
+        $this->paidServiceMutations->publishIfRequired(
+            $orderPublicId,
+            $settlement->public_id,
+            $quote->public_id,
+            $quote->action_snapshot,
+            $correlationId,
+        );
 
         return $this->paidReceipt($orderId, $orderPublicId, $itemPublicId, $settlement, $intent, $quote, false);
     }
@@ -376,6 +384,13 @@ final readonly class PurchaseOrderService
         ]);
 
         $this->recordPaidAudit($connection, $order->public_id, $settlement, $intent, $correlationId, false);
+        $this->paidServiceMutations->publishIfRequired(
+            $order->public_id,
+            $settlement->public_id,
+            $quote->public_id,
+            $quote->action_snapshot,
+            $correlationId,
+        );
 
         return $this->paidReceipt($orderId, $order->public_id, $item->public_id, $settlement, $intent, $quote, false);
     }
@@ -475,7 +490,7 @@ final readonly class PurchaseOrderService
     private function quoteColumns(): array
     {
         return [
-            'id', 'public_id', 'user_id', 'account_type_snapshot', 'plan_offering_id', 'offering_code_snapshot',
+            'id', 'public_id', 'user_id', 'account_type_snapshot', 'action_snapshot', 'plan_offering_id', 'offering_code_snapshot',
             'offering_version', 'offering_configuration_hash', 'base_price_irr', 'override_source',
             'override_reference_code', 'override_price_irr', 'effective_price_irr', 'discount_reference_code',
             'discount_irr', 'final_price_irr', 'currency', 'configuration_snapshot', 'configuration_snapshot_hash',

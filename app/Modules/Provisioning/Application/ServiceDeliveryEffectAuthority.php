@@ -9,7 +9,7 @@ use DomainException;
 use Illuminate\Database\Connection;
 
 /**
- * @phpstan-type DeliveryAttempt object{id:int|string,service_subscription_id:int|string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
+ * @phpstan-type DeliveryAttempt object{id:int|string,service_subscription_id:int|string,purpose:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string}
  * @phpstan-type DeliveryService object{id:int|string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type TelegramAccount object{id:int|string,user_id:int|string,bot_id:int|string,telegram_user_id:int|string,is_bot:int|string|bool}
  * @phpstan-type DeliveryEffect object{id:int|string,telegram_account_id:int|string,telegram_bot_id:int|string,telegram_user_id:int|string}
@@ -22,8 +22,11 @@ trait ServiceDeliveryEffectAuthority
      */
     private function assertCurrentAuthority(Connection $connection, object $attempt, object $service): void
     {
-        if ($service->remote_deleted_at !== null
-            || ! in_array($service->lifecycle_state, ['active', 'suspended'], true)
+        $retiredStateNotification = $this->isRetiredStateNotification($connection, $attempt, $service);
+        $lifecycleCurrent = $retiredStateNotification
+            ? $service->remote_deleted_at !== null && $service->lifecycle_state === 'retired'
+            : $service->remote_deleted_at === null && in_array($service->lifecycle_state, ['active', 'suspended'], true);
+        if (! $lifecycleCurrent
             || $service->provisioned_at === null
             || $service->service_target_id === null
             || (int) $service->service_target_id < 1
@@ -49,6 +52,29 @@ trait ServiceDeliveryEffectAuthority
         if ($blockingDelivery !== null) {
             throw new DomainException('Service delivery effect is blocked by an in-flight, uncertain, or provider-directed retry boundary.');
         }
+    }
+
+    /**
+     * @param  DeliveryAttempt  $attempt
+     * @param  DeliveryService  $service
+     */
+    private function isRetiredStateNotification(Connection $connection, object $attempt, object $service): bool
+    {
+        if ($attempt->purpose !== 'notification'
+            || $service->lifecycle_state !== 'retired'
+            || $service->remote_deleted_at === null) {
+            return false;
+        }
+
+        return $connection->table('service_notification_delivery_bindings as binding')
+            ->join('service_notification_states as state', 'state.id', '=', 'binding.service_notification_state_id')
+            ->where('binding.service_delivery_attempt_id', (int) $attempt->id)
+            ->where('state.service_subscription_id', (int) $service->id)
+            ->where('state.state', 'triggered')
+            ->where('state.notification_type', 'service_state')
+            ->where('state.threshold_code', 'state_deleted')
+            ->where('state.source_type', 'provisioning_operation')
+            ->exists();
     }
 
     /**

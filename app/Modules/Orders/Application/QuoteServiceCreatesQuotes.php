@@ -26,6 +26,7 @@ trait QuoteServiceCreatesQuotes
         string $correlationId,
         ?QuoteAgentPricingContext $agentPricingContext = null,
         ?ServicePackageQuoteContext $servicePackageContext = null,
+        ?ServiceReconfigurationQuoteContext $serviceReconfigurationContext = null,
     ): QuoteReceipt {
         $this->assertToken($quoteKey, 'Quote key', 8, 128);
         $this->assertPositiveId($userId, 'Quote user ID');
@@ -36,6 +37,10 @@ trait QuoteServiceCreatesQuotes
             throw new AuthorizationException('Quote agent pricing actor is not authorized for this subject.');
         }
 
+        if ($servicePackageContext !== null && $serviceReconfigurationContext !== null) {
+            throw new DomainException('Quote cannot combine a Service package and Service reconfiguration context.');
+        }
+
         $expiresAt = $pricing->expiresAt->setTimezone(new DateTimeZone('UTC'));
         $requestPayloadHash = $this->requestPayloadHash(
             $userId,
@@ -44,6 +49,7 @@ trait QuoteServiceCreatesQuotes
             $expiresAt,
             $agentPricingContext,
             $servicePackageContext,
+            $serviceReconfigurationContext,
         );
 
         try {
@@ -57,6 +63,7 @@ trait QuoteServiceCreatesQuotes
                 $requestPayloadHash,
                 $agentPricingContext,
                 $servicePackageContext,
+                $serviceReconfigurationContext,
             ): QuoteReceipt {
                 $existing = $this->quoteByKey($connection, $quoteKey, true);
                 if ($existing !== null) {
@@ -109,13 +116,28 @@ trait QuoteServiceCreatesQuotes
                 $servicePackage = $servicePackageContext === null
                     ? null
                     : $this->servicePackageFacts($connection, $userId, $planOfferingId, $servicePackageContext);
-                $action = $servicePackage === null ? QuoteAction::Purchase : $servicePackage['action'];
+                $serviceReconfiguration = $serviceReconfigurationContext === null
+                    ? null
+                    : $this->serviceReconfigurationFacts(
+                        $connection,
+                        $userId,
+                        $planOfferingId,
+                        $serviceReconfigurationContext,
+                        $expiresAt,
+                    );
+                $action = $servicePackage['action'] ?? $serviceReconfiguration['action'] ?? QuoteAction::Purchase;
                 if ($servicePackage !== null) {
                     $basePriceIrr = $servicePackage['price_irr'];
                     $offeringDiscountEligible = $offeringDiscountEligible && $servicePackage['discount_eligible'];
+                } elseif ($serviceReconfiguration !== null) {
+                    if ($offering->state !== 'active' || $offering->visibility !== 'visible') {
+                        throw new DomainException('Service reconfiguration Quote requires an active visible target offering.');
+                    }
+                    $basePriceIrr = $serviceReconfiguration['total_price_irr'];
+                    $offeringDiscountEligible = $offeringDiscountEligible && $serviceReconfiguration['discount_eligible'];
                 }
 
-                $expectedAgentAction = $servicePackage === null ? AgentPricingAction::Purchase : $servicePackage['agent_action'];
+                $expectedAgentAction = $servicePackage['agent_action'] ?? $serviceReconfiguration['agent_action'] ?? AgentPricingAction::Purchase;
                 if ($user->account_type === 'agent') {
                     if ($agentPricingContext === null || $agentPricingContext->action !== $expectedAgentAction) {
                         throw new AuthorizationException('Agent quote creation requires the matching authorized pricing action.');
@@ -217,6 +239,26 @@ trait QuoteServiceCreatesQuotes
                         'service_target_id' => $servicePackage['service_target_id'],
                     ];
                 }
+                if ($serviceReconfiguration !== null) {
+                    $snapshot['service_reconfiguration'] = [
+                        'changes_plan' => $serviceReconfiguration['changes_plan'],
+                        'changes_protocol' => $serviceReconfiguration['changes_protocol'],
+                        'changes_target' => $serviceReconfiguration['changes_target'],
+                        'operation_fee_irr' => $serviceReconfiguration['operation_fee_irr'],
+                        'preview_public_id' => $serviceReconfiguration['preview_public_id'],
+                        'price_difference_irr' => $serviceReconfiguration['price_difference_irr'],
+                        'service_public_id' => $serviceReconfiguration['service_subscription_public_id'],
+                        'source_lifecycle_version' => $serviceReconfiguration['source_lifecycle_version'],
+                        'source_mutation_generation' => $serviceReconfiguration['source_mutation_generation'],
+                        'source_remote_identity_generation' => $serviceReconfiguration['source_remote_identity_generation'],
+                        'source_route_selection_id' => $serviceReconfiguration['source_route_selection_id'],
+                        'source_service_target_id' => $serviceReconfiguration['source_service_target_id'],
+                        'target_protocol_profile_id' => $serviceReconfiguration['target_protocol_profile_id'],
+                        'target_route_selection_id' => $serviceReconfiguration['target_route_selection_id'],
+                        'target_service_target_id' => $serviceReconfiguration['target_service_target_id'],
+                        'total_price_irr' => $serviceReconfiguration['total_price_irr'],
+                    ];
+                }
                 ksort($snapshot, SORT_STRING);
                 $snapshotJson = json_encode($snapshot, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
                 if (strlen($snapshotJson) > 8192) {
@@ -269,6 +311,24 @@ trait QuoteServiceCreatesQuotes
                         'service_package_duration_days_snapshot' => $servicePackage['duration_days'],
                         'service_package_data_bytes_snapshot' => $servicePackage['data_bytes'],
                         'service_required_capability_code_snapshot' => $servicePackage['required_capability_code'],
+                    ];
+                }
+                if ($serviceReconfiguration !== null) {
+                    $insert += [
+                        'service_subscription_id' => $serviceReconfiguration['service_subscription_id'],
+                        'service_subscription_public_id' => $serviceReconfiguration['service_subscription_public_id'],
+                        'service_target_id_snapshot' => $serviceReconfiguration['source_service_target_id'],
+                        'service_remote_identity_generation_snapshot' => $serviceReconfiguration['source_remote_identity_generation'],
+                        'service_lifecycle_version_snapshot' => $serviceReconfiguration['source_lifecycle_version'],
+                        'service_mutation_generation_snapshot' => $serviceReconfiguration['source_mutation_generation'],
+                        'service_reconfiguration_preview_id' => $serviceReconfiguration['preview_id'],
+                        'service_reconfiguration_preview_public_id' => $serviceReconfiguration['preview_public_id'],
+                        'service_source_route_selection_id_snapshot' => $serviceReconfiguration['source_route_selection_id'],
+                        'service_target_route_selection_id_snapshot' => $serviceReconfiguration['target_route_selection_id'],
+                        'service_target_service_target_id_snapshot' => $serviceReconfiguration['target_service_target_id'],
+                        'service_target_service_target_version_snapshot' => $serviceReconfiguration['target_service_target_version'],
+                        'service_target_protocol_profile_id_snapshot' => $serviceReconfiguration['target_protocol_profile_id'],
+                        'service_target_protocol_profile_version_snapshot' => $serviceReconfiguration['target_protocol_profile_version'],
                     ];
                 }
 

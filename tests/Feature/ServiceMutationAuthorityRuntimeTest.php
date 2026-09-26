@@ -747,6 +747,16 @@ final class ServiceMutationAuthorityRuntimeTest extends TestCase
         $quoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         /** @var Migration $paidMutationMigration */
         $paidMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
+        /** @var Migration $reconfigurationQuoteMigration */
+        $reconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
+        /** @var Migration $reconfigurationRemoteEffectMigration */
+        $reconfigurationRemoteEffectMigration = require database_path('migrations/2026_09_25_000320_enable_service_reconfiguration_remote_effect.php');
+        /** @var Migration $entitlementGrantMigration */
+        $entitlementGrantMigration = require database_path('migrations/2026_09_26_000100_enable_service_entitlement_grant_authority.php');
+        /** @var Migration $entitlementGrantNotificationMigration */
+        $entitlementGrantNotificationMigration = require database_path('migrations/2026_09_26_000110_enable_service_entitlement_grant_notification_delivery.php');
+        /** @var Migration $administratorReconfigurationMigration */
+        $administratorReconfigurationMigration = require database_path('migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php');
 
         try {
             $quoteMigration->up();
@@ -785,6 +795,11 @@ SQL);
         } finally {
             $quoteMigration->up();
             $paidMutationMigration->up();
+            $reconfigurationQuoteMigration->up();
+            $reconfigurationRemoteEffectMigration->up();
+            $entitlementGrantMigration->up();
+            $entitlementGrantNotificationMigration->up();
+            $administratorReconfigurationMigration->up();
         }
 
         self::assertTrue(DB::getSchemaBuilder()->hasColumn('quotes', 'action_snapshot'));

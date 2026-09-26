@@ -11,6 +11,8 @@ return [
     )),
     // New expiry episodes bind this value durably; later config changes do not rewrite existing authority.
     'expiry_snapshot_max_age_seconds' => env('SERVICE_NOTIFICATION_EXPIRY_SNAPSHOT_MAX_AGE_SECONDS', 1800),
+    'sync_snapshot_max_age_seconds' => env('SERVICE_NOTIFICATION_SYNC_SNAPSHOT_MAX_AGE_SECONDS', 1800),
+    'usage_threshold_percentages' => [20, 10, 0],
     // Product-specific financial threshold. Zero keeps low-balance warnings disabled until configured.
     'low_balance_irr' => env('SERVICE_NOTIFICATION_LOW_BALANCE_IRR', 0),
     'retry' => [
@@ -18,6 +20,11 @@ return [
             'max_retries' => env('SERVICE_NOTIFICATION_EXPIRY_MAX_RETRIES', 2),
             'base_delay_seconds' => env('SERVICE_NOTIFICATION_EXPIRY_RETRY_BASE_SECONDS', 60),
             'max_delay_seconds' => env('SERVICE_NOTIFICATION_EXPIRY_RETRY_MAX_SECONDS', 900),
+        ],
+        'usage' => [
+            'max_retries' => env('SERVICE_NOTIFICATION_USAGE_MAX_RETRIES', 2),
+            'base_delay_seconds' => env('SERVICE_NOTIFICATION_USAGE_RETRY_BASE_SECONDS', 60),
+            'max_delay_seconds' => env('SERVICE_NOTIFICATION_USAGE_RETRY_MAX_SECONDS', 900),
         ],
         'low_balance' => [
             'max_retries' => env('SERVICE_NOTIFICATION_LOW_BALANCE_MAX_RETRIES', 2),
@@ -28,6 +35,16 @@ return [
             'max_retries' => env('SERVICE_NOTIFICATION_RENEWAL_MAX_RETRIES', 3),
             'base_delay_seconds' => env('SERVICE_NOTIFICATION_RENEWAL_RETRY_BASE_SECONDS', 60),
             'max_delay_seconds' => env('SERVICE_NOTIFICATION_RENEWAL_RETRY_MAX_SECONDS', 1800),
+        ],
+        'service_state' => [
+            'max_retries' => env('SERVICE_NOTIFICATION_STATE_MAX_RETRIES', 2),
+            'base_delay_seconds' => env('SERVICE_NOTIFICATION_STATE_RETRY_BASE_SECONDS', 60),
+            'max_delay_seconds' => env('SERVICE_NOTIFICATION_STATE_RETRY_MAX_SECONDS', 900),
+        ],
+        'sync_issue' => [
+            'max_retries' => env('SERVICE_NOTIFICATION_SYNC_ISSUE_MAX_RETRIES', 2),
+            'base_delay_seconds' => env('SERVICE_NOTIFICATION_SYNC_ISSUE_RETRY_BASE_SECONDS', 120),
+            'max_delay_seconds' => env('SERVICE_NOTIFICATION_SYNC_ISSUE_RETRY_MAX_SECONDS', 1800),
         ],
     ],
 ];

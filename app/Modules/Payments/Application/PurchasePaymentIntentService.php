@@ -340,7 +340,7 @@ final readonly class PurchasePaymentIntentService
             || (int) $decision->source_quote_id !== (int) $quote->id
             || ! hash_equals($decision->source_quote_public_id, $quote->public_id)
             || $decision->action_snapshot !== $quote->action_snapshot
-            || ! in_array($decision->action_snapshot, ['purchase', 'renew', 'add_data', 'add_days', 'add_data_days'], true)
+            || ! in_array($decision->action_snapshot, ['purchase', 'renew', 'add_data', 'add_days', 'add_data_days', 'reconfigure'], true)
             || $decision->currency_snapshot !== $quote->currency
             || (int) $decision->amount_irr_snapshot !== (int) $quote->final_price_irr) {
             throw new DomainException('Payment eligibility decision does not match the purchase Quote.');

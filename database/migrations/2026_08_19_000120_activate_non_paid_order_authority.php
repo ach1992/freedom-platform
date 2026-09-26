@@ -10,6 +10,16 @@ return new class extends Migration
     /** @requirement BUY-001 BUY-002 CAT-006 ADM-002 PAY-002 PAY-003 PRV-002 PRV-003 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 QUA-001 QUA-004 */
     public function up(): void
     {
+        // Re-entering this historical migration on a fully composed successor schema must not
+        // replace later reconfiguration/grant Service authority. It must still repair this
+        // migration's own Order + initial-provisioning surfaces because historical tests or
+        // interrupted rollback recovery can downgrade those independently.
+        if ($this->laterComposedServiceAuthorityPresent()) {
+            $this->repairNonPaidOrderAuthorityPreservingServiceSuccessors();
+
+            return;
+        }
+
         // Re-entry can start from the already-enabled #150 fence. Close non-purchase creation as
         // the first durable DDL statement so every restart/repair remains fail-closed until the
         // complete predecessor + source-aware graph passes readiness below.
@@ -38,6 +48,30 @@ return new class extends Migration
 
         // Final enabling statement. A crash before this point leaves every non-purchase Order
         // source fenced exactly as before this migration.
+        $this->activateSupportedSourceFence();
+    }
+
+    private function repairNonPaidOrderAuthorityPreservingServiceSuccessors(): void
+    {
+        // Close source creation before replacing any Order authority so MariaDB's statement-level
+        // DDL commits remain fail-closed throughout recovery.
+        $this->restorePurchaseOnlySourceFence();
+
+        $this->replaceOrderSourceConstraints();
+        $this->replaceOrderInsertGuard();
+        $this->replaceOrderItemInsertGuard();
+        $this->replaceInitialHistoryTrigger();
+        $this->replaceOrderHistoryGuard();
+        $this->replaceServiceInsertGuard();
+
+        // Deliberately preserve provisioning_operations_insert_guard and
+        // service_subscriptions_update_guard: later SVC-005/SVC-011/SVC-013 successors compose
+        // additional Service mutation authority into those surfaces.
+        $this->replaceOrderUpdateGuard();
+        $this->replaceProvisioningOutboxEnvelopeGuard();
+        $this->replaceOutboxReleaseGuard();
+
+        $this->assertAuthorityReady();
         $this->activateSupportedSourceFence();
     }
 
@@ -1486,6 +1520,25 @@ SQL);
             && (int) $row->ready_count === 1
             && (int) $row->blocked_count === 0
             && (int) $row->bootstrap_trigger_count === 0;
+    }
+
+    private function laterComposedServiceAuthorityPresent(): bool
+    {
+        // This decision is intentionally independent from this historical migration's own
+        // Order/initial-provisioning surfaces. Those are exactly the surfaces re-entry may need
+        // to repair. Detect only authority owned by later Service successors so we never
+        // downgrade them while repairing our own graph.
+        foreach ([
+            'service_entitlement_grant_queue_v1',
+            'service_reconfiguration_no_charge_queue_v1',
+        ] as $successorAuthority) {
+            if ($this->triggerContains('provisioning_operations_insert_guard', $successorAuthority)
+                && $this->triggerContains('service_subscriptions_update_guard', $successorAuthority)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function replaceConstraint(string $table, string $constraint, string $definition): void

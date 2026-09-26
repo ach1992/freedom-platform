@@ -562,7 +562,10 @@ final readonly class ServiceBatchGrantService
     private function assertBatchReplay(Connection $connection, object $batch, ServiceOperationalContext $context, array $items, string $payloadHash): void
     {
         $this->assertBatchContext($batch, $context);
-        if (! hash_equals($batch->payload_hash, $payloadHash) || (int) $batch->item_count !== count($items)) {
+        if (! hash_equals($batch->request_key_hash, $context->requestHash())
+            || ! hash_equals($batch->correlation_id, $context->correlationId)
+            || ! hash_equals($batch->payload_hash, $payloadHash)
+            || (int) $batch->item_count !== count($items)) {
             throw new DomainException('Service batch grant request fingerprint conflicts with existing evidence.');
         }
         $rows = $connection->table('service_batch_grant_items')->where('service_batch_grant_id', (int) $batch->id)->orderBy('position')->get([
@@ -586,11 +589,9 @@ final readonly class ServiceBatchGrantService
     private function assertBatchContext(object $batch, ServiceOperationalContext $context): void
     {
         if ((int) $batch->actor_administrator_id !== $context->actorAdministratorId
-            || ! hash_equals($batch->request_key_hash, $context->requestHash())
-            || ! hash_equals($batch->correlation_id, $context->correlationId)
             || ! hash_equals($batch->reason_code, $context->reasonCode)
             || $batch->items_committed_at === null) {
-            throw new DomainException('Service batch grant request identity conflicts with existing evidence.');
+            throw new DomainException('Service batch grant administrator/reason context conflicts with existing evidence.');
         }
     }
 

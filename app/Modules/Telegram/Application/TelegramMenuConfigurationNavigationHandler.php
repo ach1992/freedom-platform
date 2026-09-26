@@ -661,6 +661,7 @@ final readonly class TelegramMenuConfigurationNavigationHandler
             TelegramMenuRegisteredAction::Purchase => 'telegram.navigation.buttons.buy_service',
             TelegramMenuRegisteredAction::Trial => 'telegram.navigation.buttons.trial_service',
             TelegramMenuRegisteredAction::MyServices => 'telegram.navigation.buttons.my_services',
+            TelegramMenuRegisteredAction::NotificationPreferences => 'telegram.navigation.buttons.notification_preferences',
             TelegramMenuRegisteredAction::ClientGuides => 'telegram.navigation.buttons.client_guides',
             TelegramMenuRegisteredAction::Support => 'telegram.navigation.buttons.support',
             TelegramMenuRegisteredAction::ExternalSupport => 'telegram.navigation.buttons.external_support',

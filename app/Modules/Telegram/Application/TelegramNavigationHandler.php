@@ -13,6 +13,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
+use App\Modules\Telegram\Application\Contracts\TelegramAdministratorServiceOperations;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
@@ -185,6 +186,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         private TelegramOwnedServiceDeliveryResender $serviceDeliveryResender,
         private TelegramManagedUsdtRateSettings $managedUsdtRateSettings,
         private TelegramAdministratorCustomerTargetDiscovery $administratorCustomerTargets,
+        private TelegramAdministratorServiceOperations $administratorServiceOperations,
         private AdministratorAccessManagementQueryService $administratorAccess,
         private AdministratorUserPermissionAuthorizer $administratorUsers,
         private TelegramSupportContactConfiguration $supportContact,
@@ -1260,6 +1262,40 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
 
+        $serviceControlButtons = [];
+        if ($this->administratorServiceOperations->availableFor($action->userId)) {
+            $serviceOperations = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdministratorServiceOperationsNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-service-operations:'.$requestKey,
+            );
+            $serviceControlButtons[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.service_operations', $locale),
+                $serviceOperations->publicId,
+                TelegramInlineButtonStyle::Primary,
+            );
+        }
+
+        if ($this->administratorUsers->allowsUser($action->userId, 'catalog.manage')) {
+            $autoRenewPolicy = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramServiceAutoRenewPolicyNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-service-auto-renew-policy:'.$requestKey,
+            );
+            $serviceControlButtons[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.admin.buttons.service_auto_renew_policy', $locale),
+                $autoRenewPolicy->publicId,
+                TelegramInlineButtonStyle::Primary,
+            );
+        }
+        if ($serviceControlButtons !== []) {
+            $rows[] = $serviceControlButtons;
+        }
+
         if ($this->managedUsdtRateSettings->availableFor($action->userId)) {
             $rate = $this->callbacks->issue(
                 $action->sessionPublicId,
@@ -1290,6 +1326,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
 
+        $configurationButtons = [];
         if ($this->administratorUsers->allowsUser(
             $action->userId,
             TelegramMenuConfigurationMutationExecutor::MANAGE_PERMISSION,
@@ -1301,11 +1338,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-menus:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $configurationButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.menus', $locale),
                 $menus->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
         }
 
         if ($this->administratorUsers->allowsUser(
@@ -1319,11 +1356,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-membership:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $configurationButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.membership', $locale),
                 $membership->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
+        }
+        if ($configurationButtons !== []) {
+            $rows[] = $configurationButtons;
         }
 
         if ($this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {
@@ -1803,7 +1843,9 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         string $requestKey,
     ): void {
         $rows = [];
-        if (! $this->purchaseQuoteHasDiscount($state) && $preview->accountType === 'customer') {
+        if ($preview->quoteAction === 'purchase'
+            && ! $this->purchaseQuoteHasDiscount($state)
+            && $preview->accountType === 'customer') {
             $discount = $this->callbacks->issue(
                 $action->sessionPublicId,
                 $sessionVersion,
@@ -3125,6 +3167,54 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->showServiceDetailForPage($action, $selectionToken, $page);
     }
 
+    public function showOwnedServiceDetailForPage(
+        TelegramInteractionAction $action,
+        string $selectionToken,
+        int $page,
+    ): void {
+        $this->showServiceDetailForPage($action, $selectionToken, $page);
+    }
+
+    public function showPreparedServiceReconfigurationQuote(
+        TelegramInteractionAction $action,
+        string $returnServiceSelection,
+        int $servicePage,
+        string $offeringSelection,
+        TelegramCustomerPurchaseQuotePreview $preview,
+    ): void {
+        if ($servicePage < 1
+            || preg_match('/\A[0-9a-f]{40}\z/', $returnServiceSelection) !== 1
+            || preg_match('/\A[0-9a-f]{40}\z/', $offeringSelection) !== 1
+            || $preview->quoteAction !== 'reconfigure'
+            || $preview->finalPriceIrr < 1) {
+            throw new RuntimeException('Prepared Service reconfiguration Quote handoff is invalid.');
+        }
+        $state = [
+            'page' => $servicePage,
+            'offering_selection' => $offeringSelection,
+            'quote_public_id' => $preview->quotePublicId,
+            'quote_configuration_hash' => $preview->configurationSnapshotHash,
+            'purchase_origin' => 'service_reconfiguration',
+            'return_service_selection' => $returnServiceSelection,
+        ];
+        $session = $this->sessions->transition(
+            $action->sessionPublicId,
+            $action->sessionVersion,
+            self::STATE_PURCHASE_QUOTE,
+            $state,
+            'nav-service-reconfigure-quote-handoff:'.$action->requestKey,
+        );
+        $this->assertActorBinding($action, $session->userId);
+        $this->renderPurchaseQuote(
+            $action,
+            $session->version,
+            $preview,
+            $state,
+            $this->localeForActor($action->userId),
+            $action->requestKey,
+        );
+    }
+
     private function showServiceDetailForPage(
         TelegramInteractionAction $action,
         string $selectionToken,
@@ -3253,6 +3343,65 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $this->assertActorBinding($action, $session->userId);
         $rows = [];
+        $notificationPreferences = $this->callbacks->issue(
+            $session->publicId,
+            $session->version,
+            TelegramServiceNotificationPreferenceNavigationHandler::ACTION_SERVICE_ENTRY,
+            ['service_selection' => $selectionToken],
+            'nav-service-detail-notifications:'.hash('sha256', $action->requestKey),
+        );
+        $rows[] = [new TelegramInlineCallbackButton(
+            $this->translation('telegram.navigation.notifications.service_button', $locale),
+            $notificationPreferences->publicId,
+            TelegramInlineButtonStyle::Primary,
+        )];
+        if ($detail->autoRenewAvailable) {
+            $autoRenew = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                TelegramServiceAutoRenewNavigationHandler::ACTION_ENTRY,
+                ['service_selection' => $selectionToken],
+                'nav-service-detail-auto-renew:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.auto_renew.button', $locale),
+                $autoRenew->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+        if (in_array(TelegramOwnedServiceAction::Reconfigure, $detail->allowedActions, true)) {
+            $reconfigure = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                TelegramServiceReconfigurationNavigationHandler::ACTION_ENTRY,
+                ['service_selection' => $selectionToken],
+                'nav-service-detail-reconfigure:'.hash('sha256', $action->requestKey),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.reconfiguration.button', $locale),
+                $reconfigure->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
+        foreach ($detail->allowedActions as $serviceAction) {
+            if (! $serviceAction->isLifecycleAction()) {
+                continue;
+            }
+            $callback = $this->callbacks->issue(
+                $session->publicId,
+                $session->version,
+                TelegramServiceLifecycleNavigationHandler::ACTION_ENTRY,
+                ['service_selection' => $selectionToken, 'action' => $serviceAction->value],
+                'nav-service-detail-lifecycle:'.hash('sha256', $action->requestKey.':'.$serviceAction->value),
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.services.lifecycle.button.'.$serviceAction->value, $locale),
+                $callback->publicId,
+                $serviceAction === TelegramOwnedServiceAction::Delete
+                    ? TelegramInlineButtonStyle::Danger
+                    : TelegramInlineButtonStyle::Primary,
+            )];
+        }
         if ($this->canOfferServiceResend($detail)) {
             $resend = $this->callbacks->issue(
                 $session->publicId,
@@ -3476,6 +3625,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function returnPurchaseOffering(TelegramInteractionAction $action): void
     {
         $state = $this->purchaseQuoteStateFromPayload($action->sessionPayload);
+        if (($state['purchase_origin'] ?? null) === 'service_reconfiguration') {
+            $this->showOwnedServiceDetailForPage(
+                $action,
+                $state['return_service_selection'],
+                $state['page'],
+            );
+
+            return;
+        }
         try {
             $offering = $this->purchaseCatalog->offeringForSelf(
                 $action->userId,
@@ -3619,6 +3777,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     private function returnPurchaseOfferingFromPaymentMethods(TelegramInteractionAction $action): void
     {
         $state = $this->purchasePaymentMethodsStateFromPayload($action->sessionPayload);
+        if (($state['purchase_origin'] ?? null) === 'service_reconfiguration') {
+            $this->showOwnedServiceDetailForPage(
+                $action,
+                $state['return_service_selection'],
+                $state['page'],
+            );
+
+            return;
+        }
         try {
             $offering = $this->purchaseCatalog->offeringForSelf(
                 $action->userId,
@@ -3714,6 +3881,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->assertActorBinding($action, $session->userId);
 
         $this->renderMyServices($action, $session->version, $services, $locale, $action->requestKey);
+    }
+
+    public function returnHomeFromExtension(TelegramInteractionAction $action): void
+    {
+        $this->returnHome($action);
     }
 
     private function returnHome(TelegramInteractionAction $action): void
@@ -3819,6 +3991,20 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $services->publicId,
             TelegramInlineButtonStyle::Primary,
         )];
+        if ($customer->accountStatus === 'active' && in_array($customer->accountType, ['customer', 'agent'], true)) {
+            $notifications = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramServiceNotificationPreferenceNavigationHandler::ACTION_GLOBAL_ENTRY,
+                [],
+                'nav-home-notifications:'.$requestKey,
+            );
+            $rows[] = [new TelegramInlineCallbackButton(
+                $this->translation('telegram.navigation.buttons.notification_preferences', $locale),
+                $notifications->publicId,
+                TelegramInlineButtonStyle::Primary,
+            )];
+        }
         $guides = $this->callbacks->issue(
             $action->sessionPublicId,
             $sessionVersion,
@@ -4118,6 +4304,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'purchase' => self::ACTION_PURCHASE_CATALOG,
             'trial' => self::ACTION_TRIAL,
             'my_services' => self::ACTION_MY_SERVICES,
+            'notification_preferences' => TelegramServiceNotificationPreferenceNavigationHandler::ACTION_GLOBAL_ENTRY,
             'client_guides' => TelegramClientGuideNavigationHandler::ACTION_ENTRY,
             'support' => self::ACTION_SUPPORT,
             'agent' => self::ACTION_AGENT,
@@ -4165,6 +4352,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             return true;
         }
 
+        if ($registered === TelegramMenuRegisteredAction::NotificationPreferences) {
+            return $customer->accountStatus === 'active'
+                && in_array($customer->accountType, ['customer', 'agent'], true);
+        }
+
         if ($registered === TelegramMenuRegisteredAction::WalletTransfer) {
             return $customer->accountType === 'customer'
                 && $customer->accountStatus === 'active'
@@ -4206,6 +4398,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             TelegramMenuRegisteredAction::Purchase => 'telegram.navigation.buttons.buy_service',
             TelegramMenuRegisteredAction::Trial => 'telegram.navigation.buttons.trial_service',
             TelegramMenuRegisteredAction::MyServices => 'telegram.navigation.buttons.my_services',
+            TelegramMenuRegisteredAction::NotificationPreferences => 'telegram.navigation.buttons.notification_preferences',
             TelegramMenuRegisteredAction::ClientGuides => 'telegram.navigation.buttons.client_guides',
             TelegramMenuRegisteredAction::Support => 'telegram.navigation.buttons.support',
             TelegramMenuRegisteredAction::ExternalSupport => 'telegram.navigation.buttons.external_support',
@@ -4548,6 +4741,16 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
 
     private function purchaseQuoteText(TelegramCustomerPurchaseQuotePreview $preview, string $locale): string
     {
+        if ($preview->quoteAction === 'reconfigure') {
+            return $this->translation('telegram.navigation.services.reconfiguration.payment_quote', $locale, [
+                'quote_id' => $preview->quotePublicId,
+                'plan' => $this->purchasePlanLabel($preview->offering, $locale),
+                'final_price' => $this->formatIrr($preview->finalPriceIrr),
+                'currency' => $preview->currency,
+                'expires_at' => $this->formatBusinessDateTime($preview->expiresAt),
+            ]);
+        }
+
         return $this->translation('telegram.navigation.purchase.quote', $locale, [
             'quote_id' => $preview->quotePublicId,
             'plan' => $this->purchasePlanLabel($preview->offering, $locale),
@@ -4910,7 +5113,15 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'quote_configuration_hash',
             'quote_public_id',
         ];
-        if (! in_array($keys, [$baseKeys, $discountedKeys], true)
+        $serviceReconfigurationKeys = [
+            'offering_selection',
+            'page',
+            'purchase_origin',
+            'quote_configuration_hash',
+            'quote_public_id',
+            'return_service_selection',
+        ];
+        if (! in_array($keys, [$baseKeys, $discountedKeys, $serviceReconfigurationKeys], true)
             || ! is_int($payload['page'] ?? null)
             || $payload['page'] < 1
             || ! is_string($payload['offering_selection'] ?? null)
@@ -4920,6 +5131,12 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             || ! is_string($payload['quote_configuration_hash'] ?? null)
             || preg_match('/\A[0-9a-f]{64}\z/', $payload['quote_configuration_hash']) !== 1) {
             throw new RuntimeException('Telegram purchase Quote state is invalid.');
+        }
+        if ($keys === $serviceReconfigurationKeys
+            && (($payload['purchase_origin'] ?? null) !== 'service_reconfiguration'
+                || ! is_string($payload['return_service_selection'] ?? null)
+                || preg_match('/\A[0-9a-f]{40}\z/', $payload['return_service_selection']) !== 1)) {
+            throw new RuntimeException('Telegram Service reconfiguration purchase origin is invalid.');
         }
         if ($keys === $discountedKeys
             && (! is_string($payload['discount_consumption_public_id'] ?? null)

@@ -25,6 +25,7 @@ final readonly class TelegramOwnedServiceDetail
         public ?string $expiresAt,
         public ?string $observedAt,
         public array $allowedActions = [],
+        public bool $autoRenewAvailable = false,
     ) {
         if (preg_match('/\A[0-9A-HJKMNP-TV-Z]{26}\z/', $publicId) !== 1) {
             throw new InvalidArgumentException('Telegram owned Service detail public identifier is invalid.');

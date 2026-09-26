@@ -14,6 +14,7 @@ final readonly class QuoteService
     use QuoteServiceCreatesQuotes;
     use QuoteServiceReadsQuotes;
     use QuoteServiceServicePackages;
+    use QuoteServiceServiceReconfigurations;
     use QuoteServiceSupport;
 
     private const FORMULA_VERSION = 'buy-002-v1';

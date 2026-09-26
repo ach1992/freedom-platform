@@ -17,6 +17,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Tests\Support\PreservesOutboxTriggerSurface;
 use Tests\TestCase;
@@ -110,6 +111,24 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $serviceNotificationMigration = require database_path('migrations/2026_08_23_000200_enable_service_notification_threshold_authority.php');
         /** @var Migration $serviceNotificationCursorMigration */
         $serviceNotificationCursorMigration = require database_path('migrations/2026_08_23_000210_enable_service_notification_scan_cursor.php');
+        /** @var Migration $serviceOperationPolicyExpansionMigration */
+        $serviceOperationPolicyExpansionMigration = require database_path('migrations/2026_09_25_000100_expand_service_operation_policy_codes.php');
+        /** @var Migration $serviceNotificationPreferencesMigration */
+        $serviceNotificationPreferencesMigration = require database_path('migrations/2026_09_25_000200_add_service_notification_preferences.php');
+        /** @var Migration $serviceNotificationEventExpansionMigration */
+        $serviceNotificationEventExpansionMigration = require database_path('migrations/2026_09_25_000210_expand_service_notification_event_authority.php');
+        /** @var Migration $serviceReconfigurationPreviewMigration */
+        $serviceReconfigurationPreviewMigration = require database_path('migrations/2026_09_25_000300_create_service_reconfiguration_preview_authority.php');
+        /** @var Migration $serviceReconfigurationQuoteMigration */
+        $serviceReconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
+        /** @var Migration $serviceReconfigurationRemoteEffectMigration */
+        $serviceReconfigurationRemoteEffectMigration = require database_path('migrations/2026_09_25_000320_enable_service_reconfiguration_remote_effect.php');
+        /** @var Migration $serviceEntitlementGrantMigration */
+        $serviceEntitlementGrantMigration = require database_path('migrations/2026_09_26_000100_enable_service_entitlement_grant_authority.php');
+        /** @var Migration $serviceEntitlementGrantNotificationMigration */
+        $serviceEntitlementGrantNotificationMigration = require database_path('migrations/2026_09_26_000110_enable_service_entitlement_grant_notification_delivery.php');
+        /** @var Migration $administratorServiceReconfigurationMigration */
+        $administratorServiceReconfigurationMigration = require database_path('migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php');
         /** @var Migration $supportTicketMigration */
         $supportTicketMigration = require database_path('migrations/2026_09_16_000100_create_support_ticket_foundation.php');
         /** @var Migration $supportAttachmentMigration */
@@ -121,6 +140,18 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
 
         try {
             // Remove newer descendant authorities before replaying the historical provisioning bootstrap chain.
+            // Keep this reverse order aligned with migration chronology so successor FKs/triggers are removed
+            // before their historical Service/Operation/Delivery parents.
+            $administratorServiceReconfigurationMigration->down();
+            $serviceEntitlementGrantNotificationMigration->down();
+            $serviceEntitlementGrantMigration->down();
+            $serviceReconfigurationRemoteEffectMigration->down();
+            $serviceReconfigurationQuoteMigration->down();
+            $serviceReconfigurationPreviewMigration->down();
+            $serviceNotificationEventExpansionMigration->down();
+            $serviceNotificationPreferencesMigration->down();
+            $serviceOperationPolicyExpansionMigration->down();
+
             // Support is a cross-domain descendant because its ticket FK can reference service_subscriptions.
             $supportRatingMigration->down();
             $privateMediaGeneralizationMigration->down();
@@ -167,8 +198,12 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $bootstrapMigration->up();
             // The historical provisioning schema remains under test, while the
             // shared purchase fixture deliberately uses the current Quote contract.
-            // Restore that independent Quote schema before creating fixture data.
+            // Restore the complete current Quote schema (including the SVC-005 snapshot
+            // columns/FKs) before creating fixture data. The reconfiguration preview surface
+            // stays empty and is unrelated to the provisioning bootstrap assertions below.
             $servicePackageQuoteMigration->up();
+            $serviceReconfigurationPreviewMigration->up();
+            $serviceReconfigurationQuoteMigration->up();
 
             self::assertSame(0, $this->triggerCount('service_subscriptions_insert_guard'));
             self::assertSame(0, $this->triggerCount('provisioning_operations_insert_guard'));
@@ -350,6 +385,19 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $supportAttachmentMigration->up();
             $privateMediaGeneralizationMigration->up();
             $supportRatingMigration->up();
+
+            // Restore #400 successor authorities in forward migration order after the historical chain.
+            $serviceOperationPolicyExpansionMigration->up();
+            $serviceNotificationPreferencesMigration->up();
+            $serviceNotificationEventExpansionMigration->up();
+            if (! Schema::hasTable('service_reconfiguration_previews')) {
+                $serviceReconfigurationPreviewMigration->up();
+            }
+            $serviceReconfigurationQuoteMigration->up();
+            $serviceReconfigurationRemoteEffectMigration->up();
+            $serviceEntitlementGrantMigration->up();
+            $serviceEntitlementGrantNotificationMigration->up();
+            $administratorServiceReconfigurationMigration->up();
         }
     }
 

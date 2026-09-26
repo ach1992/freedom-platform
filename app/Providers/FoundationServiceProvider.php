@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Modules\Provisioning\Application\InitialProvisioningOutboxHandler;
+use App\Modules\Provisioning\Application\PaidServiceMutationOrderOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
 use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
+use App\Modules\Provisioning\Application\ServiceEntitlementGrantNotificationOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceMutationOutboxHandler;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxEventHandler;
@@ -38,7 +40,9 @@ final class FoundationServiceProvider extends ServiceProvider
         );
         $this->app->singleton(DatabaseOutboxDispatcher::class);
         $this->app->singleton(InitialProvisioningOutboxHandler::class);
+        $this->app->singleton(PaidServiceMutationOrderOutboxHandler::class);
         $this->app->singleton(ServiceMutationOutboxHandler::class);
+        $this->app->singleton(ServiceEntitlementGrantNotificationOutboxHandler::class);
         $this->app->singleton(
             ServiceDeliveryOutboxHandler::class,
             fn (Application $application): ServiceDeliveryOutboxHandler => new ServiceDeliveryOutboxHandler(
@@ -46,7 +50,12 @@ final class FoundationServiceProvider extends ServiceProvider
             ),
         );
         $this->app->tag(
-            [InitialProvisioningOutboxHandler::class, ServiceMutationOutboxHandler::class],
+            [
+                InitialProvisioningOutboxHandler::class,
+                PaidServiceMutationOrderOutboxHandler::class,
+                ServiceMutationOutboxHandler::class,
+                ServiceEntitlementGrantNotificationOutboxHandler::class,
+            ],
             OutboxEventHandler::class,
         );
         $this->app->tag(

@@ -9,7 +9,10 @@ use App\Modules\Panels\Application\Contracts\PanelAdapter;
 use App\Modules\Panels\Application\Contracts\PanelAdapterFactory;
 use App\Modules\Panels\Application\Contracts\PanelCapabilities;
 use App\Modules\Panels\Application\Contracts\PanelCreateServiceRequest;
+use App\Modules\Panels\Application\Contracts\PanelOperationOutcome;
 use App\Modules\Panels\Application\Contracts\PanelOperationResult;
+use App\Modules\Panels\Application\Contracts\PanelServiceReconfigurationAdapter;
+use App\Modules\Panels\Application\Contracts\PanelServiceReconfigurationRequest;
 use App\Modules\Panels\Application\Contracts\RemoteServiceSnapshot;
 use App\Modules\Panels\Application\Contracts\SensitiveDeliveryArtifacts;
 use App\Modules\Panels\Application\Exceptions\AuthoritativePanelLookupUnavailable;
@@ -19,7 +22,7 @@ use Closure;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 
-final class ServiceOperationalPanelAdapter implements PanelAdapter
+final class ServiceOperationalPanelAdapter implements PanelAdapter, PanelServiceReconfigurationAdapter
 {
     /** @var array<string, RemoteServiceSnapshot> */
     private array $services = [];
@@ -32,6 +35,16 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
     public ?RemoteServiceSnapshot $forcedLookupSnapshot = null;
 
     public ?Closure $afterLookup = null;
+
+    /** @var list<int> */
+    public array $reconfigurationTransactionLevels = [];
+
+    /** @var list<PanelServiceReconfigurationRequest> */
+    public array $reconfigurationRequests = [];
+
+    public bool $reconfigurationThrows = false;
+
+    public PanelOperationOutcome $reconfigurationOutcome = PanelOperationOutcome::Success;
 
     public function seed(RemoteServiceSnapshot $snapshot): void
     {
@@ -50,7 +63,12 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
 
     public function capabilities(): PanelCapabilities
     {
-        throw new LogicException('Not used by Service operational tests.');
+        return new PanelCapabilities(
+            'fake',
+            'service-operational-test-1',
+            ['create_service', 'fetch_status', 'reconfigure_service'],
+            [],
+        );
     }
 
     public function findByRemoteId(string $remoteId): ?RemoteServiceSnapshot
@@ -129,6 +147,58 @@ final class ServiceOperationalPanelAdapter implements PanelAdapter
     public function rotateSubscriptionLink(string $idempotencyKey, string $remoteId): PanelOperationResult
     {
         throw new LogicException('Not used by Service operational tests.');
+    }
+
+    public function reconfigureService(PanelServiceReconfigurationRequest $request): PanelOperationResult
+    {
+        $this->reconfigurationTransactionLevels[] = DB::connection()->transactionLevel();
+        $this->reconfigurationRequests[] = $request;
+        if ($this->reconfigurationThrows) {
+            throw new LogicException('Simulated uncertain Service reconfiguration provider boundary.');
+        }
+        if ($this->reconfigurationOutcome !== PanelOperationOutcome::Success) {
+            return new PanelOperationResult(
+                $this->reconfigurationOutcome,
+                null,
+                'reconfigure_'.$this->reconfigurationOutcome->value,
+                'Simulated Service reconfiguration provider outcome.',
+            );
+        }
+
+        $current = $this->services[$request->remoteId] ?? null;
+        if ($current === null) {
+            return new PanelOperationResult(
+                PanelOperationOutcome::DefinitiveFailure,
+                null,
+                'reconfigure_remote_missing',
+                'Remote Service does not exist.',
+            );
+        }
+        $canonicalHash = hash('sha256', implode(':', [
+            'reconfigured',
+            $current->canonicalHash,
+            $request->targetPlanOfferingCode,
+            $request->targetReference,
+            $request->targetProtocolProfileCode,
+        ]));
+        $snapshot = new RemoteServiceSnapshot(
+            $current->remoteId,
+            $current->username,
+            $current->status,
+            $current->dataLimitBytes,
+            $current->usedBytes,
+            $current->expiresAt,
+            $canonicalHash,
+            hash('sha256', 'equivalence:'.$canonicalHash),
+        );
+        $this->services[$snapshot->remoteId] = $snapshot;
+
+        return new PanelOperationResult(
+            PanelOperationOutcome::Success,
+            $snapshot,
+            'reconfigure_success',
+            'Service reconfiguration completed.',
+        );
     }
 
     public function getDeliveryArtifacts(string $remoteId): SensitiveDeliveryArtifacts
