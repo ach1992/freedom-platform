@@ -41,6 +41,24 @@ Schedule::command('wallet:maintenance', [
     ->withoutOverlapping()
     ->onOneServer();
 
+Schedule::command('referrals:process-rewards', [
+    '--limit' => 250,
+    '--json' => true,
+])
+    ->name('referrals.process-rewards')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(10)
+    ->onOneServer();
+
+Schedule::command('customers:recalculate-tiers', [
+    '--batch' => 500,
+    '--json' => true,
+])
+    ->name('customers.recalculate-tiers')
+    ->dailyAt('00:15')
+    ->withoutOverlapping(60)
+    ->onOneServer();
+
 Schedule::command('payments:purchase-maintenance', [
     '--limit' => 100,
     '--json' => true,

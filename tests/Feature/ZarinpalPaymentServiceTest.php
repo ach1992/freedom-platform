@@ -8,6 +8,7 @@ use App\Modules\Orders\Application\QuotePricingInput;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
 use App\Modules\Payments\Application\PurchasePaymentIntentService;
+use App\Modules\Payments\Application\WalletTopUpPaymentService;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalInquiryResult;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalRequestResult;
@@ -16,10 +17,13 @@ use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalUnverifiedCandid
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalVerifyResult;
 use App\Modules\Payments\Zarinpal\Application\ZarinpalPaymentService;
 use App\Modules\Payments\Zarinpal\Domain\ZarinpalRequestState;
+use App\Modules\Wallet\Application\WalletHoldService;
 use App\Shared\Application\Clock;
+use App\Shared\Domain\Money;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
 use Illuminate\Database\QueryException;
@@ -168,6 +172,90 @@ final class ZarinpalPaymentServiceTest extends TestCase
         self::assertSame($verified->purchaseSettlementPublicId, $duplicate->purchaseSettlementPublicId);
         self::assertSame(1, $this->transport->verifyCalls);
         self::assertSame(1, DB::table('purchase_settlements')->count());
+    }
+
+    public function test_wallet_top_up_uses_zarinpal_evidence_but_only_canonical_wallet_settlement_and_ledger(): void
+    {
+        $this->seed(WalletFinancialFoundationSeeder::class);
+        $userId = $this->quoteUser('customer');
+        $now = now('UTC');
+        $walletId = (int) DB::table('ledger_accounts')->insertGetId([
+            'code' => 'wallet.cash.zarinpal.topup.'.$userId,
+            'account_class' => 'liability',
+            'owner_user_id' => $userId,
+            'wallet_bucket' => 'cash',
+            'currency' => 'IRR',
+            'is_active' => true,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $amountIrr = 750_000;
+        $intent = $this->app->make(WalletTopUpPaymentService::class)->create(
+            'zarinpal.wallet.topup.intent.000001',
+            $userId,
+            $walletId,
+            'zarinpal',
+            Money::irr($amountIrr),
+            $this->correlation('wallet-topup-intent'),
+        );
+        $service = $this->app->make(ZarinpalPaymentService::class);
+        $this->transport->beforeRequestResponse = function (): void {
+            $this->assertExternalProviderMutationAttempt('zarinpal', 'zarinpal:request:');
+        };
+        $this->transport->beforeVerifyResponse = function (): void {
+            $this->assertExternalProviderMutationAttempt('zarinpal', 'zarinpal:verify:');
+        };
+
+        $created = $service->initiateWalletTopUp(
+            $userId,
+            $intent->intentPublicId,
+            $this->correlation('wallet-topup-initiate'),
+        );
+        self::assertSame(ZarinpalRequestState::Redirectable, $created->state);
+        self::assertSame(1, $this->transport->requestCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('wallet_top_up_settlements')->count());
+
+        $verified = $service->handleCallback(
+            'A'.str_repeat('1', 35),
+            'OK',
+            $this->correlation('wallet-topup-callback'),
+        );
+
+        self::assertSame(ZarinpalRequestState::Verified, $verified->state);
+        self::assertNull($verified->purchaseSettlementPublicId);
+        self::assertSame('123456789', $verified->providerRefId);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(0, DB::table('purchase_settlements')->count());
+        self::assertSame(0, DB::table('zarinpal_payment_verifications')->count());
+        self::assertSame(1, DB::table('zarinpal_wallet_top_up_verifications')->count());
+        self::assertSame(1, DB::table('wallet_top_up_settlements')->count());
+        self::assertSame(1, DB::table('ledger_transactions')
+            ->where('transaction_type', 'wallet_external_top_up')
+            ->count());
+        self::assertSame('captured', DB::table('payment_intents')
+            ->where('public_id', $intent->intentPublicId)
+            ->value('state'));
+        self::assertSame(
+            $amountIrr,
+            $this->app->make(WalletHoldService::class)
+                ->balance($userId, $walletId)
+                ->availableBalance
+                ->amount,
+        );
+
+        $duplicate = $service->handleCallback(
+            'A'.str_repeat('1', 35),
+            'OK',
+            $this->correlation('wallet-topup-callback-duplicate'),
+        );
+        self::assertSame(ZarinpalRequestState::Verified, $duplicate->state);
+        self::assertTrue($duplicate->replayed);
+        self::assertSame(1, $this->transport->verifyCalls);
+        self::assertSame(1, DB::table('wallet_top_up_settlements')->count());
+        self::assertSame(1, DB::table('ledger_transactions')
+            ->where('transaction_type', 'wallet_external_top_up')
+            ->count());
     }
 
     public function test_provider_ref_reuse_across_distinct_requests_enters_manual_review_without_second_settlement(): void

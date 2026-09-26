@@ -22,6 +22,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
         'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorServiceOperationsNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramAdministratorWalletNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorDirectMessageService.php',
         'app/Modules/Telegram/Application/TelegramBroadcastNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAgentBulkPurchaseNavigationHandler.php',
@@ -46,6 +47,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
         'app/Modules/Telegram/Application/TelegramSupportRoutingNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramTrialNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramUsdtNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramWalletTopUpNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramWalletTransferNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramZarinpalNavigationHandler.php',
     ];

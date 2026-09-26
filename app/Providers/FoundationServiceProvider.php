@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Modules\Customers\Application\PurchaseSettlementTierOutboxHandler;
+use App\Modules\Promotions\Application\PurchaseRefundReferralOutboxHandler;
+use App\Modules\Promotions\Application\PurchaseSettlementReferralOutboxHandler;
 use App\Modules\Provisioning\Application\InitialProvisioningOutboxHandler;
 use App\Modules\Provisioning\Application\PaidServiceMutationOrderOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceDeliveryEffectExecutor;
@@ -39,6 +42,9 @@ final class FoundationServiceProvider extends ServiceProvider
             ),
         );
         $this->app->singleton(DatabaseOutboxDispatcher::class);
+        $this->app->singleton(PurchaseSettlementTierOutboxHandler::class);
+        $this->app->singleton(PurchaseSettlementReferralOutboxHandler::class);
+        $this->app->singleton(PurchaseRefundReferralOutboxHandler::class);
         $this->app->singleton(InitialProvisioningOutboxHandler::class);
         $this->app->singleton(PaidServiceMutationOrderOutboxHandler::class);
         $this->app->singleton(ServiceMutationOutboxHandler::class);
@@ -51,6 +57,9 @@ final class FoundationServiceProvider extends ServiceProvider
         );
         $this->app->tag(
             [
+                PurchaseSettlementTierOutboxHandler::class,
+                PurchaseSettlementReferralOutboxHandler::class,
+                PurchaseRefundReferralOutboxHandler::class,
                 InitialProvisioningOutboxHandler::class,
                 PaidServiceMutationOrderOutboxHandler::class,
                 ServiceMutationOutboxHandler::class,

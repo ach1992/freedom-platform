@@ -137,6 +137,18 @@ final readonly class OtpChallengeIssuer
         );
     }
 
+    private function requestIpHash(OtpIssueRequest $request): string
+    {
+        if ($request->requestIpHash !== null) {
+            return $request->requestIpHash;
+        }
+        if ($request->requestIp === null) {
+            throw new InvalidArgumentException('OTP request IP abuse-control scope is unavailable.');
+        }
+
+        return $this->phoneHasher->hashOpaque('otp-ip|'.$request->requestIp);
+    }
+
     private function prepareChallenge(
         OtpIssueRequest $request,
         string $requestHash,
@@ -190,6 +202,7 @@ final readonly class OtpChallengeIssuer
             ]);
         }
 
+        $requestIpHash = $this->requestIpHash($request);
         $this->limiter->consume([
             new OtpRateLimitBucket('phone', $phoneHash->value, $this->dailyPhoneLimit, 86400),
             new OtpRateLimitBucket(
@@ -200,7 +213,7 @@ final readonly class OtpChallengeIssuer
             ),
             new OtpRateLimitBucket(
                 'ip',
-                $this->phoneHasher->hashOpaque('otp-ip|'.$request->requestIp),
+                $requestIpHash,
                 $this->dailyIpLimit,
                 86400,
             ),
@@ -220,7 +233,7 @@ final readonly class OtpChallengeIssuer
             'purpose' => $request->purpose,
             'channel' => 'sms',
             'destination_lookup_hash' => $phoneHash->value,
-            'request_ip_hash' => $this->phoneHasher->hashOpaque('otp-ip|'.$request->requestIp),
+            'request_ip_hash' => $requestIpHash,
             'request_idempotency_hash' => $requestHash,
             'active_scope_hash' => $activeScopeHash,
             'code_hash' => $codeHash->value,

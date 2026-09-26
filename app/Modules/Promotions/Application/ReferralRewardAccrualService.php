@@ -61,6 +61,12 @@ final readonly class ReferralRewardAccrualService
                 }
 
                 $settlementId = $this->positiveInt($settlement->id, 'Purchase settlement ID');
+                if ($connection->table('purchase_refunds')
+                    ->where('purchase_settlement_id', $settlementId)
+                    ->exists()) {
+                    return null;
+                }
+
                 $referredUserId = $this->positiveInt($settlement->user_id, 'Referred user ID');
                 $sourceQuoteId = $this->positiveInt($settlement->source_quote_id, 'Source quote ID');
                 $qualifyingAmountIrr = $this->positiveInt($settlement->amount_irr, 'Purchase settlement amount');

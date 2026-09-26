@@ -16,6 +16,7 @@ use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\Application\PurchaseProviderMutationAttempt;
 use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Modules\Payments\Application\PurchaseSettlementService;
+use App\Modules\Payments\Application\WalletTopUpPaymentService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
 use App\Modules\Payments\Zarinpal\Domain\ZarinpalRequestState;
@@ -45,6 +46,7 @@ final readonly class ZarinpalPaymentService
         private PurchasePromotionUsageAuthority $promotionUsage,
         private PurchaseOrderService $purchaseOrders,
         private PurchaseSettlementService $settlements,
+        private WalletTopUpPaymentService $walletTopUps,
         private PurchaseProviderMutationBarrier $providerMutations,
         private Clock $clock,
     ) {}
@@ -134,6 +136,40 @@ final readonly class ZarinpalPaymentService
         return $this->executeFreshRequest($request, $configuration, $correlationId, false);
     }
 
+    /** @requirement IPG-001 PAY-002 PAY-003 WAL-001 DAT-002 DAT-003 DAT-004 SEC-002 INT-001 INT-002 QUA-004 */
+    public function initiateWalletTopUp(
+        int $actorUserId,
+        string $paymentIntentPublicId,
+        string $correlationId,
+    ): ZarinpalPaymentReceipt {
+        if ($actorUserId < 1) {
+            throw new DomainException('Zarinpal wallet top-up actor user ID is invalid.');
+        }
+        $this->assertUlid($paymentIntentPublicId, 'Wallet top-up payment intent public ID');
+        $this->assertToken($correlationId, 'Zarinpal wallet top-up correlation ID', 8, 64);
+
+        $intent = $this->intentByPublicId($this->database->connection(), $paymentIntentPublicId);
+        if ($intent === null) {
+            throw new DomainException('Wallet top-up payment intent does not exist.');
+        }
+        $this->assertWalletTopUpIntentIdentity($intent, $actorUserId);
+        if (PaymentIntentState::tryFrom((string) $intent->state) !== PaymentIntentState::AwaitingUserAction) {
+            throw new DomainException('Wallet top-up payment intent is not ready for Zarinpal initiation.');
+        }
+
+        $configuration = $this->configuration();
+        [$request, $claimed] = $this->claimRequest(
+            'zarinpal.wallet-top-up.request:'.$paymentIntentPublicId,
+            $paymentIntentPublicId,
+            $configuration,
+        );
+        if (! $claimed) {
+            return $this->receipt($request, true);
+        }
+
+        return $this->executeFreshRequest($request, $configuration, $correlationId, false);
+    }
+
     /** @param array{merchant_id:string,callback_url:string,hash:string} $configuration
      * @return array{0:stdClass,1:bool}
      */
@@ -153,7 +189,7 @@ final readonly class ZarinpalPaymentService
             if ($intent === null) {
                 throw new DomainException('Payment intent does not exist.');
             }
-            $this->assertZarinpalIntentIdentity($intent);
+            $this->assertZarinpalRequestIntentIdentity($intent);
             $payloadHash = $this->requestPayloadHash($intent, $configuration['hash']);
             $promotionReservationId = null;
             if ($promotionReservationPublicId !== null) {
@@ -237,17 +273,25 @@ final readonly class ZarinpalPaymentService
                 if ($intent === null) {
                     throw new RuntimeException('Zarinpal request payment intent disappeared.');
                 }
-                $this->assertZarinpalIntentIdentity($intent);
-                if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
-                    throw new RuntimeException('Zarinpal purchase identity is incomplete.');
-                }
-                $orderAvailability = $this->purchaseOrders->settlementAvailabilityFromQuote(
-                    $intent->source_quote_public_id,
-                    (int) $intent->user_id,
-                );
-                if (($prePaymentOrderAware && $orderAvailability !== PurchaseOrderSettlementAvailability::AwaitingPayment)
-                    || (! $prePaymentOrderAware && $orderAvailability !== PurchaseOrderSettlementAvailability::Absent)) {
-                    return $this->abortFreshRequestBeforeProvider($providerRequest, $correlationId);
+                $isWalletTopUp = $intent->purpose === 'wallet_top_up';
+                if ($isWalletTopUp) {
+                    $this->assertWalletTopUpIntentIdentity(
+                        $intent,
+                        $this->positiveInt($intent->user_id, 'Wallet top-up user ID'),
+                    );
+                } else {
+                    $this->assertZarinpalIntentIdentity($intent);
+                    if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
+                        throw new RuntimeException('Zarinpal purchase identity is incomplete.');
+                    }
+                    $orderAvailability = $this->purchaseOrders->settlementAvailabilityFromQuote(
+                        $intent->source_quote_public_id,
+                        (int) $intent->user_id,
+                    );
+                    if (($prePaymentOrderAware && $orderAvailability !== PurchaseOrderSettlementAvailability::AwaitingPayment)
+                        || (! $prePaymentOrderAware && $orderAvailability !== PurchaseOrderSettlementAvailability::Absent)) {
+                        return $this->abortFreshRequestBeforeProvider($providerRequest, $correlationId);
+                    }
                 }
 
                 $attempt->markExternalEffectStarted();
@@ -255,7 +299,7 @@ final readonly class ZarinpalPaymentService
                     $configuration['merchant_id'],
                     $this->positiveInt($providerRequest->amount_irr, 'Zarinpal request amount'),
                     $providerRequest->callback_url,
-                    'Freedom purchase '.$intent->public_id,
+                    ($isWalletTopUp ? 'Freedom wallet top-up ' : 'Freedom purchase ').$intent->public_id,
                     $intent->public_id,
                 );
 
@@ -265,6 +309,7 @@ final readonly class ZarinpalPaymentService
                     $correlationId,
                     $prePaymentOrderAware,
                     $attempt,
+                    $isWalletTopUp,
                 ): ZarinpalPaymentReceipt {
                     $current = $this->requestById($connection, $this->positiveInt($providerRequest->id, 'Zarinpal request ID'), true);
                     if ($current === null) {
@@ -289,7 +334,7 @@ final readonly class ZarinpalPaymentService
                             ZarinpalRequestState::Failed,
                             ['request_provider_code' => $result->providerCode],
                         );
-                        if ($prePaymentOrderAware) {
+                        if ($prePaymentOrderAware || $isWalletTopUp) {
                             $this->terminalizeIntentFailure(
                                 $connection,
                                 $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
@@ -315,14 +360,16 @@ final readonly class ZarinpalPaymentService
                             'authority_received_at' => $acceptedAt,
                         ],
                     );
-                    $this->transitionIntent(
-                        $connection,
-                        $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
-                        PaymentIntentState::Created,
-                        PaymentIntentState::AwaitingUserAction,
-                        'zarinpal_authority_accepted',
-                        $correlationId,
-                    );
+                    if (! $isWalletTopUp) {
+                        $this->transitionIntent(
+                            $connection,
+                            $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                            PaymentIntentState::Created,
+                            PaymentIntentState::AwaitingUserAction,
+                            'zarinpal_authority_accepted',
+                            $correlationId,
+                        );
+                    }
                     $fresh = $this->requiredRequest($connection, (int) $current->id);
                     $this->observe($connection, $fresh, 'request_accepted', null, $result->providerCode ?? 100, null, $correlationId);
 
@@ -452,7 +499,7 @@ final readonly class ZarinpalPaymentService
                     $request,
                     $correlationId,
                     'zarinpal_inquiry_failed',
-                    $this->prePaymentOrderAware($request),
+                    $this->prePaymentOrderAware($request) || $this->walletTopUpAware($request),
                 );
             }
         }
@@ -469,6 +516,7 @@ final readonly class ZarinpalPaymentService
             throw new DomainException('Zarinpal request does not exist.');
         }
         if ($this->verificationByRequestId($connection, $requestId) !== null
+            || $this->walletTopUpVerificationByRequestId($connection, $requestId) !== null
             || $this->unsettledVerificationByRequestId($connection, $requestId) !== null) {
             return $this->receipt($request, true);
         }
@@ -589,10 +637,20 @@ final readonly class ZarinpalPaymentService
             $correlationId,
         ): ZarinpalPaymentReceipt {
             $current = $this->requiredRequest($connection, $requestId, true);
+            $intent = $this->intentById(
+                $connection,
+                $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
+                true,
+            );
+            if ($intent === null) {
+                throw new RuntimeException('Zarinpal request payment intent is unavailable.');
+            }
+            $isWalletTopUp = $intent->purpose === 'wallet_top_up';
             $eventType = $observedResult === 'uncertain' ? 'verify_uncertain' : 'verify_rejected';
             $this->observe($connection, $current, $eventType, null, $providerCode, null, $correlationId);
 
-            $existing = $this->verificationByRequestId($connection, $requestId, true);
+            $existing = $this->verificationByRequestId($connection, $requestId, true)
+                ?? $this->walletTopUpVerificationByRequestId($connection, $requestId, true);
             $unsettled = $this->unsettledVerificationByRequestId($connection, $requestId, true);
             if ($existing !== null || $unsettled !== null) {
                 $this->persistVerificationConflictFinding(
@@ -612,7 +670,7 @@ final readonly class ZarinpalPaymentService
             }
 
             if ($observedResult === 'uncertain') {
-                if ($prePaymentOrderAware) {
+                if ($prePaymentOrderAware || $isWalletTopUp) {
                     $this->moveIntentToManualReviewInConnection(
                         $connection,
                         $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
@@ -632,7 +690,7 @@ final readonly class ZarinpalPaymentService
             if (in_array($this->state($current->state), [ZarinpalRequestState::Redirectable, ZarinpalRequestState::ManualReview], true)) {
                 $this->updateRequestState($connection, $current, ZarinpalRequestState::Failed);
             }
-            if ($prePaymentOrderAware) {
+            if ($prePaymentOrderAware || $isWalletTopUp) {
                 $this->terminalizeIntentFailure(
                     $connection,
                     $this->positiveInt($current->payment_intent_id, 'Payment intent ID'),
@@ -668,7 +726,8 @@ final readonly class ZarinpalPaymentService
             $correlationId,
         ): ZarinpalPaymentReceipt {
             $current = $this->requiredRequest($connection, $requestId, true);
-            $existing = $this->verificationByRequestId($connection, $requestId, true);
+            $existing = $this->verificationByRequestId($connection, $requestId, true)
+                ?? $this->walletTopUpVerificationByRequestId($connection, $requestId, true);
             $unsettled = $this->unsettledVerificationByRequestId($connection, $requestId, true);
             if ($existing !== null || $unsettled !== null) {
                 $accepted = $existing ?? $unsettled;
@@ -696,9 +755,17 @@ final readonly class ZarinpalPaymentService
             if ($intent === null) {
                 throw new RuntimeException('Zarinpal request payment intent is unavailable.');
             }
-            $this->assertZarinpalIntentIdentity($intent);
-            if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
-                throw new RuntimeException('Zarinpal purchase identity is incomplete.');
+            $isWalletTopUp = $intent->purpose === 'wallet_top_up';
+            if ($isWalletTopUp) {
+                $this->assertWalletTopUpIntentIdentity(
+                    $intent,
+                    $this->positiveInt($intent->user_id, 'Wallet top-up user ID'),
+                );
+            } else {
+                $this->assertZarinpalIntentIdentity($intent);
+                if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
+                    throw new RuntimeException('Zarinpal purchase identity is incomplete.');
+                }
             }
 
             $concurrentObservations = $this->concurrentNonVerifiedObservations($connection, $requestId, $observationWatermark);
@@ -751,6 +818,22 @@ final readonly class ZarinpalPaymentService
                 }
 
                 return $this->receipt($this->requiredRequest($connection, $requestId), false);
+            }
+
+            if ($isWalletTopUp) {
+                return $this->settleWalletTopUp(
+                    $connection,
+                    $current,
+                    $intent,
+                    $requestId,
+                    $providerRefId,
+                    $providerCode,
+                    $normalizedHash,
+                    $verifiedAt,
+                    $verifiedEvent,
+                    $concurrentObservations,
+                    $correlationId,
+                );
             }
 
             if (! $prePaymentOrderAware) {
@@ -961,6 +1044,98 @@ final readonly class ZarinpalPaymentService
                 $settlement->replayed || $existing !== null,
             );
         }, 3);
+    }
+
+    /**
+     * @param  list<stdClass>  $concurrentObservations
+     */
+    private function settleWalletTopUp(
+        Connection $connection,
+        stdClass $current,
+        stdClass $intent,
+        int $requestId,
+        string $providerRefId,
+        int $providerCode,
+        string $normalizedHash,
+        DateTimeImmutable $verifiedAt,
+        VerifiedPaymentEvent $verifiedEvent,
+        array $concurrentObservations,
+        string $correlationId,
+    ): ZarinpalPaymentReceipt {
+        if (! $this->claimVerifiedProviderEvidence(
+            $connection,
+            $current,
+            $providerRefId,
+            $normalizedHash,
+            'settled',
+            $verifiedAt,
+        )) {
+            return $this->providerIdentityConflictReceipt(
+                $connection,
+                $current,
+                $intent,
+                $providerRefId,
+                $providerCode,
+                $normalizedHash,
+                false,
+                $correlationId,
+            );
+        }
+
+        $settlement = $this->walletTopUps->capture(
+            (string) $intent->public_id,
+            self::PROVIDER_CODE,
+            $verifiedEvent,
+            $correlationId,
+        );
+        $existing = $this->walletTopUpVerificationByRequestId($connection, $requestId, true);
+        if ($existing === null) {
+            $connection->table('zarinpal_wallet_top_up_verifications')->insert([
+                'public_id' => (string) Str::ulid(),
+                'zarinpal_payment_request_id' => $requestId,
+                'wallet_top_up_settlement_id' => $settlement->settlementId,
+                'authority' => $current->authority,
+                'provider_ref_id' => $providerRefId,
+                'provider_verify_code' => $providerCode,
+                'evidence_payload_hash' => $normalizedHash,
+                'amount_irr' => $settlement->amount->amount(),
+                'currency' => $settlement->amount->currency(),
+                'verified_at' => $this->databaseDateTime($verifiedAt),
+                'provider_reverse_eligible_until' => $this->databaseDateTime($verifiedAt->add(new DateInterval('PT30M'))),
+                'created_at' => $this->timestamp(),
+            ]);
+        } elseif (! hash_equals((string) $existing->provider_ref_id, $providerRefId)
+            || ! hash_equals(strtolower((string) $existing->evidence_payload_hash), $normalizedHash)
+            || (int) $existing->wallet_top_up_settlement_id !== $settlement->settlementId) {
+            throw new RuntimeException('Zarinpal wallet top-up verification replay conflicts with accepted settlement authority.');
+        }
+
+        if ($this->state($current->state) !== ZarinpalRequestState::Verified) {
+            $this->updateRequestState($connection, $current, ZarinpalRequestState::Verified);
+        }
+
+        if ($concurrentObservations !== []) {
+            $fresh = $this->requiredRequest($connection, $requestId, true);
+            foreach ($concurrentObservations as $observation) {
+                $this->persistVerificationConflictFinding(
+                    $connection,
+                    $fresh,
+                    $observation->event_type === 'verify_uncertain' ? 'uncertain' : 'rejected',
+                    null,
+                    $observation->provider_code === null ? null : (int) $observation->provider_code,
+                    $this->observationResultHash($fresh, $observation),
+                    (string) $observation->correlation_id,
+                );
+            }
+            if ($this->state($fresh->state) === ZarinpalRequestState::Verified) {
+                $this->updateRequestState($connection, $fresh, ZarinpalRequestState::ManualReview);
+            }
+        }
+
+        return $this->receipt(
+            $this->requiredRequest($connection, $requestId),
+            $settlement->replayed || $existing !== null,
+        );
     }
 
     private function persistUnsettledVerification(
@@ -1186,9 +1361,11 @@ final readonly class ZarinpalPaymentService
             $connection,
             $this->positiveInt($intent->id, 'Payment intent ID'),
             $correlationId,
-            $prePaymentOrderAware
-                ? 'zarinpal_provider_identity_conflict'
-                : 'zarinpal_legacy_provider_identity_conflict',
+            $intent->purpose === 'wallet_top_up'
+                ? 'zarinpal_wallet_top_up_provider_identity_conflict'
+                : ($prePaymentOrderAware
+                    ? 'zarinpal_provider_identity_conflict'
+                    : 'zarinpal_legacy_provider_identity_conflict'),
         );
         if ($this->state($current->state) === ZarinpalRequestState::Redirectable) {
             $this->updateRequestState($connection, $current, ZarinpalRequestState::ManualReview);
@@ -1400,6 +1577,9 @@ final readonly class ZarinpalPaymentService
         if ($intent === null) {
             throw new RuntimeException('Zarinpal payment intent is unavailable for Order authority detection.');
         }
+        if ($intent->purpose === 'wallet_top_up') {
+            return false;
+        }
         $this->assertZarinpalIntentIdentity($intent);
         if (! is_string($intent->source_quote_public_id) || (int) $intent->user_id < 1) {
             throw new RuntimeException('Zarinpal purchase identity is incomplete.');
@@ -1409,6 +1589,20 @@ final readonly class ZarinpalPaymentService
             $intent->source_quote_public_id,
             (int) $intent->user_id,
         ) !== PurchaseOrderSettlementAvailability::Absent;
+    }
+
+    private function walletTopUpAware(stdClass $request): bool
+    {
+        $intent = $this->intentById(
+            $this->database->connection(),
+            $this->positiveInt($request->payment_intent_id, 'Payment intent ID'),
+        );
+        if ($intent === null) {
+            throw new RuntimeException('Zarinpal payment intent is unavailable for wallet top-up detection.');
+        }
+        $this->assertZarinpalRequestIntentIdentity($intent);
+
+        return $intent->purpose === 'wallet_top_up';
     }
 
     private function prepareLegacyIntentForCaptureInConnection(Connection $connection, int $intentId, string $correlationId): void
@@ -1641,6 +1835,7 @@ final readonly class ZarinpalPaymentService
         $state = $this->state($request->state);
         $requestId = $this->positiveInt($request->id, 'Zarinpal request ID');
         $verification = $this->verificationByRequestId($this->database->connection(), $requestId);
+        $walletTopUpVerification = $this->walletTopUpVerificationByRequestId($this->database->connection(), $requestId);
         $unsettled = $this->unsettledVerificationByRequestId($this->database->connection(), $requestId);
         $hasReconciliationFinding = $this->database->connection()->table('zarinpal_reconciliation_findings')
             ->where('zarinpal_payment_request_id', $requestId)
@@ -1654,6 +1849,9 @@ final readonly class ZarinpalPaymentService
                 ->value('public_id');
             $providerRefId = $verification->provider_ref_id;
             $reverseWindowOpen = $this->clock->now() <= $this->storedDateTime($verification->provider_reverse_eligible_until);
+        } elseif ($walletTopUpVerification !== null) {
+            $providerRefId = $walletTopUpVerification->provider_ref_id;
+            $reverseWindowOpen = $this->clock->now() <= $this->storedDateTime($walletTopUpVerification->provider_reverse_eligible_until);
         } elseif ($unsettled !== null) {
             $providerRefId = $unsettled->provider_ref_id;
             $reverseWindowOpen = $this->clock->now() <= $this->storedDateTime($unsettled->provider_reverse_eligible_until);
@@ -1752,7 +1950,29 @@ final readonly class ZarinpalPaymentService
             || $intent->provider_code !== self::PROVIDER_CODE
             || $intent->currency !== 'IRR'
             || $this->positiveInt($intent->amount_irr, 'Payment intent amount') < 1) {
+            throw new DomainException('Payment intent is not eligible for Zarinpal purchase initiation.');
+        }
+    }
+
+    private function assertZarinpalRequestIntentIdentity(stdClass $intent): void
+    {
+        if (! in_array($intent->purpose, ['purchase', 'wallet_top_up'], true)
+            || $intent->provider_code !== self::PROVIDER_CODE
+            || $intent->currency !== 'IRR'
+            || $this->positiveInt($intent->amount_irr, 'Payment intent amount') < 1) {
             throw new DomainException('Payment intent is not eligible for Zarinpal initiation.');
+        }
+    }
+
+    private function assertWalletTopUpIntentIdentity(stdClass $intent, int $actorUserId): void
+    {
+        $this->assertZarinpalRequestIntentIdentity($intent);
+        if ($intent->purpose !== 'wallet_top_up'
+            || (int) $intent->user_id !== $actorUserId
+            || $this->positiveInt($intent->wallet_account_id, 'Wallet top-up account ID') < 1
+            || $intent->source_quote_id !== null
+            || $intent->source_quote_public_id !== null) {
+            throw new DomainException('Payment intent is not eligible for Zarinpal wallet top-up initiation.');
         }
     }
 
@@ -1764,7 +1984,7 @@ final readonly class ZarinpalPaymentService
         }
 
         return $query->first([
-            'id', 'public_id', 'purpose', 'user_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
+            'id', 'public_id', 'purpose', 'user_id', 'wallet_account_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
             'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }
@@ -1777,7 +1997,7 @@ final readonly class ZarinpalPaymentService
         }
 
         return $query->first([
-            'id', 'public_id', 'purpose', 'user_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
+            'id', 'public_id', 'purpose', 'user_id', 'wallet_account_id', 'source_quote_id', 'source_quote_public_id', 'payment_method_code', 'provider_code',
             'amount_irr', 'currency', 'state', 'captured_at',
         ]);
     }
@@ -1827,6 +2047,21 @@ final readonly class ZarinpalPaymentService
 
         return $query->first([
             'id', 'public_id', 'zarinpal_payment_request_id', 'purchase_settlement_id', 'authority', 'provider_ref_id',
+            'provider_verify_code', 'evidence_payload_hash', 'amount_irr', 'currency', 'verified_at',
+            'provider_reverse_eligible_until', 'created_at',
+        ]);
+    }
+
+    private function walletTopUpVerificationByRequestId(Connection $connection, int $requestId, bool $lock = false): ?stdClass
+    {
+        $query = $connection->table('zarinpal_wallet_top_up_verifications')
+            ->where('zarinpal_payment_request_id', $requestId);
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        return $query->first([
+            'id', 'public_id', 'zarinpal_payment_request_id', 'wallet_top_up_settlement_id', 'authority', 'provider_ref_id',
             'provider_verify_code', 'evidence_payload_hash', 'amount_irr', 'currency', 'verified_at',
             'provider_reverse_eligible_until', 'created_at',
         ]);

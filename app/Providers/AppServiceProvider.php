@@ -7,6 +7,7 @@ namespace App\Providers;
 use App\Modules\Catalog\Application\TelegramClientGuideCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerPurchaseCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerTrialCatalogService;
+use App\Modules\Customers\Application\Contracts\CustomerTierPurchaseMetricsSource;
 use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Customers\Application\TelegramAdministratorCustomerTargetDiscoveryService;
 use App\Modules\Customers\Application\TelegramAdministratorIdentitySearchSource;
@@ -24,6 +25,8 @@ use App\Modules\Orders\Application\TelegramSupportOwnedOrderProjectionService;
 use App\Modules\Payments\Application\AlternativePaymentReviewService;
 use App\Modules\Payments\Application\Contracts\AlternativePaymentProviderResolver;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
+use App\Modules\Payments\Application\CustomerTierPurchaseMetricsSourceService;
+use App\Modules\Payments\Application\PurchaseWalletRefundAuthorityService;
 use App\Modules\Payments\Application\TelegramAdministratorPaymentSearchSource;
 use App\Modules\Payments\Application\TelegramCustomerPurchaseWalletPaymentService;
 use App\Modules\Payments\Application\TelegramSupportOwnedPaymentIntentProjectionService;
@@ -44,6 +47,7 @@ use App\Modules\Payments\Usdt\Application\UsdtRateResolver;
 use App\Modules\Payments\Usdt\Infrastructure\UsdtRuntimeFactory;
 use App\Modules\Payments\Zarinpal\Application\Contracts\ZarinpalTransport;
 use App\Modules\Payments\Zarinpal\Application\TelegramCustomerPurchaseZarinpalPaymentService;
+use App\Modules\Payments\Zarinpal\Application\TelegramCustomerWalletTopUpZarinpalService;
 use App\Modules\Payments\Zarinpal\Infrastructure\HttpZarinpalTransport;
 use App\Modules\Promotions\Application\BenefitCodeDiscountQuoteAuthority;
 use App\Modules\Promotions\Application\PurchasePromotionUsageAuthorityService;
@@ -81,6 +85,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseZarinpalP
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialClaim;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerTrialProvisioningStatus;
+use App\Modules\Telegram\Application\Contracts\TelegramCustomerWalletTopUpPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramManagedUsdtRateSettings;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceAutoRenewManager;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResender;
@@ -95,6 +100,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceRefere
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use App\Modules\Wallet\Application\Contracts\PurchaseWalletRefundAuthority;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
@@ -108,6 +114,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);
+        $this->app->bind(CustomerTierPurchaseMetricsSource::class, CustomerTierPurchaseMetricsSourceService::class);
         $this->app->bind(TelegramAgentPurchaseCount::class, AgentPurchaseCountService::class);
         $this->app->bind(TelegramAgentReport::class, AgentReportService::class);
         $this->app->bind(TelegramAgentBulkPurchase::class, TelegramAgentBulkPurchaseService::class);
@@ -145,6 +152,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TelegramCustomerPurchaseUsdtPayment::class, TelegramCustomerPurchaseUsdtPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseNowPaymentsPayment::class, TelegramCustomerPurchaseNowPaymentsPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseZarinpalPayment::class, TelegramCustomerPurchaseZarinpalPaymentService::class);
+        $this->app->bind(TelegramCustomerWalletTopUpPayment::class, TelegramCustomerWalletTopUpZarinpalService::class);
+        $this->app->bind(PurchaseWalletRefundAuthority::class, PurchaseWalletRefundAuthorityService::class);
         $this->app->bind(TelegramCustomerPurchaseCardToCardReceiptSubmission::class, TelegramCustomerPurchaseCardToCardReceiptSubmissionService::class);
         $this->app->bind(TelegramCustomerPurchaseWalletPayment::class, TelegramCustomerPurchaseWalletPaymentService::class);
         $this->app->bind(TelegramCustomerPurchaseOrder::class, TelegramCustomerPurchaseOrderService::class);

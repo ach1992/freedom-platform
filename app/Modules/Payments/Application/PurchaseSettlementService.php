@@ -81,6 +81,7 @@ final readonly class PurchaseSettlementService
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private PurchaseLifecycleOutboxPublisher $lifecycleEvents,
     ) {}
 
     /** @requirement PAY-002 PAY-003 PAY-004 PAY-005 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
@@ -173,6 +174,11 @@ final readonly class PurchaseSettlementService
                     $providerCode,
                     $event,
                     $settlementId,
+                    $correlationId,
+                );
+                $this->lifecycleEvents->publishSettlement(
+                    $settlementPublicId,
+                    $userId,
                     $correlationId,
                 );
 
