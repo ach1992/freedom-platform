@@ -28,6 +28,20 @@ final class ServiceNotificationMigrationRecoveryTest extends TestCase
         $this->migration = $migration;
     }
 
+    protected function tearDown(): void
+    {
+        try {
+            if (DB::connection()->getDriverName() === 'mysql'
+                && Schema::hasTable('service_notification_states')) {
+                /** @var Migration $successor */
+                $successor = require database_path('migrations/2026_09_25_000210_expand_service_notification_event_authority.php');
+                $successor->up();
+            }
+        } finally {
+            parent::tearDown();
+        }
+    }
+
     public function test_missing_delivery_purpose_constraint_is_recovered_without_replaying_a_drop(): void
     {
         $this->migration->down();

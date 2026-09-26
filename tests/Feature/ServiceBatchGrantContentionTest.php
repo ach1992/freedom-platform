@@ -84,9 +84,11 @@ namespace {
 }
 
 namespace Tests\Feature {
+    use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
     use App\Modules\Provisioning\Application\ServiceBatchGrantService;
     use App\Modules\Provisioning\Application\ServiceOperationalContext;
     use Illuminate\Database\Migrations\Migration;
+    use Illuminate\Database\QueryException;
     use Illuminate\Foundation\Testing\DatabaseTruncation;
     use Illuminate\Support\Facades\DB;
     use RuntimeException;
@@ -165,12 +167,23 @@ namespace Tests\Feature {
                         'state',
                         'attempt_count',
                         'error_code',
+                        'correlation_id',
                         'order_source_authorization_id',
                         'order_id',
                         'service_subscription_id',
                         'provisioning_operation_id',
                     ]);
                 self::assertNotNull($itemEvidence);
+                $queueDiagnostic = null;
+                if ($row->state !== 'completed'
+                    && $itemEvidence->order_id !== null
+                    && $itemEvidence->service_subscription_id === null
+                    && is_string($itemEvidence->correlation_id)) {
+                    $queueDiagnostic = $this->queueInitialDiagnostic(
+                        (int) $itemEvidence->order_id,
+                        $itemEvidence->correlation_id,
+                    );
+                }
                 $convergenceEvidence = json_encode([
                     'batch_state' => $row->state,
                     'batch_succeeded' => (int) $row->succeeded_count,
@@ -178,6 +191,7 @@ namespace Tests\Feature {
                     'item_state' => $itemEvidence->state,
                     'item_attempt_count' => (int) $itemEvidence->attempt_count,
                     'item_error_code' => $itemEvidence->error_code,
+                    'queue_initial_diagnostic' => $queueDiagnostic,
                     'source_authorization_id' => $itemEvidence->order_source_authorization_id,
                     'order_id' => $itemEvidence->order_id,
                     'service_subscription_id' => $itemEvidence->service_subscription_id,
@@ -197,6 +211,54 @@ namespace Tests\Feature {
             } finally {
                 $this->closeWorker($first);
                 $this->closeWorker($second);
+            }
+        }
+
+        /**
+         * Replays only the already-failed queue stage inside an outer rollback-only transaction.
+         *
+         * @return array<string, int|string|null>
+         */
+        private function queueInitialDiagnostic(int $orderId, string $correlationId): array
+        {
+            $orderPublicId = DB::table('orders')->where('id', $orderId)->value('public_id');
+            if (! is_string($orderPublicId) || $orderPublicId === '') {
+                return ['outcome' => 'order_unavailable'];
+            }
+
+            DB::beginTransaction();
+            try {
+                $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+                    $orderPublicId,
+                    $correlationId,
+                );
+
+                return ['outcome' => 'succeeded_under_rollback'];
+            } catch (\Throwable $exception) {
+                if ($exception instanceof QueryException) {
+                    return [
+                        'outcome' => 'query_failed',
+                        'exception_class' => $exception::class,
+                        'sql_state' => is_string($exception->errorInfo[0] ?? null)
+                            ? $exception->errorInfo[0]
+                            : null,
+                        'driver_code' => is_int($exception->errorInfo[1] ?? null)
+                            || is_string($exception->errorInfo[1] ?? null)
+                                ? $exception->errorInfo[1]
+                                : null,
+                        'driver_message' => is_string($exception->errorInfo[2] ?? null)
+                            ? substr($exception->errorInfo[2], 0, 256)
+                            : null,
+                    ];
+                }
+
+                return [
+                    'outcome' => 'failed',
+                    'exception_class' => $exception::class,
+                    'message' => substr($exception->getMessage(), 0, 256),
+                ];
+            } finally {
+                DB::rollBack();
             }
         }
 
