@@ -3018,6 +3018,13 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $referral = $this->referrals->forSelf($action->userId, $action->userId);
         $locale = $customer->locale === 'en' ? 'en' : 'fa';
 
+        $phoneVerification = $this->callbacks->issue(
+            $session->publicId,
+            $session->version,
+            TelegramPhoneVerificationNavigationHandler::ACTION_ENTRY,
+            [],
+            'nav-account-phone-verification:'.$action->requestKey,
+        );
         $back = $this->callbacks->issue(
             $session->publicId,
             $session->version,
@@ -3025,12 +3032,16 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             [],
             'nav-account-back:'.$action->requestKey,
         );
-        $keyboard = new TelegramInlineKeyboardSnapshot([[
-            new TelegramInlineCallbackButton(
+        $keyboard = new TelegramInlineKeyboardSnapshot([
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram_phone_verification.entry_button', $locale),
+                $phoneVerification->publicId,
+            )],
+            [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.buttons.back', $locale),
                 $back->publicId,
-            ),
-        ]]);
+            )],
+        ]);
 
         $this->queueConfidential(
             $action,

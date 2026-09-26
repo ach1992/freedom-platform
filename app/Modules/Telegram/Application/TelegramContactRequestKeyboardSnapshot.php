@@ -15,7 +15,9 @@ final readonly class TelegramContactRequestKeyboardSnapshot
 
     private string $hash;
 
-    public function __construct(public string $buttonText)
+    public string $buttonText;
+
+    public function __construct(string $buttonText)
     {
         $text = trim($buttonText);
         if ($text === ''
