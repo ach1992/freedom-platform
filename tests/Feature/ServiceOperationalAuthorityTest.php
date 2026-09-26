@@ -1234,6 +1234,67 @@ final class ServiceOperationalAuthorityTest extends TestCase
             ->where('aggregate_id', $paidOrder->orderPublicId)
             ->count());
 
+        $freshService = DB::table('service_subscriptions')->where('id', (int) $before->id)->first([
+            'public_id', 'user_id', 'route_selection_id', 'service_target_id', 'remote_service_id',
+            'provisioned_at', 'lifecycle_state', 'lifecycle_version', 'remote_identity_generation',
+            'mutation_generation', 'remote_deleted_at',
+        ]);
+        $freshQuote = DB::table('quotes')->where('public_id', $quote->quotePublicId)->first([
+            'user_id', 'service_subscription_public_id', 'service_target_id_snapshot',
+            'service_remote_identity_generation_snapshot', 'service_lifecycle_version_snapshot',
+            'service_mutation_generation_snapshot', 'service_source_route_selection_id_snapshot',
+            'service_reconfiguration_preview_id', 'service_reconfiguration_preview_public_id',
+            'service_target_route_selection_id_snapshot', 'service_target_service_target_id_snapshot',
+            'service_target_service_target_version_snapshot', 'service_target_protocol_profile_id_snapshot',
+            'service_target_protocol_profile_version_snapshot',
+        ]);
+        self::assertNotNull($freshService);
+        self::assertNotNull($freshQuote);
+        $serviceFreshness = [
+            'user_id' => (int) $freshService->user_id,
+            'service_public_id' => $freshService->public_id,
+            'service_target_id' => (int) $freshService->service_target_id,
+            'remote_identity_generation' => (int) $freshService->remote_identity_generation,
+            'lifecycle_version' => (int) $freshService->lifecycle_version,
+            'mutation_generation' => (int) $freshService->mutation_generation,
+            'route_selection_id' => $freshService->route_selection_id === null ? null : (int) $freshService->route_selection_id,
+        ];
+        $quoteFreshness = [
+            'user_id' => (int) $freshQuote->user_id,
+            'service_public_id' => $freshQuote->service_subscription_public_id,
+            'service_target_id' => (int) $freshQuote->service_target_id_snapshot,
+            'remote_identity_generation' => (int) $freshQuote->service_remote_identity_generation_snapshot,
+            'lifecycle_version' => (int) $freshQuote->service_lifecycle_version_snapshot,
+            'mutation_generation' => (int) $freshQuote->service_mutation_generation_snapshot,
+            'route_selection_id' => $freshQuote->service_source_route_selection_id_snapshot === null
+                ? null
+                : (int) $freshQuote->service_source_route_selection_id_snapshot,
+        ];
+        self::assertSame(
+            $serviceFreshness,
+            $quoteFreshness,
+            json_encode(['service' => $serviceFreshness, 'quote' => $quoteFreshness], JSON_THROW_ON_ERROR),
+        );
+        self::assertContains($freshService->lifecycle_state, ['active', 'suspended']);
+        self::assertNull($freshService->remote_deleted_at);
+        self::assertNotNull($freshService->provisioned_at);
+        self::assertIsString($freshService->remote_service_id);
+        self::assertNotSame('', $freshService->remote_service_id);
+        self::assertSame($preview->previewPublicId, $freshQuote->service_reconfiguration_preview_public_id);
+        foreach ([
+            'service_reconfiguration_preview_id',
+            'service_target_route_selection_id_snapshot',
+            'service_target_service_target_id_snapshot',
+            'service_target_service_target_version_snapshot',
+            'service_target_protocol_profile_id_snapshot',
+            'service_target_protocol_profile_version_snapshot',
+        ] as $requiredSnapshotColumn) {
+            self::assertNotNull(
+                $freshQuote->{$requiredSnapshotColumn},
+                'Missing paid reconfiguration Quote snapshot: '.$requiredSnapshotColumn,
+            );
+        }
+
         $queueService = $this->app->make(ServicePurchaseMutationQueueService::class);
         $queued = $queueService->queueFromSettlement(
             $settlement->settlementPublicId,
