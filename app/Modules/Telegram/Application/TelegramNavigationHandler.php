@@ -3025,6 +3025,13 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             [],
             'nav-account-phone-verification:'.$action->requestKey,
         );
+        $walletTopUp = $this->callbacks->issue(
+            $session->publicId,
+            $session->version,
+            TelegramWalletTopUpNavigationHandler::ACTION_ENTRY,
+            [],
+            'nav-account-wallet-topup:'.$action->requestKey,
+        );
         $back = $this->callbacks->issue(
             $session->publicId,
             $session->version,
@@ -3036,6 +3043,10 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             [new TelegramInlineCallbackButton(
                 $this->translation('telegram_phone_verification.entry_button', $locale),
                 $phoneVerification->publicId,
+            )],
+            [new TelegramInlineCallbackButton(
+                $this->translation('telegram_wallet_top_up.entry', $locale),
+                $walletTopUp->publicId,
             )],
             [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.buttons.back', $locale),

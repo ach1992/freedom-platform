@@ -41,6 +41,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
         private TelegramGiftCardNavigationHandler $giftCards,
         private TelegramPhoneVerificationNavigationHandler $phoneVerification,
+        private TelegramWalletTopUpNavigationHandler $walletTopUps,
         private TelegramWalletTransferNavigationHandler $walletTransfers,
         private TelegramUsdtNavigationHandler $usdt,
         private TelegramNowPaymentsNavigationResolver $nowPaymentsResolver,
@@ -176,6 +177,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->phoneVerification->supports($action)) {
             $this->phoneVerification->handle($action);
+
+            return;
+        }
+        if ($this->walletTopUps->supports($action)) {
+            $this->walletTopUps->handle($action);
 
             return;
         }
