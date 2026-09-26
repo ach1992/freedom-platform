@@ -387,7 +387,7 @@ final readonly class ServiceReconfigurationPreviewService
             ->where('policy.plan_offering_id', $offeringId)
             ->where('server.code', $serverCode)
             ->where('server.state', 'active')
-            ->where('server.visibility', 'visible')
+            ->where('server.visibility', 'listed')
             ->where('route.customer_selectable', true)
             ->value('route.id');
         if (! is_int($routeId) && ! is_string($routeId)) {
