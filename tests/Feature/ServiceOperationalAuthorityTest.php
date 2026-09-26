@@ -2096,6 +2096,10 @@ final class ServiceOperationalAuthorityTest extends TestCase
     {
         $methodCode = 'svc_reconfigure_'.$suffix;
         $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $correlation = static fn (string $stage): string => hash(
+            'sha256',
+            'service-reconfiguration-payment:'.$suffix.':'.$stage,
+        );
         $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
         $eligibility->configureMethod(
             'service.reconfiguration.method.'.$suffix,
@@ -2105,7 +2109,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
             false,
             1,
             'Service reconfiguration test payment method.',
-            'service-reconfiguration-method-'.$suffix,
+            $correlation('method'),
         );
         $eligibility->recordHealth(
             'service.reconfiguration.health.'.$suffix,
@@ -2114,7 +2118,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
             true,
             $now->modify('+10 minutes'),
             'Healthy Service reconfiguration test payment method.',
-            'service-reconfiguration-health-'.$suffix,
+            $correlation('health'),
         );
         $decision = $eligibility->evaluate(
             'service.reconfiguration.eligibility.'.$suffix,
@@ -2127,7 +2131,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
             $quote->quotePublicId,
             $decision->publicId,
             $methodCode,
-            'service-reconfiguration-intent-'.$suffix,
+            $correlation('intent'),
         );
         DB::table('payment_intents')->where('public_id', $intent->intentPublicId)->update([
             'state' => 'submitted',
@@ -2153,7 +2157,7 @@ final class ServiceOperationalAuthorityTest extends TestCase
                     ['provider_reference' => 'txn-service-reconfiguration-'.$suffix],
                 ),
             ),
-            'service-reconfiguration-settlement-'.$suffix,
+            $correlation('settlement'),
         );
     }
 
