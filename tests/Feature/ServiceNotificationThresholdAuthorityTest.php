@@ -51,6 +51,7 @@ final class ServiceNotificationThresholdAuthorityTest extends TestCase
         parent::setUp();
         $this->seed();
         config()->set('service_notifications.expiry_threshold_days', [7, 3, 1, 0]);
+        config()->set('service_notifications.usage_threshold_percentages', []);
         config()->set('service_notifications.low_balance_irr', 0);
 
         $this->restoreServiceOperationalCapabilitySingleton();
@@ -585,6 +586,8 @@ SQL,
 
     public function test_usage_notifications_advance_thresholds_once_within_the_current_sync_cycle(): void
     {
+        config()->set('service_notifications.usage_threshold_percentages', [20, 10, 0]);
+
         $fixture = $this->fixture('usage-thresholds');
         $remoteId = 'notification-usage-thresholds';
         $username = 'notification-usage-thresholds-user';

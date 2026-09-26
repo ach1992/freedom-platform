@@ -11,9 +11,12 @@ return new class extends Migration
     public function up(): void
     {
         // Re-entering this historical migration on a fully composed successor schema must not
-        // replace later paid/reconfiguration/grant Service authority. The non-paid Order surface
-        // itself is still verified before this shortcut is allowed.
-        if ($this->laterComposedServiceAuthorityFinalized()) {
+        // replace later reconfiguration/grant Service authority. It must still repair this
+        // migration's own Order + initial-provisioning surfaces because historical tests or
+        // interrupted rollback recovery can downgrade those independently.
+        if ($this->laterComposedServiceAuthorityPresent()) {
+            $this->repairNonPaidOrderAuthorityPreservingServiceSuccessors();
+
             return;
         }
 
@@ -45,6 +48,30 @@ return new class extends Migration
 
         // Final enabling statement. A crash before this point leaves every non-purchase Order
         // source fenced exactly as before this migration.
+        $this->activateSupportedSourceFence();
+    }
+
+    private function repairNonPaidOrderAuthorityPreservingServiceSuccessors(): void
+    {
+        // Close source creation before replacing any Order authority so MariaDB's statement-level
+        // DDL commits remain fail-closed throughout recovery.
+        $this->restorePurchaseOnlySourceFence();
+
+        $this->replaceOrderSourceConstraints();
+        $this->replaceOrderInsertGuard();
+        $this->replaceOrderItemInsertGuard();
+        $this->replaceInitialHistoryTrigger();
+        $this->replaceOrderHistoryGuard();
+        $this->replaceServiceInsertGuard();
+
+        // Deliberately preserve provisioning_operations_insert_guard and
+        // service_subscriptions_update_guard: later SVC-005/SVC-011/SVC-013 successors compose
+        // additional Service mutation authority into those surfaces.
+        $this->replaceOrderUpdateGuard();
+        $this->replaceProvisioningOutboxEnvelopeGuard();
+        $this->replaceOutboxReleaseGuard();
+
+        $this->assertAuthorityReady();
         $this->activateSupportedSourceFence();
     }
 
@@ -1495,52 +1522,12 @@ SQL);
             && (int) $row->bootstrap_trigger_count === 0;
     }
 
-    private function laterComposedServiceAuthorityFinalized(): bool
+    private function laterComposedServiceAuthorityPresent(): bool
     {
-        /** @var object{aggregate:int|string}|null $triggerRow */
-        $triggerRow = DB::selectOne(<<<'SQL'
-SELECT COUNT(*) AS aggregate
-FROM information_schema.TRIGGERS
-WHERE TRIGGER_SCHEMA = DATABASE()
-  AND TRIGGER_NAME IN (
-      'orders_insert_guard',
-      'order_items_insert_guard',
-      'orders_initial_history',
-      'order_state_histories_insert_guard',
-      'service_subscriptions_insert_guard',
-      'service_subscriptions_update_guard',
-      'provisioning_operations_insert_guard',
-      'provisioning_operations_update_guard',
-      'provisioning_operation_histories_insert_guard',
-      'provisioning_operation_initial_history',
-      'provisioning_remote_effect_events_insert_guard',
-      'orders_update_guard',
-      'orders_provisioning_history',
-      'orders_provisioning_outbox_envelope_guard',
-      'outbox_initial_provision_envelope_update_guard',
-      'orders_unimplemented_source_insert_guard'
-  )
-SQL);
-
-        if ($triggerRow === null || (int) $triggerRow->aggregate !== 16
-            || ! $this->sourceAuthorizationAuthorityFinalized()
-            || ! $this->constraintExists('orders', 'orders_source_type_chk')
-            || ! $this->constraintExists('orders', 'orders_provisioning_exact_authority_chk')
-            || ! $this->triggerContains('service_subscriptions_insert_guard', 'zero-cost source authority shape is invalid')
-            || ! $this->triggerContains('service_subscriptions_insert_guard', 'clean local lifecycle and no remote binding')
-            || ! $this->triggerContains('provisioning_operations_insert_guard', 'Initial Provisioning Operation zero-cost authority shape is invalid')
-            || ! $this->triggerContains('provisioning_operations_insert_guard', 'service_mutation_queue_v1')
-            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_queue_v1')
-            || ! $this->triggerContains('service_subscriptions_update_guard', 'service_mutation_effect_v1')
-            || ! $this->triggerContains('provisioning_operations_update_guard', 'initial_remote_effect_v1')
-            || ! $this->triggerContains('provisioning_operations_update_guard', 'service_mutation_effect_v1')
-            || ! $this->triggerContains('provisioning_operations_update_guard', 'recovery_transition')
-            || ! $this->triggerContains('provisioning_operation_histories_insert_guard', 'service_mutation_requested')
-            || ! $this->triggerContains('provisioning_operation_initial_history', 'service_mutation_requested')
-            || ! $this->triggerContains('provisioning_remote_effect_events_insert_guard', 'service_mutation_effect_v1')) {
-            return false;
-        }
-
+        // This decision is intentionally independent from this historical migration's own
+        // Order/initial-provisioning surfaces. Those are exactly the surfaces re-entry may need
+        // to repair. Detect only authority owned by later Service successors so we never
+        // downgrade them while repairing our own graph.
         foreach ([
             'service_entitlement_grant_queue_v1',
             'service_reconfiguration_no_charge_queue_v1',
