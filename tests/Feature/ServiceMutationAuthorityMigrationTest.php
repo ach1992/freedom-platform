@@ -110,6 +110,10 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
         $servicePackageQuoteMigration = require database_path('migrations/2026_08_20_000100_enable_service_package_quotes.php');
         $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
         $serviceReconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
+        $serviceReconfigurationRemoteEffectMigration = require database_path('migrations/2026_09_25_000320_enable_service_reconfiguration_remote_effect.php');
+        $serviceEntitlementGrantMigration = require database_path('migrations/2026_09_26_000100_enable_service_entitlement_grant_authority.php');
+        $serviceEntitlementGrantNotificationMigration = require database_path('migrations/2026_09_26_000110_enable_service_entitlement_grant_notification_delivery.php');
+        $administratorServiceReconfigurationMigration = require database_path('migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php');
 
         try {
             $paidServiceMutationMigration->down();
@@ -141,6 +145,10 @@ final class ServiceMutationAuthorityMigrationTest extends TestCase
             $servicePackageQuoteMigration->up();
             $paidServiceMutationMigration->up();
             $serviceReconfigurationQuoteMigration->up();
+            $serviceReconfigurationRemoteEffectMigration->up();
+            $serviceEntitlementGrantMigration->up();
+            $serviceEntitlementGrantNotificationMigration->up();
+            $administratorServiceReconfigurationMigration->up();
         }
 
         $this->assertServiceMutationAuthoritySurface();

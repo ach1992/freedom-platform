@@ -46,6 +46,14 @@ final class ServiceMutationExistingInitialUpgradeTest extends TestCase
         $paidServiceMutationMigration = require database_path('migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php');
         /** @var Migration $serviceReconfigurationQuoteMigration */
         $serviceReconfigurationQuoteMigration = require database_path('migrations/2026_09_25_000310_enable_service_reconfiguration_quotes.php');
+        /** @var Migration $serviceReconfigurationRemoteEffectMigration */
+        $serviceReconfigurationRemoteEffectMigration = require database_path('migrations/2026_09_25_000320_enable_service_reconfiguration_remote_effect.php');
+        /** @var Migration $serviceEntitlementGrantMigration */
+        $serviceEntitlementGrantMigration = require database_path('migrations/2026_09_26_000100_enable_service_entitlement_grant_authority.php');
+        /** @var Migration $serviceEntitlementGrantNotificationMigration */
+        $serviceEntitlementGrantNotificationMigration = require database_path('migrations/2026_09_26_000110_enable_service_entitlement_grant_notification_delivery.php');
+        /** @var Migration $administratorServiceReconfigurationMigration */
+        $administratorServiceReconfigurationMigration = require database_path('migrations/2026_09_26_000120_enable_administrator_service_reconfiguration.php');
         $upgraded = false;
 
         try {
@@ -141,6 +149,10 @@ SQL);
             $servicePackageQuoteMigration->up();
             $paidServiceMutationMigration->up();
             $serviceReconfigurationQuoteMigration->up();
+            $serviceReconfigurationRemoteEffectMigration->up();
+            $serviceEntitlementGrantMigration->up();
+            $serviceEntitlementGrantNotificationMigration->up();
+            $administratorServiceReconfigurationMigration->up();
         }
     }
 }
