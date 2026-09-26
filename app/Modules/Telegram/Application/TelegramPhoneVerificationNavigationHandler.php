@@ -295,15 +295,15 @@ final readonly class TelegramPhoneVerificationNavigationHandler
 
         $this->queue(
             $action,
-            $this->translation('telegram_phone_verification.method_prompt', $locale),
+            $this->translation('telegram.telegram_phone_verification.method_prompt', $locale),
             'method',
             new TelegramInlineKeyboardSnapshot([
                 [new TelegramInlineCallbackButton(
-                    $this->translation('telegram_phone_verification.contact_button', $locale),
+                    $this->translation('telegram.telegram_phone_verification.contact_button', $locale),
                     $contact->publicId,
                 )],
                 [new TelegramInlineCallbackButton(
-                    $this->translation('telegram_phone_verification.sms_button', $locale),
+                    $this->translation('telegram.telegram_phone_verification.sms_button', $locale),
                     $sms->publicId,
                 )],
                 [new TelegramInlineCallbackButton(
@@ -320,16 +320,16 @@ final readonly class TelegramPhoneVerificationNavigationHandler
     ): void {
         $locale = $this->locale($action->userId);
         $text = $messageKey === null
-            ? $this->translation('telegram_phone_verification.contact_prompt', $locale)
-            : $this->translation('telegram_phone_verification.'.$messageKey, $locale)
-                ."\n\n".$this->translation('telegram_phone_verification.contact_prompt', $locale);
+            ? $this->translation('telegram.telegram_phone_verification.contact_prompt', $locale)
+            : $this->translation('telegram.telegram_phone_verification.'.$messageKey, $locale)
+                ."\n\n".$this->translation('telegram.telegram_phone_verification.contact_prompt', $locale);
 
         $this->queue(
             $action,
             $text,
             'contact',
             new TelegramContactRequestKeyboardSnapshot(
-                $this->translation('telegram_phone_verification.contact_request_button', $locale),
+                $this->translation('telegram.telegram_phone_verification.contact_request_button', $locale),
             ),
         );
     }
@@ -340,9 +340,9 @@ final readonly class TelegramPhoneVerificationNavigationHandler
         ?string $messageKey,
     ): void {
         $locale = $this->locale($action->userId);
-        $text = $this->translation('telegram_phone_verification.sms_phone_prompt', $locale);
+        $text = $this->translation('telegram.telegram_phone_verification.sms_phone_prompt', $locale);
         if ($messageKey !== null) {
-            $text = $this->translation('telegram_phone_verification.'.$messageKey, $locale)."\n\n".$text;
+            $text = $this->translation('telegram.telegram_phone_verification.'.$messageKey, $locale)."\n\n".$text;
         }
 
         $back = $this->backCallback($action, $sessionVersion, 'sms-phone');
@@ -365,9 +365,9 @@ final readonly class TelegramPhoneVerificationNavigationHandler
         ?string $messageKey,
     ): void {
         $locale = $this->locale($action->userId);
-        $text = $this->translation('telegram_phone_verification.sms_code_prompt', $locale);
+        $text = $this->translation('telegram.telegram_phone_verification.sms_code_prompt', $locale);
         if ($messageKey !== null) {
-            $text = $this->translation('telegram_phone_verification.'.$messageKey, $locale)."\n\n".$text;
+            $text = $this->translation('telegram.telegram_phone_verification.'.$messageKey, $locale)."\n\n".$text;
         }
 
         $back = $this->backCallback($action, $sessionVersion, 'sms-code');
@@ -388,7 +388,7 @@ final readonly class TelegramPhoneVerificationNavigationHandler
     {
         $this->queue(
             $action,
-            $this->translation('telegram_phone_verification.success', $this->locale($action->userId)),
+            $this->translation('telegram.telegram_phone_verification.success', $this->locale($action->userId)),
             'success',
         );
         $this->returnHome($action);

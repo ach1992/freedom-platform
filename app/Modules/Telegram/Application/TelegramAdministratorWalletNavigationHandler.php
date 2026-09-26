@@ -871,6 +871,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         ]);
     }
 
+    /** @param  array<string, mixed>  $payload */
     private function callbackButton(
         TelegramInteractionAction $action,
         int $sessionVersion,
@@ -906,6 +907,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         );
     }
 
+    /** @param  array<string, mixed>  $payload */
     private function transition(
         TelegramInteractionAction $action,
         string $state,
@@ -997,6 +999,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         return null;
     }
 
+    /** @param  array<string, mixed>  $payload */
     private function selectionFromPayload(array $payload): string
     {
         $selection = $payload['selection'] ?? null;
@@ -1007,7 +1010,10 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         return $selection;
     }
 
-    /** @return array{0:string,1:string} */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{0:string,1:string}
+     */
     private function refundPayload(array $payload): array
     {
         $selection = $this->selectionFromPayload($payload);
@@ -1019,7 +1025,10 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         return [$selection, $source];
     }
 
-    /** @return array{0:string,1:WalletCorrectionDirection} */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{0:string,1:WalletCorrectionDirection}
+     */
     private function correctionDirectionPayload(array $payload): array
     {
         $selection = $this->selectionFromPayload($payload);
@@ -1031,7 +1040,10 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         return [$selection, $direction];
     }
 
-    /** @return array{0:string,1:WalletCorrectionDirection,2:int} */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{0:string,1:WalletCorrectionDirection,2:int}
+     */
     private function correctionAmountPayload(array $payload): array
     {
         [$selection, $direction] = $this->correctionDirectionPayload($payload);
@@ -1043,7 +1055,10 @@ final readonly class TelegramAdministratorWalletNavigationHandler
         return [$selection, $direction, $amount];
     }
 
-    /** @return array{0:string,1:int,2:string,3:string|null,4:bool,5:string} */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{0:string,1:int,2:string,3:string|null,4:bool,5:string}
+     */
     private function correctionConfirmPayload(array $payload): array
     {
         $selection = $this->selectionFromPayload($payload);

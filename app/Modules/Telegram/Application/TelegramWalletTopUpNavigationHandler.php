@@ -389,7 +389,10 @@ final readonly class TelegramWalletTopUpNavigationHandler
         return $normalized === '/start' || $normalized === '/menu';
     }
 
-    /** @return array{0:int,1:string} */
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{0:int,1:string}
+     */
     private function activePayload(array $payload): array
     {
         $amount = $payload['amount_irr'] ?? null;

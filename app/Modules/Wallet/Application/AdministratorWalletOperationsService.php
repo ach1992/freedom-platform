@@ -246,6 +246,16 @@ final readonly class AdministratorWalletOperationsService
             throw new AuthorizationException('Wallet correction preview is not bound to the selected administrator/customer context.');
         }
 
+        if ($approvalId !== null) {
+            $approvalState = $this->database->connection()
+                ->table('sensitive_action_approvals')
+                ->where('id', $approvalId)
+                ->value('state');
+            if ($approvalState === 'pending') {
+                throw new DomainException('Wallet correction independent approval is still pending.');
+            }
+        }
+
         return $this->corrections->execute(
             $previewId,
             $confirmationToken,
