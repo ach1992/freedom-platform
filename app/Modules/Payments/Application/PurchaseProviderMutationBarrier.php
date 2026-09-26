@@ -62,6 +62,7 @@ final readonly class PurchaseProviderMutationBarrier
                 'public_id',
                 'purpose',
                 'user_id',
+                'wallet_account_id',
                 'source_quote_id',
                 'source_quote_public_id',
                 'provider_code',
@@ -69,25 +70,40 @@ final readonly class PurchaseProviderMutationBarrier
         if ($intent === null) {
             throw new RuntimeException('Purchase provider mutation payment intent is unavailable.');
         }
-        if ($intent->purpose !== 'purchase') {
+        if (! in_array($intent->purpose, ['purchase', 'wallet_top_up'], true)) {
             return $operation(PurchaseProviderMutationAttempt::noOp());
         }
 
         $userId = filter_var($intent->user_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-        $sourceQuoteId = filter_var($intent->source_quote_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         if ($userId === false
-            || $sourceQuoteId === false
             || ! is_string($intent->public_id)
             || $intent->public_id === ''
-            || ! is_string($intent->source_quote_public_id)
-            || $intent->source_quote_public_id === ''
             || ! is_string($intent->provider_code)
             || $intent->provider_code === '') {
-            throw new RuntimeException('Purchase provider mutation identity is incomplete.');
+            throw new RuntimeException('Payment provider mutation identity is incomplete.');
+        }
+
+        $sourceQuoteId = null;
+        $slotIdentity = $intent->public_id;
+        if ($intent->purpose === 'purchase') {
+            $sourceQuoteId = filter_var($intent->source_quote_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($sourceQuoteId === false
+                || ! is_string($intent->source_quote_public_id)
+                || $intent->source_quote_public_id === '') {
+                throw new RuntimeException('Purchase provider mutation identity is incomplete.');
+            }
+            $slotIdentity = $intent->source_quote_public_id;
+        } else {
+            $walletAccountId = filter_var($intent->wallet_account_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($walletAccountId === false
+                || $intent->source_quote_id !== null
+                || $intent->source_quote_public_id !== null) {
+                throw new RuntimeException('Wallet top-up provider mutation identity is incomplete.');
+            }
         }
 
         $this->assertUpgradeFenceInactive($connection);
-        $preferredSlot = $this->slotFor((int) $userId, $intent->source_quote_public_id);
+        $preferredSlot = $this->slotFor((int) $userId, $slotIdentity);
 
         return $this->withRuntimeSlot(
             $connection,
@@ -104,12 +120,14 @@ final readonly class PurchaseProviderMutationBarrier
                 // Re-read after slot acquisition to close the race where migration
                 // activates the persistent cut after the optimistic fast-path read.
                 $this->assertUpgradeFenceInactive($connection);
-                $this->assertNoOtherPendingManualReview(
-                    $connection,
-                    $paymentIntentId,
-                    (int) $sourceQuoteId,
-                    (int) $userId,
-                );
+                if ($intent->purpose === 'purchase') {
+                    $this->assertNoOtherPendingManualReview(
+                        $connection,
+                        $paymentIntentId,
+                        (int) $sourceQuoteId,
+                        (int) $userId,
+                    );
+                }
 
                 [$control, $controlName] = $this->controlConnection($connection);
                 $attempt = null;
