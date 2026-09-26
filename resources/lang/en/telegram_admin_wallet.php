@@ -20,7 +20,7 @@ return [
     'correction_confirm' => "Correction preview\n\nDirection: :direction\nAmount: :amount IRR\nAvailable before: :before IRR\nAvailable after: :after IRR\nApproval: :approval\n\nExecute only after reviewing this immutable preview.",
     'approval_required' => 'independent approval required',
     'approval_not_required' => 'not required',
-    'approval_pending' => "This correction requires independent approval. An approval request has been created. After another authorized administrator approves it through Admin Access, retry execution here.",
+    'approval_pending' => 'This correction requires independent approval. An approval request has been created. After another authorized administrator approves it through Admin Access, retry execution here.',
     'execute_button' => 'Execute correction',
     'retry_button' => 'Retry after approval',
     'correction_completed' => "Correction completed\n\nDirection: :direction\nAmount: :amount IRR\nAvailable balance after: :available IRR.",

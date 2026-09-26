@@ -313,7 +313,7 @@ final readonly class AdministratorWalletOperationsService
         string $reason,
     ): AccessChangeContext {
         return new AccessChangeContext(
-            'tg-admin-wallet-'.$surface.':'.substr(hash('sha256', $operationKey), 0, 40),
+            hash('sha256', 'telegram-admin-wallet'."\0".$surface."\0".$operationKey),
             'tg-admin-wallet:'.substr(hash('sha256', $operationKey.':'.$surface), 0, 48),
             $reasonCode,
             $reason,

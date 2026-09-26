@@ -597,7 +597,7 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
         'method_prompt' => "Phone verification\n\nChoose how you want to verify your Iranian mobile number. You can repeat verification later if needed.",
         'contact_button' => 'Share Telegram contact',
         'sms_button' => 'Verify by SMS code',
-        'contact_prompt' => "Share your own Telegram contact using the button below. The Telegram contact owner must match your Telegram account. Use /back to cancel.",
+        'contact_prompt' => 'Share your own Telegram contact using the button below. The Telegram contact owner must match your Telegram account. Use /back to cancel.',
         'contact_request_button' => 'Share my phone number',
         'sms_phone_prompt' => "SMS verification\n\nSend your Iranian mobile number, for example 0912xxxxxxx. The number is used by the Identity authority and is not copied into Telegram session state.",
         'sms_code_prompt' => "SMS verification\n\nSend the 6-digit verification code. The code is never stored in Telegram session state.",

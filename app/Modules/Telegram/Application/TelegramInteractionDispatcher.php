@@ -450,7 +450,7 @@ final readonly class TelegramInteractionDispatcher
      * any other Telegram contact metadata remain confined to the encrypted raw
      * Update retention boundary and never enter session state or Outbox data.
      *
-     * @param array<string,mixed> $message
+     * @param  array<string,mixed>  $message
      * @return array{phone_number:string,user_id:int}|null
      */
     private function contactFromMessage(array $message): ?array

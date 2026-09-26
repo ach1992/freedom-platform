@@ -3041,7 +3041,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         );
         $keyboard = new TelegramInlineKeyboardSnapshot([
             [new TelegramInlineCallbackButton(
-                $this->translation('telegram_phone_verification.entry_button', $locale),
+                $this->translation('telegram.phone_verification.entry_button', $locale),
                 $phoneVerification->publicId,
             )],
             [new TelegramInlineCallbackButton(
