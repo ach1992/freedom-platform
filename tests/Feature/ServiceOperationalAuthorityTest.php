@@ -1310,6 +1310,19 @@ final class ServiceOperationalAuthorityTest extends TestCase
             'service.reconfiguration.paid.queue.000001',
             'service-reconfiguration-paid-queue',
         );
+        try {
+            $queueService->queueFromSettlement(
+                $settlement->settlementPublicId,
+                'service.reconfiguration.paid.queue.000002',
+                'service-reconfiguration-paid-queue-conflict',
+            );
+            self::fail('Paid Service reconfiguration replay must reject a different request key.');
+        } catch (DomainException $exception) {
+            self::assertSame(
+                'Paid Service Order is already bound to a different mutation request.',
+                $exception->getMessage(),
+            );
+        }
         self::assertSame(ServiceMutationType::Reconfigure, $queued->type);
         self::assertSame(ProvisioningState::Queued, $queued->state);
         self::assertFalse($queued->replayed);

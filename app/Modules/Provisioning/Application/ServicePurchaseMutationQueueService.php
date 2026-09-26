@@ -164,6 +164,33 @@ final readonly class ServicePurchaseMutationQueueService
                 throw new RuntimeException('Paid Service mutation target Service disappeared.');
             }
 
+            // Replay must resolve before quote freshness checks. The first successful queue claim
+            // intentionally advances mutation_generation, and a completed reconfiguration may
+            // legitimately change other quoted Service facts. Those expected effects must not
+            // make the same paid Order non-idempotent on replay.
+            /** @var object{provisioning_operation_id:int|string}|null $existingAuthority */
+            $existingAuthority = $type === ServiceMutationType::Reconfigure
+                ? $connection->table('service_reconfiguration_authorities')
+                    ->where('purchase_order_item_id', (int) $item->id)
+                    ->lockForUpdate()
+                    ->first(['provisioning_operation_id'])
+                : $connection->table('service_paid_mutation_authorities')
+                    ->where('purchase_order_item_id', (int) $item->id)
+                    ->lockForUpdate()
+                    ->first(['provisioning_operation_id']);
+            if ($existingAuthority !== null) {
+                $operation = $this->operation($connection, (int) $existingAuthority->provisioning_operation_id);
+                if ((int) $operation->service_subscription_id !== (int) $service->id
+                    || (string) $operation->operation_type !== $type->value) {
+                    throw new RuntimeException('Stored paid Service mutation authority is inconsistent.');
+                }
+                if ($operation->request_key_hash !== null && ! hash_equals($operation->request_key_hash, $requestHash)) {
+                    throw new DomainException('Paid Service Order is already bound to a different mutation request.');
+                }
+
+                return $this->receipt($service, $operation, true);
+            }
+
             if ((int) $service->user_id !== (int) $settlement->user_id
                 || ! hash_equals($service->public_id, $quote->service_subscription_public_id)
                 || ! in_array($service->lifecycle_state, ['active', 'suspended'], true)
@@ -196,25 +223,6 @@ final readonly class ServicePurchaseMutationQueueService
                         ? 'Service changed after the paid reconfiguration Quote and requires reconciliation before mutation.'
                         : 'Service changed after the paid package Quote and requires reconciliation before mutation.',
                 );
-            }
-
-            /** @var object{provisioning_operation_id:int|string}|null $existingAuthority */
-            $existingAuthority = $type === ServiceMutationType::Reconfigure
-                ? $connection->table('service_reconfiguration_authorities')
-                    ->where('purchase_order_item_id', (int) $item->id)
-                    ->lockForUpdate()
-                    ->first(['provisioning_operation_id'])
-                : $connection->table('service_paid_mutation_authorities')
-                    ->where('purchase_order_item_id', (int) $item->id)
-                    ->lockForUpdate()
-                    ->first(['provisioning_operation_id']);
-            if ($existingAuthority !== null) {
-                $operation = $this->operation($connection, (int) $existingAuthority->provisioning_operation_id);
-                if ($operation->request_key_hash !== null && ! hash_equals($operation->request_key_hash, $requestHash)) {
-                    throw new DomainException('Paid Service Order is already bound to a different mutation request.');
-                }
-
-                return $this->receipt($service, $operation, true);
             }
 
             $reconfiguration = $type === ServiceMutationType::Reconfigure
