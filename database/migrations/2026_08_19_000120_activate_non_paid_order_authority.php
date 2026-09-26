@@ -1544,7 +1544,6 @@ SQL);
         foreach ([
             'service_entitlement_grant_queue_v1',
             'service_reconfiguration_no_charge_queue_v1',
-            'service_paid_mutation_queue_v1',
         ] as $successorAuthority) {
             if ($this->triggerContains('provisioning_operations_insert_guard', $successorAuthority)
                 && $this->triggerContains('service_subscriptions_update_guard', $successorAuthority)) {

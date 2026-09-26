@@ -1262,6 +1262,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
 
+        $serviceControlButtons = [];
         if ($this->administratorServiceOperations->availableFor($action->userId)) {
             $serviceOperations = $this->callbacks->issue(
                 $action->sessionPublicId,
@@ -1270,11 +1271,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-service-operations:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $serviceControlButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.service_operations', $locale),
                 $serviceOperations->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
         }
 
         if ($this->administratorUsers->allowsUser($action->userId, 'catalog.manage')) {
@@ -1285,11 +1286,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-service-auto-renew-policy:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $serviceControlButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.service_auto_renew_policy', $locale),
                 $autoRenewPolicy->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
+        }
+        if ($serviceControlButtons !== []) {
+            $rows[] = $serviceControlButtons;
         }
 
         if ($this->managedUsdtRateSettings->availableFor($action->userId)) {
@@ -1322,6 +1326,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             )];
         }
 
+        $configurationButtons = [];
         if ($this->administratorUsers->allowsUser(
             $action->userId,
             TelegramMenuConfigurationMutationExecutor::MANAGE_PERMISSION,
@@ -1333,11 +1338,11 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-menus:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $configurationButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.menus', $locale),
                 $menus->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
         }
 
         if ($this->administratorUsers->allowsUser(
@@ -1351,11 +1356,14 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-membership:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $configurationButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.membership', $locale),
                 $membership->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
+        }
+        if ($configurationButtons !== []) {
+            $rows[] = $configurationButtons;
         }
 
         if ($this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)) {

@@ -197,8 +197,12 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $bootstrapMigration->up();
             // The historical provisioning schema remains under test, while the
             // shared purchase fixture deliberately uses the current Quote contract.
-            // Restore that independent Quote schema before creating fixture data.
+            // Restore the complete current Quote schema (including the SVC-005 snapshot
+            // columns/FKs) before creating fixture data. The reconfiguration preview surface
+            // stays empty and is unrelated to the provisioning bootstrap assertions below.
             $servicePackageQuoteMigration->up();
+            $serviceReconfigurationPreviewMigration->up();
+            $serviceReconfigurationQuoteMigration->up();
 
             self::assertSame(0, $this->triggerCount('service_subscriptions_insert_guard'));
             self::assertSame(0, $this->triggerCount('provisioning_operations_insert_guard'));
@@ -385,7 +389,9 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $serviceOperationPolicyExpansionMigration->up();
             $serviceNotificationPreferencesMigration->up();
             $serviceNotificationEventExpansionMigration->up();
-            $serviceReconfigurationPreviewMigration->up();
+            if (! Schema::hasTable('service_reconfiguration_previews')) {
+                $serviceReconfigurationPreviewMigration->up();
+            }
             $serviceReconfigurationQuoteMigration->up();
             $serviceReconfigurationRemoteEffectMigration->up();
             $serviceEntitlementGrantMigration->up();

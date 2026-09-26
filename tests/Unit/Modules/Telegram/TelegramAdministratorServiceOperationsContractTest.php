@@ -60,6 +60,17 @@ final class TelegramAdministratorServiceOperationsContractTest extends TestCase
             'singleton(TelegramAdministratorServiceOperationsNavigationHandler::class)',
             $serviceProvider,
         );
+
+        $adminControl = $this->section(
+            $navigation,
+            'private function renderAdminControl(',
+            'private function renderAdminUsdtRate(',
+        );
+        self::assertStringContainsString('$serviceControlButtons = [];', $adminControl);
+        self::assertStringContainsString('$rows[] = $serviceControlButtons;', $adminControl);
+        self::assertStringContainsString('$configurationButtons = [];', $adminControl);
+        self::assertStringContainsString('$rows[] = $configurationButtons;', $adminControl);
+        self::assertLessThanOrEqual(10, substr_count($adminControl, '$rows[] ='));
     }
 
     public function test_mutations_execute_only_after_explicit_confirmation(): void
