@@ -60,7 +60,7 @@ final class ZarinpalWalletTopUpMigrationTransport implements ZarinpalTransport
 }
 
 /** @requirement IPG-001 PAY-002 PAY-003 WAL-001 DAT-002 DAT-003 DAT-004 SEC-002 QUA-004 */
-final class ZarinpalWalletTopUpAuthorityMigrationSafetyTest extends TestCase
+final class ProviderZarinpalWalletTopUpMigrationSafetyTest extends TestCase
 {
     use DatabaseTruncation;
 
