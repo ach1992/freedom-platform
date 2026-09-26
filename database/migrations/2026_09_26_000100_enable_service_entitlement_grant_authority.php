@@ -159,7 +159,6 @@ return new class extends Migration
                 $table->foreign('provisioning_operation_id', 'segi_operation_fk')
                     ->references('id')->on('provisioning_operations')->restrictOnDelete();
                 $table->string('result_code', 64)->nullable();
-                $table->dateTime('customer_notified_at', 6)->nullable();
                 $table->dateTime('created_at', 6);
                 $table->dateTime('updated_at', 6);
                 $table->unique(['service_entitlement_grant_batch_id', 'position'], 'segi_position_uq');
@@ -409,7 +408,6 @@ BEGIN
        OR NEW.attempt_count <> 0
        OR NEW.provisioning_operation_id IS NOT NULL
        OR NEW.result_code IS NOT NULL
-       OR NEW.customer_notified_at IS NOT NULL
        OR NOT EXISTS (
            SELECT 1
            FROM service_entitlement_grant_batches batch_row

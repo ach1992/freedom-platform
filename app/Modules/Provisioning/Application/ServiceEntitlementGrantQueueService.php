@@ -51,10 +51,10 @@ final readonly class ServiceEntitlementGrantQueueService
             throw new DomainException('Service entitlement grant item public ID is invalid.');
         }
 
-        /** @var object{service_subscription_id:int|string}|null $locator */
+        /** @var object{service_subscription_id:int|string,service_entitlement_grant_batch_id:int|string}|null $locator */
         $locator = $this->database->connection()->table('service_entitlement_grant_items')
             ->where('public_id', $itemPublicId)
-            ->first(['service_subscription_id']);
+            ->first(['service_subscription_id', 'service_entitlement_grant_batch_id']);
         if ($locator === null) {
             throw new DomainException('Service entitlement grant item does not exist.');
         }
@@ -62,10 +62,23 @@ final readonly class ServiceEntitlementGrantQueueService
         return $this->database->connection()->transaction(function (Connection $connection) use ($itemPublicId, $context, $locator): ServiceMutationReceipt {
             $service = $this->lockedService($connection, $this->positiveDatabaseInt($locator->service_subscription_id, 'Service Subscription ID'));
 
+            /** @var BatchRow|null $batch */
+            $batch = $connection->table('service_entitlement_grant_batches')
+                ->where('id', (int) $locator->service_entitlement_grant_batch_id)
+                ->lockForUpdate()
+                ->first([
+                    'id', 'public_id', 'source_type', 'actor_administrator_id', 'reason_code', 'reason',
+                    'data_bytes', 'duration_days', 'state', 'correlation_id', 'expires_at',
+                ]);
+            if ($batch === null) {
+                throw new RuntimeException('Service entitlement grant batch evidence is missing.');
+            }
+
             /** @var ItemRow|null $item */
             $item = $connection->table('service_entitlement_grant_items')
                 ->where('public_id', $itemPublicId)
                 ->where('service_subscription_id', (int) $service->id)
+                ->where('service_entitlement_grant_batch_id', (int) $batch->id)
                 ->lockForUpdate()
                 ->first([
                     'id', 'public_id', 'service_entitlement_grant_batch_id', 'service_subscription_id', 'service_target_id',
@@ -74,18 +87,6 @@ final readonly class ServiceEntitlementGrantQueueService
                 ]);
             if ($item === null) {
                 throw new DomainException('Service entitlement grant item changed before queueing.');
-            }
-
-            /** @var BatchRow|null $batch */
-            $batch = $connection->table('service_entitlement_grant_batches')
-                ->where('id', (int) $item->service_entitlement_grant_batch_id)
-                ->lockForUpdate()
-                ->first([
-                    'id', 'public_id', 'source_type', 'actor_administrator_id', 'reason_code', 'reason',
-                    'data_bytes', 'duration_days', 'state', 'correlation_id', 'expires_at',
-                ]);
-            if ($batch === null) {
-                throw new RuntimeException('Service entitlement grant batch evidence is missing.');
             }
             $this->assertBatchContext($batch, $context);
 

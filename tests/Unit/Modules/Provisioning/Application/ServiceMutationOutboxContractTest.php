@@ -92,10 +92,8 @@ final class ServiceMutationOutboxContractTest extends TestCase
 
         self::assertStringContainsString('PaidServiceMutationOrderOutboxHandler::class', $source);
         self::assertStringContainsString('ServiceMutationOutboxHandler::class', $source);
-        self::assertStringContainsString(
-            '[InitialProvisioningOutboxHandler::class, PaidServiceMutationOrderOutboxHandler::class, ServiceMutationOutboxHandler::class]',
-            $source,
-        );
+        self::assertStringContainsString('ServiceEntitlementGrantNotificationOutboxHandler::class', $source);
+        self::assertStringContainsString('OutboxEventHandler::class', $source);
     }
 
     public function test_paid_service_mutation_order_event_is_safe_and_routes_back_to_canonical_queue(): void

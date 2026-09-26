@@ -24,6 +24,7 @@ final class ServiceEntitlementGrantAuthorityTest extends TestCase
         self::assertTrue(Schema::hasTable('service_entitlement_grant_batches'));
         self::assertTrue(Schema::hasTable('service_entitlement_grant_items'));
         self::assertTrue(Schema::hasTable('service_entitlement_grant_authorities'));
+        self::assertTrue(Schema::hasTable('service_entitlement_grant_notification_bindings'));
 
         $typeConstraint = $this->checkConstraintClause('provisioning_operations', 'provisioning_operations_type_chk');
         self::assertStringContainsString('grant_data', $typeConstraint);
@@ -50,6 +51,69 @@ final class ServiceEntitlementGrantAuthorityTest extends TestCase
         $authorityInsert = $this->triggerStatement('service_entitlement_grant_authorities_insert_guard');
         self::assertStringContainsString('service_operational_authority_capability', $authorityInsert);
         self::assertStringContainsString('service_entitlement_grant_item_id', $authorityInsert);
+
+        $notificationRetry = $this->checkConstraintClause(
+            'service_entitlement_grant_notification_bindings',
+            'segnb_retry_chk',
+        );
+        self::assertStringContainsString('retry_ordinal', $notificationRetry);
+        self::assertStringContainsString('2', $notificationRetry);
+
+        $notificationInsert = $this->triggerStatement(
+            'service_entitlement_grant_notification_bindings_insert_guard',
+        );
+        self::assertStringContainsString('service_operational_authority_capability', $notificationInsert);
+        self::assertStringContainsString('service_notification_delivery_bindings threshold_binding', $notificationInsert);
+        self::assertStringContainsString("prior_effect.state = 'failed_final'", $notificationInsert);
+        self::assertStringContainsString('prior_effect.retry_after_seconds IS NULL', $notificationInsert);
+        self::assertStringContainsString("CONCAT('grant-notification:', item_row.public_id", $notificationInsert);
+
+        $thresholdBinding = $this->triggerStatement('service_notification_bindings_insert_guard');
+        self::assertStringContainsString(
+            'service_entitlement_grant_notification_bindings grant_binding',
+            $thresholdBinding,
+        );
+
+        $deliveryEffect = $this->triggerStatement(
+            'service_delivery_notification_effect_update_capability_guard',
+        );
+        self::assertStringContainsString(
+            'service_entitlement_grant_notification_bindings grant_binding',
+            $deliveryEffect,
+        );
+    }
+
+    public function test_clean_notification_authority_rollback_and_reentry_restore_delivery_guards(): void
+    {
+        $migration = require database_path(
+            'migrations/2026_09_26_000110_enable_service_entitlement_grant_notification_delivery.php',
+        );
+
+        try {
+            $migration->down();
+
+            self::assertFalse(Schema::hasTable('service_entitlement_grant_notification_bindings'));
+            self::assertStringNotContainsString(
+                'service_entitlement_grant_notification_bindings grant_binding',
+                $this->triggerStatement('service_notification_bindings_insert_guard'),
+            );
+            self::assertStringNotContainsString(
+                'service_entitlement_grant_notification_bindings grant_binding',
+                $this->triggerStatement('service_delivery_notification_effect_update_capability_guard'),
+            );
+        } finally {
+            $migration->up();
+        }
+
+        self::assertTrue(Schema::hasTable('service_entitlement_grant_notification_bindings'));
+        self::assertStringContainsString(
+            'service_entitlement_grant_notification_bindings grant_binding',
+            $this->triggerStatement('service_notification_bindings_insert_guard'),
+        );
+        self::assertStringContainsString(
+            'service_entitlement_grant_notification_bindings grant_binding',
+            $this->triggerStatement('service_delivery_notification_effect_update_capability_guard'),
+        );
     }
 
     public function test_grant_batch_insert_fails_closed_without_operational_capability_and_audit_authority(): void

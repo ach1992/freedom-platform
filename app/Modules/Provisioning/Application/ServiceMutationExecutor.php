@@ -18,6 +18,8 @@ use App\Modules\Provisioning\Domain\ProvisioningState;
 use App\Modules\Provisioning\Domain\ServiceDeliveryPurpose;
 use App\Modules\Provisioning\Domain\ServiceMutationType;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
+use App\Shared\Application\SafeOutboxPayload;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -48,6 +50,7 @@ final readonly class ServiceMutationExecutor
         private ProvisioningPanelAdapterResolver $adapters,
         private TargetCapacityAllocator $capacity,
         private ServiceDeliveryAttemptQueueService $deliveries,
+        private OutboxPublisher $outbox,
         private ServiceOperationalDatabaseCapability $operationalDatabaseCapability,
     ) {}
 
@@ -1245,12 +1248,66 @@ final readonly class ServiceMutationExecutor
                     $this->applySuccessfulLifecycleTransition($connection, $service, $next, $type, $now);
                 }
                 $this->recordEvent($connection, $next, $state->value, $this->resultCode($resultCode));
+                if ($authoritative
+                    && $state === ProvisioningState::Succeeded
+                    && $type->isAdministrativeEntitlementGrant()) {
+                    $this->publishGrantNotificationCommand($connection, $next);
+                }
 
                 return $this->receipt($next, $type, false);
             } finally {
                 $this->clearEffectAuthority($connection);
             }
         }, 3);
+    }
+
+    /** @param MutationOperation $operation */
+    private function publishGrantNotificationCommand(Connection $connection, object $operation): void
+    {
+        /** @var object{item_public_id:string,notify_customers:int|string|bool}|null $source */
+        $source = $connection->table('service_entitlement_grant_authorities as authority')
+            ->join(
+                'service_entitlement_grant_items as item',
+                'item.id',
+                '=',
+                'authority.service_entitlement_grant_item_id',
+            )
+            ->join(
+                'service_entitlement_grant_batches as batch',
+                'batch.id',
+                '=',
+                'item.service_entitlement_grant_batch_id',
+            )
+            ->where('authority.provisioning_operation_id', (int) $operation->id)
+            ->where('authority.service_subscription_id', (int) $operation->service_subscription_id)
+            ->first([
+                'item.public_id as item_public_id',
+                'batch.notify_customers',
+            ]);
+        if ($source === null) {
+            throw new RuntimeException('Successful administrative entitlement grant lost its durable notification source.');
+        }
+        if (! (bool) $source->notify_customers) {
+            return;
+        }
+
+        $itemPublicId = (string) $source->item_public_id;
+        if (! Str::isUlid($itemPublicId)) {
+            throw new RuntimeException('Stored Service entitlement grant item public ID is invalid.');
+        }
+        $payload = new SafeOutboxPayload([
+            'service_entitlement_grant_item_public_id' => $itemPublicId,
+        ]);
+        $this->outbox->publish(
+            (string) Str::uuid(),
+            ServiceEntitlementGrantNotificationService::OUTBOX_EVENT_KEY_PREFIX.$itemPublicId,
+            ServiceEntitlementGrantNotificationService::OUTBOX_EVENT_TYPE,
+            ServiceEntitlementGrantNotificationService::OUTBOX_AGGREGATE_TYPE,
+            $itemPublicId,
+            $payload,
+            $operation->correlation_id,
+            ServiceEntitlementGrantNotificationService::OUTBOX_CONTRACT_VERSION,
+        );
     }
 
     /**

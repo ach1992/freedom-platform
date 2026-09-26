@@ -139,6 +139,13 @@ final readonly class ServiceNotificationSourceAuthority
             return null;
         }
         if ($row->notification_state_id === null) {
+            $grantBinding = $connection->table('service_entitlement_grant_notification_bindings')
+                ->where('service_delivery_attempt_id', $deliveryAttemptId)
+                ->exists();
+            if ($grantBinding) {
+                return null;
+            }
+
             throw new ServiceNotificationCandidateInvalidatedException('Notification Delivery Attempt lost its durable source binding.');
         }
 

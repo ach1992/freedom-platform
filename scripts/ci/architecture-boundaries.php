@@ -656,6 +656,7 @@ return [
         'service_entitlement_grant_authorities' => 'Provisioning',
         'service_entitlement_grant_batches' => 'Provisioning',
         'service_entitlement_grant_items' => 'Provisioning',
+        'service_entitlement_grant_notification_bindings' => 'Provisioning',
         'service_imports' => 'Provisioning',
         'service_initial_delivery_fences' => 'Provisioning',
         'service_notification_delivery_bindings' => 'Provisioning',

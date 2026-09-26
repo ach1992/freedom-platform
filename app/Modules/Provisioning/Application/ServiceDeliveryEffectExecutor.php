@@ -231,10 +231,18 @@ final readonly class ServiceDeliveryEffectExecutor
 
     private function notificationPresentation(int $attemptId): ProtectedTelegramPresentation
     {
-        /** @var object{presentation_text:string,presentation_hash:string}|null $binding */
-        $binding = $this->database->connection()->table('service_notification_delivery_bindings')
+        /** @var object{presentation_text:string,presentation_hash:string}|null $thresholdBinding */
+        $thresholdBinding = $this->database->connection()->table('service_notification_delivery_bindings')
             ->where('service_delivery_attempt_id', $attemptId)
             ->first(['presentation_text', 'presentation_hash']);
+        /** @var object{presentation_text:string,presentation_hash:string}|null $grantBinding */
+        $grantBinding = $this->database->connection()->table('service_entitlement_grant_notification_bindings')
+            ->where('service_delivery_attempt_id', $attemptId)
+            ->first(['presentation_text', 'presentation_hash']);
+        if (($thresholdBinding === null) === ($grantBinding === null)) {
+            throw new RuntimeException('Service notification delivery must have exactly one durable presentation source.');
+        }
+        $binding = $thresholdBinding ?? $grantBinding;
         if ($binding === null
             || ! hash_equals($binding->presentation_hash, hash('sha256', $binding->presentation_text))) {
             throw new RuntimeException('Service notification presentation evidence is invalid.');
@@ -267,11 +275,46 @@ final readonly class ServiceDeliveryEffectExecutor
                 'state.low_balance_threshold_irr', 'state.expiry_snapshot_max_age_seconds', 'state.sync_snapshot_max_age_seconds',
                 'state.state', 'state.latest_delivery_attempt_id', 'state.latest_retry_ordinal',
             ]);
-        if ($binding === null) {
-            throw new DomainException('Service notification Delivery Attempt lost current threshold authority.');
+        if ($binding !== null) {
+            return $binding;
         }
 
-        return $binding;
+        /** @var object{id:int|string}|null $grantBinding */
+        $grantBinding = $connection->table('service_entitlement_grant_notification_bindings as binding')
+            ->join(
+                'service_entitlement_grant_items as item',
+                'item.id',
+                '=',
+                'binding.service_entitlement_grant_item_id',
+            )
+            ->join(
+                'service_entitlement_grant_batches as batch',
+                'batch.id',
+                '=',
+                'item.service_entitlement_grant_batch_id',
+            )
+            ->join(
+                'provisioning_operations as operation',
+                'operation.id',
+                '=',
+                'item.provisioning_operation_id',
+            )
+            ->where('binding.service_delivery_attempt_id', (int) $attempt->id)
+            ->where('item.service_subscription_id', (int) $attempt->service_subscription_id)
+            ->whereIn('item.state', ['queued', 'succeeded'])
+            ->where('batch.notify_customers', true)
+            ->whereIn('operation.operation_type', ['grant_data', 'grant_days', 'grant_data_days'])
+            ->where('operation.state', 'succeeded')
+            ->whereNotNull('operation.remote_effect_started_at')
+            ->whereNotNull('operation.remote_effect_completed_at')
+            ->whereNotNull('operation.last_result_code')
+            ->lockForUpdate()
+            ->first(['item.id']);
+        if ($grantBinding === null) {
+            throw new DomainException('Service notification Delivery Attempt lost its durable source authority.');
+        }
+
+        return null;
     }
 
     /**

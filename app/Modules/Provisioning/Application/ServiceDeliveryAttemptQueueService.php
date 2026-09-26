@@ -19,6 +19,9 @@ use Throwable;
  * @phpstan-type ServiceRow object{id:int|string,public_id:string,user_id:int|string,service_target_id:int|string|null,remote_service_id:?string,provisioned_at:?string,lifecycle_state:string,lifecycle_version:int|string,remote_identity_generation:int|string,mutation_generation:int|string,remote_deleted_at:?string}
  * @phpstan-type DeliveryAttemptRow object{id:int|string,public_id:string,service_subscription_id:int|string,purpose:string,request_key_hash:string,correlation_id:string,target_remote_identity_generation:int|string,target_lifecycle_version:int|string,outbox_event_id:string}
  * @phpstan-type NotificationStateRow object{id:int|string,service_subscription_id:int|string,episode_key_hash:string,notification_type:string,threshold_code:string,cycle_key_hash:string,source_type:string,source_id:int|string|null,low_balance_threshold_irr:int|string|null,expiry_snapshot_max_age_seconds:int|string|null,sync_snapshot_max_age_seconds:int|string|null,max_retries:int|string,state:string,latest_delivery_attempt_id:int|string|null,latest_retry_ordinal:int|string|null,next_retry_at:?string}
+ * @phpstan-type GrantNotificationItemRow object{id:int|string,service_subscription_id:int|string,service_entitlement_grant_batch_id:int|string,provisioning_operation_id:int|string|null,state:string}
+ * @phpstan-type GrantNotificationBatchRow object{id:int|string,notify_customers:int|string|bool}
+ * @phpstan-type GrantNotificationOperationRow object{id:int|string,service_subscription_id:int|string,operation_type:string,state:string,remote_effect_started_at:?string,remote_effect_completed_at:?string,last_result_code:?string}
  */
 final readonly class ServiceDeliveryAttemptQueueService
 {
@@ -251,6 +254,163 @@ final readonly class ServiceDeliveryAttemptQueueService
                         );
                     } finally {
                         ServiceNotificationDatabaseAuthority::clear($connection);
+                    }
+                },
+            );
+
+            return $this->receipt($service, $attempt, false);
+        }, 3);
+    }
+
+    /** @requirement SVC-012 SVC-014 ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 QUA-004 */
+    public function queueEntitlementGrantNotification(
+        string $itemPublicId,
+        string $servicePublicId,
+        int $retryOrdinal,
+        string $requestKey,
+        string $correlationId,
+        string $presentationText,
+    ): ServiceDeliveryAttemptReceipt {
+        if (! Str::isUlid($itemPublicId) || $retryOrdinal < 0 || $retryOrdinal > 2) {
+            throw new DomainException('Service entitlement grant notification identity is invalid.');
+        }
+        if ($presentationText === '' || mb_strlen($presentationText) > 4096) {
+            throw new DomainException('Service entitlement grant notification presentation is invalid.');
+        }
+        $this->assertUlid($servicePublicId, 'Service public ID');
+        $requestKeyHash = $this->requestKeyHash($requestKey);
+        $this->assertToken($correlationId, 'Service delivery correlation ID', 8, 64);
+        $presentationHash = hash('sha256', $presentationText);
+
+        return $this->database->connection()->transaction(function (Connection $connection) use (
+            $itemPublicId,
+            $servicePublicId,
+            $retryOrdinal,
+            $requestKeyHash,
+            $correlationId,
+            $presentationText,
+            $presentationHash,
+        ): ServiceDeliveryAttemptReceipt {
+            $service = $this->lockedService($connection, $servicePublicId);
+
+            /** @var object{id:int|string,service_entitlement_grant_batch_id:int|string}|null $itemLocator */
+            $itemLocator = $connection->table('service_entitlement_grant_items')
+                ->where('public_id', $itemPublicId)
+                ->where('service_subscription_id', (int) $service->id)
+                ->first(['id', 'service_entitlement_grant_batch_id']);
+            if ($itemLocator === null) {
+                throw new DomainException('Service entitlement grant notification source is unavailable.');
+            }
+
+            /** @var GrantNotificationBatchRow|null $batch */
+            $batch = $connection->table('service_entitlement_grant_batches')
+                ->where('id', (int) $itemLocator->service_entitlement_grant_batch_id)
+                ->lockForUpdate()
+                ->first(['id', 'notify_customers']);
+            if ($batch === null || ! (bool) $batch->notify_customers) {
+                throw new DomainException('Service entitlement grant customer notification is disabled.');
+            }
+
+            /** @var GrantNotificationItemRow|null $item */
+            $item = $connection->table('service_entitlement_grant_items')
+                ->where('id', (int) $itemLocator->id)
+                ->where('public_id', $itemPublicId)
+                ->where('service_subscription_id', (int) $service->id)
+                ->where('service_entitlement_grant_batch_id', (int) $batch->id)
+                ->lockForUpdate()
+                ->first(['id', 'service_subscription_id', 'service_entitlement_grant_batch_id', 'provisioning_operation_id', 'state']);
+            if ($item === null || $item->provisioning_operation_id === null) {
+                throw new DomainException('Service entitlement grant notification source changed before queueing.');
+            }
+
+            /** @var GrantNotificationOperationRow|null $operation */
+            $operation = $connection->table('provisioning_operations')
+                ->where('id', (int) $item->provisioning_operation_id)
+                ->where('service_subscription_id', (int) $service->id)
+                ->lockForUpdate()
+                ->first([
+                    'id', 'service_subscription_id', 'operation_type', 'state', 'remote_effect_started_at',
+                    'remote_effect_completed_at', 'last_result_code',
+                ]);
+            if ($operation === null
+                || ! in_array($operation->operation_type, ['grant_data', 'grant_days', 'grant_data_days'], true)
+                || $operation->state !== 'succeeded'
+                || $operation->remote_effect_started_at === null
+                || $operation->remote_effect_completed_at === null
+                || $operation->last_result_code === null
+                || ! in_array($item->state, ['queued', 'succeeded'], true)) {
+                throw new DomainException('Service entitlement grant notification requires one successful grant Operation.');
+            }
+
+            $replayed = $this->attemptByRequestHash($connection, (int) $service->id, $requestKeyHash, true);
+            if ($replayed !== null) {
+                $this->assertEntitlementGrantNotificationReplay(
+                    $connection,
+                    $replayed,
+                    (int) $item->id,
+                    $retryOrdinal,
+                    $presentationHash,
+                );
+
+                return $this->receipt($service, $replayed, true);
+            }
+
+            if ($retryOrdinal === 0) {
+                $prior = $connection->table('service_entitlement_grant_notification_bindings')
+                    ->where('service_entitlement_grant_item_id', (int) $item->id)
+                    ->lockForUpdate()
+                    ->first(['service_delivery_attempt_id']);
+                if ($prior !== null) {
+                    throw new DomainException('Initial Service entitlement grant notification already has delivery evidence.');
+                }
+            } else {
+                /** @var object{state:string,completed_at:?string,retry_after_seconds:int|string|null}|null $prior */
+                $prior = $connection->table('service_entitlement_grant_notification_bindings as binding')
+                    ->join('service_delivery_effects as effect', 'effect.service_delivery_attempt_id', '=', 'binding.service_delivery_attempt_id')
+                    ->where('binding.service_entitlement_grant_item_id', (int) $item->id)
+                    ->where('binding.retry_ordinal', $retryOrdinal - 1)
+                    ->lockForUpdate()
+                    ->first(['effect.state', 'effect.completed_at', 'effect.retry_after_seconds']);
+                if ($prior === null
+                    || $prior->state !== 'failed_final'
+                    || $prior->completed_at === null
+                    || $prior->retry_after_seconds !== null) {
+                    throw new DomainException('Service entitlement grant notification retry is not safely eligible.');
+                }
+            }
+
+            $this->assertServiceReadyForDelivery($connection, $service);
+            $attempt = $this->createAttempt(
+                $connection,
+                $service,
+                ServiceDeliveryPurpose::Notification,
+                $requestKeyHash,
+                $correlationId,
+                function (int $attemptId, string $timestamp) use (
+                    $connection,
+                    $item,
+                    $retryOrdinal,
+                    $presentationText,
+                    $presentationHash,
+                ): void {
+                    $this->setEntitlementGrantNotificationAuthority(
+                        $connection,
+                        (int) $item->id,
+                        $attemptId,
+                        $retryOrdinal,
+                        $presentationHash,
+                    );
+                    try {
+                        $connection->table('service_entitlement_grant_notification_bindings')->insert([
+                            'service_delivery_attempt_id' => $attemptId,
+                            'service_entitlement_grant_item_id' => (int) $item->id,
+                            'retry_ordinal' => $retryOrdinal,
+                            'presentation_text' => $presentationText,
+                            'presentation_hash' => $presentationHash,
+                            'created_at' => $timestamp,
+                        ]);
+                    } finally {
+                        $this->clearEntitlementGrantNotificationAuthority($connection);
                     }
                 },
             );
@@ -492,6 +652,29 @@ final readonly class ServiceDeliveryAttemptQueueService
         }
     }
 
+    /** @param DeliveryAttemptRow $attempt */
+    private function assertEntitlementGrantNotificationReplay(
+        Connection $connection,
+        object $attempt,
+        int $itemId,
+        int $retryOrdinal,
+        string $presentationHash,
+    ): void {
+        if ($attempt->purpose !== ServiceDeliveryPurpose::Notification->value) {
+            throw new DomainException('Service entitlement grant notification request identity conflicts with another delivery purpose.');
+        }
+        /** @var object{service_entitlement_grant_item_id:int|string,retry_ordinal:int|string,presentation_hash:string}|null $binding */
+        $binding = $connection->table('service_entitlement_grant_notification_bindings')
+            ->where('service_delivery_attempt_id', (int) $attempt->id)
+            ->first(['service_entitlement_grant_item_id', 'retry_ordinal', 'presentation_hash']);
+        if ($binding === null
+            || (int) $binding->service_entitlement_grant_item_id !== $itemId
+            || (int) $binding->retry_ordinal !== $retryOrdinal
+            || ! hash_equals($binding->presentation_hash, $presentationHash)) {
+            throw new DomainException('Service entitlement grant notification replay conflicts with durable delivery evidence.');
+        }
+    }
+
     private function insertNotificationEvent(
         Connection $connection,
         int $stateId,
@@ -628,6 +811,29 @@ final readonly class ServiceDeliveryAttemptQueueService
     private function timestamp(): string
     {
         return $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+    }
+
+    private function setEntitlementGrantNotificationAuthority(
+        Connection $connection,
+        int $itemId,
+        int $attemptId,
+        int $retryOrdinal,
+        string $presentationHash,
+    ): void {
+        $connection->statement('SET @app_service_entitlement_grant_notification_authority = ?', ['service_entitlement_grant_notification_v1']);
+        $connection->statement('SET @app_service_entitlement_grant_notification_item_id = ?', [$itemId]);
+        $connection->statement('SET @app_service_entitlement_grant_notification_attempt_id = ?', [$attemptId]);
+        $connection->statement('SET @app_service_entitlement_grant_notification_retry_ordinal = ?', [$retryOrdinal]);
+        $connection->statement('SET @app_service_entitlement_grant_notification_presentation_hash = ?', [$presentationHash]);
+    }
+
+    private function clearEntitlementGrantNotificationAuthority(Connection $connection): void
+    {
+        $connection->statement('SET @app_service_entitlement_grant_notification_authority = NULL');
+        $connection->statement('SET @app_service_entitlement_grant_notification_item_id = NULL');
+        $connection->statement('SET @app_service_entitlement_grant_notification_attempt_id = NULL');
+        $connection->statement('SET @app_service_entitlement_grant_notification_retry_ordinal = NULL');
+        $connection->statement('SET @app_service_entitlement_grant_notification_presentation_hash = NULL');
     }
 
     private function setQueueAuthority(

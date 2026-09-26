@@ -36,6 +36,7 @@ final readonly class ServiceEntitlementGrantBatchService
         private ServiceOperationalDatabaseCapability $databaseCapability,
         private ServiceOperationalAudit $audit,
         private ServiceEntitlementGrantQueueService $queue,
+        private ServiceEntitlementGrantNotificationService $notifications,
     ) {}
 
     /**
@@ -148,6 +149,7 @@ final readonly class ServiceEntitlementGrantBatchService
         $this->authorize($context);
         $this->assertBatchId($batchPublicId);
         $this->reconcile($batchPublicId, $context);
+        $this->notifications->retryFailedForBatch($batchPublicId);
 
         /** @var BatchRow|null $batch */
         $batch = $this->database->connection()->table('service_entitlement_grant_batches')
@@ -458,7 +460,6 @@ final readonly class ServiceEntitlementGrantBatchService
                         'attempt_count' => 0,
                         'provisioning_operation_id' => null,
                         'result_code' => null,
-                        'customer_notified_at' => null,
                         'created_at' => $timestamp,
                         'updated_at' => $timestamp,
                     ]);
