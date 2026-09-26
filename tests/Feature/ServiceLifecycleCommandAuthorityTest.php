@@ -254,14 +254,7 @@ SQL);
 
     public function test_customer_policy_and_verified_capability_are_rechecked_before_lifecycle_queueing(): void
     {
-        $policyScenario = $this->scenario('policy-revoked');
-        $offeringId = (int) DB::table('order_items')
-            ->where('id', (int) DB::table('service_subscriptions')->where('id', $policyScenario['service_id'])->value('order_item_id'))
-            ->value('plan_offering_id');
-        DB::table('plan_offering_operations')
-            ->where('plan_offering_id', $offeringId)
-            ->where('operation_code', 'suspend')
-            ->update(['customer_enabled' => false, 'updated_at' => now('UTC')]);
+        $policyScenario = $this->scenario('policy-revoked', customerSuspendEnabled: false);
 
         try {
             $this->commands()->suspend(
@@ -314,7 +307,7 @@ SQL);
     }
 
     /** @return array{service_id:int,service_public_id:string,user_id:int,adapter:ServiceMutationTestPanelAdapter} */
-    private function scenario(string $suffix): array
+    private function scenario(string $suffix, bool $customerSuspendEnabled = true): array
     {
         $settlement = $this->createPurchaseOrderSettlement('lifecycle-command-'.$suffix);
         $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
@@ -327,7 +320,7 @@ SQL);
         );
         $offeringId = (int) DB::table('order_items')->where('order_id', $order->orderId)->value('plan_offering_id');
         $userId = (int) DB::table('orders')->where('id', $order->orderId)->value('user_id');
-        $this->makeOfferingOperational($offeringId, $userId, $suffix);
+        $this->makeOfferingOperational($offeringId, $userId, $suffix, $customerSuspendEnabled);
 
         $adapter = new ServiceMutationTestPanelAdapter;
         $this->app->instance(
@@ -357,7 +350,7 @@ SQL);
         ];
     }
 
-    private function makeOfferingOperational(int $offeringId, int $userId, string $suffix): void
+    private function makeOfferingOperational(int $offeringId, int $userId, string $suffix, bool $customerSuspendEnabled): void
     {
         $now = $this->purchaseOrderTimestamp();
         $offering = DB::table('plan_offerings')->where('id', $offeringId)->first([
@@ -466,7 +459,7 @@ SQL);
             DB::table('plan_offering_operations')->insertOrIgnore([
                 'plan_offering_id' => $offeringId,
                 'operation_code' => $operationCode,
-                'customer_enabled' => true,
+                'customer_enabled' => $operationCode === 'suspend' ? $customerSuspendEnabled : true,
                 'administrator_enabled' => true,
                 'price_irr' => 0,
                 'discount_eligible' => false,

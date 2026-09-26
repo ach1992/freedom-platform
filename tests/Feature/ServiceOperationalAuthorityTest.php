@@ -22,6 +22,7 @@ use App\Modules\Catalog\Domain\PlanOfferingRouteType;
 use App\Modules\Catalog\Domain\PlanOfferingServerSelectionMode;
 use App\Modules\Catalog\Domain\PlanOfferingServiceMode;
 use App\Modules\Catalog\Domain\PlanOfferingTagMatchMode;
+use App\Modules\Catalog\Domain\ProductVisibility;
 use App\Modules\Orders\Application\PaidServiceMutationOrderOutboxPublisher;
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Orders\Application\QuotePricingInput;
@@ -2420,6 +2421,18 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 $ownerId,
             ),
         );
+        $catalog->setVisibility(
+            $offeringId,
+            (int) DB::table('plan_offerings')->where('id', $offeringId)->value('version'),
+            ProductVisibility::Visible,
+            new CatalogChangeContext(
+                'service-reconfiguration-visible-'.substr(hash('sha256', $suffix), 0, 24),
+                'service-reconfiguration-visible-correlation-'.substr(hash('sha256', $suffix), 0, 16),
+                'service_reconfiguration_test',
+                'Expose the verified Service reconfiguration test offering.',
+                $ownerId,
+            ),
+        );
         $alternateVersion = (int) DB::table('plan_offerings')->where('id', $alternateOfferingId)->value('version');
         $catalog->activate(
             $alternateOfferingId,
@@ -2429,6 +2442,18 @@ final class ServiceOperationalAuthorityTest extends TestCase
                 'service-reconfiguration-alt-activate-corr-'.substr(hash('sha256', $suffix), 0, 18),
                 'service_reconfiguration_test',
                 'Activate the verified alternate Service reconfiguration Plan Offering.',
+                $ownerId,
+            ),
+        );
+        $catalog->setVisibility(
+            $alternateOfferingId,
+            (int) DB::table('plan_offerings')->where('id', $alternateOfferingId)->value('version'),
+            ProductVisibility::Visible,
+            new CatalogChangeContext(
+                'service-reconfiguration-alt-visible-'.substr(hash('sha256', $suffix), 0, 20),
+                'service-reconfiguration-alt-visible-corr-'.substr(hash('sha256', $suffix), 0, 18),
+                'service_reconfiguration_test',
+                'Expose the verified alternate Service reconfiguration Plan Offering.',
                 $ownerId,
             ),
         );
