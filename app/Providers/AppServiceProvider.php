@@ -7,6 +7,7 @@ namespace App\Providers;
 use App\Modules\Catalog\Application\TelegramClientGuideCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerPurchaseCatalogService;
 use App\Modules\Catalog\Application\TelegramCustomerTrialCatalogService;
+use App\Modules\Customers\Application\Contracts\CustomerTierPurchaseMetricsSource;
 use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Customers\Application\TelegramAdministratorCustomerTargetDiscoveryService;
 use App\Modules\Customers\Application\TelegramAdministratorIdentitySearchSource;
@@ -24,6 +25,7 @@ use App\Modules\Orders\Application\TelegramSupportOwnedOrderProjectionService;
 use App\Modules\Payments\Application\AlternativePaymentReviewService;
 use App\Modules\Payments\Application\Contracts\AlternativePaymentProviderResolver;
 use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
+use App\Modules\Payments\Application\CustomerTierPurchaseMetricsSourceService;
 use App\Modules\Payments\Application\TelegramAdministratorPaymentSearchSource;
 use App\Modules\Payments\Application\TelegramCustomerPurchaseWalletPaymentService;
 use App\Modules\Payments\Application\TelegramSupportOwnedPaymentIntentProjectionService;
@@ -108,6 +110,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);
+        $this->app->bind(CustomerTierPurchaseMetricsSource::class, CustomerTierPurchaseMetricsSourceService::class);
         $this->app->bind(TelegramAgentPurchaseCount::class, AgentPurchaseCountService::class);
         $this->app->bind(TelegramAgentReport::class, AgentReportService::class);
         $this->app->bind(TelegramAgentBulkPurchase::class, TelegramAgentBulkPurchaseService::class);
