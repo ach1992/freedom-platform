@@ -635,9 +635,7 @@ final readonly class SupportTicketService
 
         $connection->table('support_tickets')->where('id', $ticketId)->update($updates);
 
-        if (in_array($from, [SupportTicketState::New, SupportTicketState::AwaitingSupport], true)
-            && ! in_array($to, [SupportTicketState::New, SupportTicketState::AwaitingSupport], true)
-        ) {
+        if (in_array($from, [SupportTicketState::New, SupportTicketState::AwaitingSupport], true)) {
             $trackingNumber = $connection->table('support_tickets')
                 ->where('id', $ticketId)
                 ->value('tracking_number');
