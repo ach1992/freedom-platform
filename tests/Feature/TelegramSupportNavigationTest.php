@@ -10,6 +10,7 @@ use App\Modules\Support\Application\SupportCustomerReplyNotification;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Application\SupportTicketSupportService;
+use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
 use App\Modules\Telegram\Application\ConfidentialTelegramPresentation;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
@@ -993,7 +994,9 @@ final class TelegramSupportNavigationTest extends TestCase
             'resolved_at' => null,
         ]);
 
-        $clock->advance('+61 seconds');
+        $clock->advance('+30 seconds');
+        $tickets->setPriority($ticket->id, SupportTicketPriority::High);
+        $clock->advance('+31 seconds');
         $alerts = $this->app->make(SupportAlertService::class);
         self::assertSame(1, $alerts->scanSla(10));
         self::assertSame(1, $alerts->scanSla(10));
