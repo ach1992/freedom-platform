@@ -55,31 +55,33 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
             $encodedContext,
         ): void {
             $now = $this->clock->now()->format('Y-m-d H:i:s.u');
+            $inserted = $connection->table('alerts')->insertOrIgnore([
+                'id' => (string) Str::uuid(),
+                'severity' => $severity,
+                'event_name' => $eventName,
+                'deduplication_key' => $deduplicationKey,
+                'correlation_id' => $correlationId,
+                'safe_context' => $encodedContext,
+                'occurrence_count' => 1,
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'acknowledged_at' => null,
+                'resolved_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            if ($inserted === 1) {
+                return;
+            }
+
             /** @var object{id:string,occurrence_count:int|string,acknowledged_at:?string,resolved_at:?string}|null $existing */
             $existing = $connection->table('alerts')
                 ->where('event_name', $eventName)
                 ->where('deduplication_key', $deduplicationKey)
                 ->lockForUpdate()
                 ->first(['id', 'occurrence_count', 'acknowledged_at', 'resolved_at']);
-
             if ($existing === null) {
-                $connection->table('alerts')->insert([
-                    'id' => (string) Str::uuid(),
-                    'severity' => $severity,
-                    'event_name' => $eventName,
-                    'deduplication_key' => $deduplicationKey,
-                    'correlation_id' => $correlationId,
-                    'safe_context' => $encodedContext,
-                    'occurrence_count' => 1,
-                    'first_seen_at' => $now,
-                    'last_seen_at' => $now,
-                    'acknowledged_at' => null,
-                    'resolved_at' => null,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]);
-
-                return;
+                throw new InvalidArgumentException('Operational alert deduplication conflict could not be reconciled.');
             }
 
             $reopened = $existing->resolved_at !== null;
@@ -116,7 +118,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
 
     private function assertSeverity(string $severity): void
     {
-        if (! in_array($severity, ['info', 'warning', 'error', 'critical'], true)) {
+        if (! in_array($severity, ['info', 'warning', 'critical', 'security'], true)) {
             throw new InvalidArgumentException('Operational alert severity is invalid.');
         }
     }
