@@ -19,6 +19,30 @@ use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 
+/**
+ * @phpstan-type SupportDeliveryRow object{
+ *     public_id:string,
+ *     request_key_hash:string,
+ *     state:string,
+ *     result_code:?string,
+ *     correlation_id:string,
+ *     action:string,
+ *     bot_id:string,
+ *     recipient_chat_id:int|string,
+ *     target_message_id:int|string|null,
+ *     presentation_text:?string,
+ *     telegram_outbox_event_id:string,
+ *     telegram_outbox_event_key:string,
+ *     telegram_outbox_event_type:string,
+ *     telegram_outbox_contract_version:int|string,
+ *     telegram_outbox_aggregate_type:string,
+ *     telegram_outbox_aggregate_id:string,
+ *     telegram_outbox_payload:string,
+ *     telegram_outbox_correlation_id:string,
+ *     outbox_state:string,
+ *     review_reason:?string
+ * }
+ */
 final readonly class TelegramSupportCustomerDeliveryAlertScanner implements SupportCustomerDeliveryAlertScanner
 {
     public function __construct(
@@ -304,6 +328,7 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         ];
     }
 
+    /** @param SupportDeliveryRow $row */
     private function isExactSupportTelegramDelivery(
         object $row,
         SupportTicketCustomerNotificationSnapshot $notification,
