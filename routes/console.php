@@ -145,3 +145,14 @@ Schedule::command('telegram:process-broadcasts', [
     ->withoutOverlapping(10)
     ->onOneServer()
     ->runInBackground();
+
+
+Schedule::command('support:alerts:scan', [
+    '--limit' => 100,
+    '--json' => true,
+])
+    ->name('support.alerts.scan')
+    ->everyMinute()
+    // The scan is bounded and idempotent; keep the scheduler lock bounded after abnormal termination.
+    ->withoutOverlapping(10)
+    ->onOneServer();
