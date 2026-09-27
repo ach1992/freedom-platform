@@ -15,10 +15,6 @@ return new class extends Migration
 
     private const ROLLBACK_COMMENT = TelegramRateRetryRetentionLifecycleFence::ROLLBACK_COMMENT;
 
-    private const ACTIVE_GATE_COLUMN = 'runtime_write_gate';
-
-    private const ROLLBACK_GATE_COLUMN = 'rollback_fence';
-
     public function up(): void
     {
         $this->ensureLifecycleFence();
