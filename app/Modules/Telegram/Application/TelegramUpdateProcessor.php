@@ -52,11 +52,15 @@ final readonly class TelegramUpdateProcessor
 
             $userId = $this->identitySynchronizer->synchronize($botId, $updateId, $payload);
             if ($userId !== null) {
-                $rateLimit = $this->rateLimiter->consumeInteraction($userId);
-                if (! $rateLimit->allowed) {
-                    $this->completeAndMinimize($botId, $updateId);
+                if ($record['interaction_rate_authorized_at'] === null) {
+                    $rateLimit = $this->rateLimiter->consumeInteraction($userId);
+                    if (! $rateLimit->allowed) {
+                        $this->completeAndMinimize($botId, $updateId);
 
-                    return;
+                        return;
+                    }
+
+                    $this->authorizeInteractionRate($botId, $updateId);
                 }
 
                 $this->referralAttribution->bindFirstStart($botId, $updateId, $userId);
@@ -86,7 +90,7 @@ final readonly class TelegramUpdateProcessor
         }
     }
 
-    /** @return array{payload_hash: string, payload_ciphertext: string, request_ip_hash: ?string}|null */
+    /** @return array{payload_hash: string, payload_ciphertext: string, request_ip_hash: ?string, interaction_rate_authorized_at: ?string}|null */
     private function claim(string $botId, int $updateId): ?array
     {
         return $this->database->connection()->transaction(function () use ($botId, $updateId): ?array {
@@ -98,6 +102,7 @@ final readonly class TelegramUpdateProcessor
                     'payload_hash',
                     'payload_ciphertext',
                     'request_ip_hash',
+                    'interaction_rate_authorized_at',
                     'state',
                     'processing_started_at',
                 ]);
@@ -141,12 +146,37 @@ final readonly class TelegramUpdateProcessor
                 throw new RuntimeException('Telegram request IP abuse-control scope is invalid.');
             }
 
+            $rateAuthorizedAt = $row->interaction_rate_authorized_at;
+            if ($rateAuthorizedAt !== null
+                && (! is_string($rateAuthorizedAt) || strtotime($rateAuthorizedAt) === false)) {
+                throw new RuntimeException('Telegram interaction rate authorization evidence is invalid.');
+            }
+
             return [
                 'payload_hash' => (string) $row->payload_hash,
                 'payload_ciphertext' => $row->payload_ciphertext,
                 'request_ip_hash' => $requestIpHash,
+                'interaction_rate_authorized_at' => $rateAuthorizedAt,
             ];
         });
+    }
+
+    private function authorizeInteractionRate(string $botId, int $updateId): void
+    {
+        $now = now('UTC')->format('Y-m-d H:i:s.u');
+        $updated = $this->database->connection()->table('processed_telegram_updates')
+            ->where('bot_id', $botId)
+            ->where('update_id', $updateId)
+            ->where('state', 'processing')
+            ->whereNull('interaction_rate_authorized_at')
+            ->update([
+                'interaction_rate_authorized_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+        if ($updated !== 1) {
+            throw new RuntimeException('Telegram interaction rate authorization lost processing authority.');
+        }
     }
 
     private function completeAndMinimize(string $botId, int $updateId): void
@@ -160,6 +190,7 @@ final readonly class TelegramUpdateProcessor
                 'state' => 'processed',
                 'payload_ciphertext' => null,
                 'payload_size' => null,
+                'interaction_rate_authorized_at' => null,
                 'processing_started_at' => null,
                 'processed_at' => $now,
                 'failed_at' => null,

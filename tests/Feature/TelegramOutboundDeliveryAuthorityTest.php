@@ -479,6 +479,20 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $handler = $this->handler($executor);
         $dispatcher = $this->dispatcher();
 
+        try {
+            DB::table('telegram_delivery_retry_directives')->insert([
+                'operation_public_id' => $created->publicId,
+                'provider_attempt' => 1,
+                'retry_after_seconds' => 73,
+                'observed_at' => '2026-08-25 12:00:00.000000',
+                'retry_not_before' => '2026-08-25 12:01:13.000000',
+                'created_at' => '2026-08-25 12:00:00.000000',
+            ]);
+            self::fail('Direct SQL must not forge Telegram provider retry evidence.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('insert authority is invalid', $exception->getMessage());
+        }
+
         $dispatcher->dispatchOne($handler);
 
         $this->assertDatabaseHas('telegram_delivery_operations', [

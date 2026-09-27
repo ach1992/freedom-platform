@@ -589,6 +589,64 @@ SQL);
         self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $stored->payload_hash);
         self::assertNull($stored->payload_ciphertext);
         self::assertNull($stored->payload_size);
+        self::assertNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3080)
+            ->value('interaction_rate_authorized_at'));
+    }
+
+    public function test_allowed_rate_decision_is_reused_across_retry_but_redis_failure_would_not_be_bypassed(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram rate authorization replay verification requires MariaDB/MySQL.');
+        }
+
+        $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::allowed());
+        $this->app->instance(TelegramSharedRateLimiter::class, $limiter);
+        $this->accept($this->payload(3081, 9181, 'rate_retry_user', 'hello'));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_update_test_fail_processed_3081
+BEFORE UPDATE ON processed_telegram_updates
+FOR EACH ROW
+BEGIN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 3081 AND NEW.state = 'processed' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-rate-post-dispatch-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3081);
+                self::fail('The simulated completion failure must leave the Update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_update_test_fail_processed_3081');
+        }
+
+        self::assertCount(1, $limiter->interactionUserIds);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 3081,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+        self::assertNotNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3081)
+            ->value('interaction_rate_authorized_at'));
+
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3081);
+
+        self::assertCount(1, $limiter->interactionUserIds);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 3081,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        self::assertNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3081)
+            ->value('interaction_rate_authorized_at'));
+        self::assertNull(DB::table('processed_telegram_updates')->where('update_id', 3081)->value('payload_ciphertext'));
     }
 
     public function test_unknown_update_is_processed_without_creating_identity(): void

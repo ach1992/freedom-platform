@@ -700,21 +700,10 @@ final readonly class TelegramDeliveryOperationExecutor
             self::EFFECT_AUTHORITY,
             (string) $row->public_id,
             $version,
-            fn (): int => $connection->table('telegram_delivery_retry_directives')->insertOrIgnore($values),
+            fn (): bool => $connection->table('telegram_delivery_retry_directives')->insert($values),
         );
-        if ($inserted === 1) {
-            return;
-        }
-
-        $existing = $connection->table('telegram_delivery_retry_directives')
-            ->where('operation_public_id', (string) $row->public_id)
-            ->where('provider_attempt', $attempt)
-            ->first(['retry_after_seconds', 'observed_at', 'retry_not_before']);
-        if ($existing === null
-            || (int) $existing->retry_after_seconds !== $retryAfterSeconds
-            || ! hash_equals((string) $existing->observed_at, $values['observed_at'])
-            || ! hash_equals((string) $existing->retry_not_before, $values['retry_not_before'])) {
-            throw new RuntimeException('Telegram provider retry directive replay does not match durable evidence.');
+        if (! $inserted) {
+            throw new RuntimeException('Telegram provider retry directive was not durably inserted.');
         }
     }
 

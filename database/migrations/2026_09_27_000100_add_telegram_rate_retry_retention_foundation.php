@@ -11,6 +11,8 @@ return new class extends Migration
 {
     public function up(): void
     {
+        $this->ensureInteractionRateAuthorizationColumn();
+
         if (! Schema::hasTable('telegram_delivery_retry_directives')) {
             DB::statement(<<<'SQL'
 CREATE TABLE telegram_delivery_retry_directives (
@@ -96,11 +98,48 @@ SQL);
             && DB::table('telegram_delivery_retry_directives')->exists()) {
             throw new RuntimeException('Telegram provider retry evidence exists; rollback is refused.');
         }
+        if (Schema::hasColumn('processed_telegram_updates', 'interaction_rate_authorized_at')
+            && DB::table('processed_telegram_updates')->whereNotNull('interaction_rate_authorized_at')->exists()) {
+            throw new RuntimeException('Telegram interaction rate authorization evidence exists; rollback is refused.');
+        }
 
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_retry_directives_delete_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_retry_directives_update_guard');
         DB::unprepared('DROP TRIGGER IF EXISTS telegram_delivery_retry_directives_insert_guard');
         Schema::dropIfExists('telegram_delivery_retry_directives');
+
+        if (Schema::hasColumn('processed_telegram_updates', 'interaction_rate_authorized_at')) {
+            DB::statement('ALTER TABLE processed_telegram_updates DROP COLUMN interaction_rate_authorized_at');
+        }
+    }
+
+    private function ensureInteractionRateAuthorizationColumn(): void
+    {
+        if (! Schema::hasColumn('processed_telegram_updates', 'interaction_rate_authorized_at')) {
+            DB::statement(<<<'SQL'
+ALTER TABLE processed_telegram_updates
+    ADD COLUMN interaction_rate_authorized_at DATETIME(6) NULL AFTER request_ip_hash
+SQL);
+
+            return;
+        }
+
+        $connection = DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
+            throw new RuntimeException('Telegram interaction rate authorization requires MariaDB/MySQL.');
+        }
+
+        $column = $connection->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $connection->getDatabaseName())
+            ->where('TABLE_NAME', 'processed_telegram_updates')
+            ->where('COLUMN_NAME', 'interaction_rate_authorized_at')
+            ->first(['DATA_TYPE', 'DATETIME_PRECISION', 'IS_NULLABLE']);
+        if ($column === null
+            || strtolower((string) $column->DATA_TYPE) !== 'datetime'
+            || (int) $column->DATETIME_PRECISION !== 6
+            || (string) $column->IS_NULLABLE !== 'YES') {
+            throw new RuntimeException('Telegram interaction rate authorization column exists with an unexpected shape.');
+        }
     }
 
     private function tableMatchesExpected(): bool

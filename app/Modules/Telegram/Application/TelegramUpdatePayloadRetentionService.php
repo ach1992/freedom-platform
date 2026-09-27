@@ -65,6 +65,7 @@ final readonly class TelegramUpdatePayloadRetentionService
                         'state' => 'failed_terminal',
                         'payload_ciphertext' => null,
                         'payload_size' => null,
+                        'interaction_rate_authorized_at' => null,
                         'processing_started_at' => null,
                         'updated_at' => $now->format('Y-m-d H:i:s.u'),
                     ]);
