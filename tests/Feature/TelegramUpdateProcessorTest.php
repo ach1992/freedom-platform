@@ -574,7 +574,7 @@ SQL);
         self::assertGreaterThan(0, $userId);
         self::assertSame([$userId], $limiter->interactionUserIds);
         self::assertSame(0, DB::table('telegram_interaction_sessions')->where('user_id', $userId)->count());
-        self::assertSame(0, DB::table('telegram_start_attributions')->where('user_id', $userId)->count());
+        self::assertSame(1, DB::table('telegram_start_attributions')->where('user_id', $userId)->count());
 
         $stored = DB::table('processed_telegram_updates')->where('update_id', 3080)->first([
             'state',

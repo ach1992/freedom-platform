@@ -52,6 +52,8 @@ final readonly class TelegramUpdateProcessor
 
             $userId = $this->identitySynchronizer->synchronize($botId, $updateId, $payload);
             if ($userId !== null) {
+                $this->referralAttribution->bindFirstStart($botId, $updateId, $userId);
+
                 if ($record['interaction_rate_authorized_at'] === null) {
                     $rateLimit = $this->rateLimiter->consumeInteraction($userId);
                     if (! $rateLimit->allowed) {
@@ -62,8 +64,6 @@ final readonly class TelegramUpdateProcessor
 
                     $this->authorizeInteractionRate($botId, $updateId);
                 }
-
-                $this->referralAttribution->bindFirstStart($botId, $updateId, $userId);
             }
             $this->interactionDispatcher->dispatch(
                 $botId,
