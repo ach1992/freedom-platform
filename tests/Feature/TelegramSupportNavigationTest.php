@@ -42,13 +42,20 @@ use Tests\TestCase;
 
 final readonly class SupportAlertTelegramMutationTransport implements TelegramMutationTransport
 {
-    public function __construct(private TelegramMutationOutcome $outcome) {}
+    public function __construct(
+        private TelegramMutationOutcome $outcome,
+        private ?int $retryAfterSeconds = null,
+    ) {}
 
     public function mutate(TelegramMutationRequest $request): TelegramMutationResult
     {
         unset($request);
 
-        return new TelegramMutationResult($this->outcome, 'support_alert_test_result');
+        return new TelegramMutationResult(
+            $this->outcome,
+            'support_alert_test_result',
+            retryAfterSeconds: $this->retryAfterSeconds,
+        );
     }
 }
 
@@ -1030,6 +1037,9 @@ final class TelegramSupportNavigationTest extends TestCase
 
     public function test_material_support_delivery_failure_alerts_only_after_canonical_retry_boundary(): void
     {
+        $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 19:00:00', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
+
         config([
             'support.alerts.new_ticket.enabled' => false,
             'support.alerts.sla_delay.enabled' => false,
@@ -1108,26 +1118,43 @@ final class TelegramSupportNavigationTest extends TestCase
 
         $this->app->instance(
             TelegramMutationTransport::class,
-            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::DefinitiveNoEffectRetryable),
+            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::RetryAfter, 45),
         );
         $deliveryHandler = $this->app->make(TelegramConfidentialDeliveryOutboxHandler::class);
         self::assertSame(OutboxDispatchOutcome::RetryableFailure, $deliveryHandler->handle($telegramMessage));
-        self::assertSame('retryable', DB::table('telegram_delivery_operations')
+        $retryable = DB::table('telegram_delivery_operations')
             ->where('public_id', $operation->public_id)
-            ->value('state'));
+            ->first(['state', 'provider_attempts']);
+        self::assertNotNull($retryable);
+        self::assertSame('retryable', (string) $retryable->state);
+        self::assertSame(1, (int) $retryable->provider_attempts);
+        $this->assertDatabaseHas('telegram_delivery_retry_directives', [
+            'operation_public_id' => (string) $operation->public_id,
+            'provider_attempt' => 1,
+            'retry_after_seconds' => 45,
+        ]);
         self::assertSame(0, $this->app->make(SupportCustomerDeliveryAlertScanner::class)->scan(10));
         self::assertSame(0, DB::table('alerts')
             ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
             ->count());
 
+        $clock->advance('+46 seconds');
         $this->app->instance(
             TelegramMutationTransport::class,
-            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::DefinitiveFailure),
+            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::UncertainResult),
         );
-        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $deliveryHandler->handle($telegramMessage));
-        self::assertSame('failed_final', DB::table('telegram_delivery_operations')
+        self::assertSame(OutboxDispatchOutcome::UncertainResult, $deliveryHandler->handle($telegramMessage));
+        $uncertain = DB::table('telegram_delivery_operations')
             ->where('public_id', $operation->public_id)
-            ->value('state'));
+            ->first(['state', 'provider_attempts']);
+        self::assertNotNull($uncertain);
+        self::assertSame('uncertain', (string) $uncertain->state);
+        self::assertSame(2, (int) $uncertain->provider_attempts);
+
+        self::assertSame(OutboxDispatchOutcome::UncertainResult, $deliveryHandler->handle($telegramMessage));
+        self::assertSame(2, (int) DB::table('telegram_delivery_operations')
+            ->where('public_id', $operation->public_id)
+            ->value('provider_attempts'));
 
         $scanner = $this->app->make(SupportCustomerDeliveryAlertScanner::class);
         self::assertSame(1, $scanner->scan(10));
