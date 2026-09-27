@@ -51,6 +51,7 @@ use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
 use App\Modules\Telegram\Application\TelegramClientGuideNavigationHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramConfidentialDeliveryQueue;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationAudit;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationExecutor;
