@@ -72,6 +72,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             'telegram.processing_lease_seconds' => 120,
             'telegram.api_base_url' => 'https://api.telegram.org',
             'telegram.api_timeout_seconds' => 15,
+            'telegram.rate_limits.prefix' => 'test:telegram-broadcast-rate:'.bin2hex(random_bytes(8)).':',
         ]);
     }
 
