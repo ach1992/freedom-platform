@@ -17,6 +17,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
+use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionPayload;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
@@ -28,6 +29,7 @@ use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramSupportCustomerReplyOutboxHandler;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
+use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
@@ -1264,9 +1266,28 @@ final class TelegramSupportNavigationTest extends TestCase
 
         $operation = DB::table('telegram_delivery_operations')
             ->where('correlation_id', SupportCustomerReplyNotification::correlationId($reply->messageId))
-            ->first(['public_id', 'outbox_event_id', 'state']);
+            ->first([
+                'public_id',
+                'outbox_event_id',
+                'state',
+                'request_key_hash',
+                'recipient_chat_id',
+                'presentation_text',
+            ]);
         self::assertNotNull($operation);
         self::assertSame('prepared', (string) $operation->state);
+        self::assertSame(
+            TelegramSupportCustomerReplyDeliveryIdentity::requestKeyHash(
+                (string) $supportEvent->id,
+                $reply->messageId,
+            ),
+            (string) $operation->request_key_hash,
+        );
+        self::assertSame($customerTelegramId, (int) $operation->recipient_chat_id);
+        self::assertSame(
+            '[confidential-telegram-presentation:v1]',
+            (string) $operation->presentation_text,
+        );
         $telegramEvent = DB::table('outbox_messages')->where('id', $operation->outbox_event_id)->first();
         self::assertNotNull($telegramEvent);
         $telegramPayload = json_decode((string) $telegramEvent->payload, true, 32, JSON_THROW_ON_ERROR);
@@ -1332,6 +1353,100 @@ final class TelegramSupportNavigationTest extends TestCase
         self::assertNotNull($alert);
         self::assertSame(1, (int) $alert->occurrence_count);
         self::assertStringNotContainsString('CUSTOMER-DELIVERY-SECRET', (string) $alert->safe_context);
+    }
+
+    public function test_unrelated_confidential_telegram_failure_with_support_bound_request_identity_is_not_classified_as_support_failure(): void
+    {
+        $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 19:30:00', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
+        config([
+            'support.alerts.new_ticket.enabled' => false,
+            'support.alerts.sla_delay.enabled' => false,
+            'support.alerts.delivery_failure.enabled' => true,
+        ]);
+
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $customerTelegramId = 9852;
+        $staffTelegramId = 9853;
+        $this->accept($this->payload(8520, $customerTelegramId, 'support_delivery_origin_customer', 'fa', '/start'));
+        $processor->process('123456789', 8520);
+        $customer = $this->account($customerTelegramId);
+        $this->accept($this->payload(8521, $staffTelegramId, 'support_delivery_origin_staff', 'en', '/start'));
+        $processor->process('123456789', 8521);
+        $staff = $this->account($staffTelegramId);
+
+        $tickets = $this->app->make(SupportTicketService::class);
+        $ticket = $tickets->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Delivery provenance',
+            'Only the exact Support handoff recipient may be classified as a Support delivery failure.',
+            'telegram-support-delivery-origin:create',
+        ));
+        $reply = $tickets->addSupportMessage(
+            $ticket->id,
+            $staff['user_id'],
+            'Support-origin-bound reply',
+            'telegram-support-delivery-origin:reply',
+            false,
+        );
+
+        $supportEvent = DB::table('outbox_messages')
+            ->where('event_key', SupportCustomerReplyNotification::eventKey($reply->messageId))
+            ->first(['id']);
+        self::assertNotNull($supportEvent);
+
+        $generic = ConfidentialTelegramPresentationTestFactory::queue(
+            $this->app->make(TelegramDeliveryQueueService::class),
+            TelegramDeliveryAction::Send,
+            $staffTelegramId,
+            null,
+            ConfidentialTelegramPresentationTestFactory::plainText('Unrelated confidential Telegram delivery'),
+            TelegramSupportCustomerReplyDeliveryIdentity::requestKey(
+                (string) $supportEvent->id,
+                $reply->messageId,
+            ),
+            SupportCustomerReplyNotification::correlationId($reply->messageId),
+        );
+
+        $telegramEvent = DB::table('outbox_messages')
+            ->where('id', $generic->outboxEventId)
+            ->first();
+        self::assertNotNull($telegramEvent);
+        $telegramPayload = json_decode((string) $telegramEvent->payload, true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($telegramPayload);
+        $telegramMessage = new OutboxMessage(
+            (string) $telegramEvent->id,
+            (string) $telegramEvent->event_key,
+            (string) $telegramEvent->event_type,
+            (string) $telegramEvent->aggregate_type,
+            (string) $telegramEvent->aggregate_id,
+            $telegramPayload,
+            (string) $telegramEvent->correlation_id,
+            1,
+            (int) $telegramEvent->contract_version,
+        );
+
+        $this->app->instance(
+            TelegramMutationTransport::class,
+            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::UncertainResult),
+        );
+        self::assertSame(
+            OutboxDispatchOutcome::UncertainResult,
+            $this->app->make(TelegramConfidentialDeliveryOutboxHandler::class)->handle($telegramMessage),
+        );
+        self::assertSame(
+            'uncertain',
+            DB::table('telegram_delivery_operations')
+                ->where('public_id', $generic->publicId)
+                ->value('state'),
+        );
+
+        $scanner = $this->app->make(SupportCustomerDeliveryAlertScanner::class);
+        self::assertSame(0, $scanner->scan(10));
+        self::assertSame(0, DB::table('alerts')
+            ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
+            ->count());
     }
 
     public function test_support_session_timeout_uses_shared_expiry_authority_without_ticket_effect(): void
