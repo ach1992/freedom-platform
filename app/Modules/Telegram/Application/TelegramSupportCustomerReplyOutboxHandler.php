@@ -12,6 +12,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxEventHandler;
 use App\Shared\Application\OutboxMessage;
+use Closure;
 use DomainException;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
@@ -24,8 +25,8 @@ final readonly class TelegramSupportCustomerReplyOutboxHandler implements Outbox
         private SupportTicketService $support,
         private LocalizationResolver $localization,
         private ConfidentialTelegramPresentationFactory $presentations,
-        private TelegramConfidentialDeliveryQueue $delivery,
-        private TelegramDeliveryRuntime $runtime,
+        private Closure $deliveryResolver,
+        private Closure $runtimeResolver,
     ) {}
 
     public function eventType(): string
@@ -63,7 +64,7 @@ final readonly class TelegramSupportCustomerReplyOutboxHandler implements Outbox
             $telegramUserId = $this->recipientTelegramUserId($notification);
             $presentation = $this->presentation($notification);
 
-            $this->delivery->send(
+            $this->delivery()->send(
                 $telegramUserId,
                 $presentation,
                 'tg-support-customer-reply:'.$notification->messageId,
@@ -81,7 +82,7 @@ final readonly class TelegramSupportCustomerReplyOutboxHandler implements Outbox
     private function recipientTelegramUserId(SupportTicketCustomerNotificationSnapshot $notification): int
     {
         $value = $this->database->connection()->table('telegram_accounts')
-            ->where('bot_id', $this->runtime->botId())
+            ->where('bot_id', $this->runtime()->botId())
             ->where('user_id', $notification->requesterUserId)
             ->where('is_bot', 0)
             ->value('telegram_user_id');
@@ -154,6 +155,26 @@ final readonly class TelegramSupportCustomerReplyOutboxHandler implements Outbox
         }
 
         return $text;
+    }
+
+    private function delivery(): TelegramConfidentialDeliveryQueue
+    {
+        $delivery = ($this->deliveryResolver)();
+        if (! $delivery instanceof TelegramConfidentialDeliveryQueue) {
+            throw new RuntimeException('Support customer Telegram delivery resolver returned an invalid instance.');
+        }
+
+        return $delivery;
+    }
+
+    private function runtime(): TelegramDeliveryRuntime
+    {
+        $runtime = ($this->runtimeResolver)();
+        if (! $runtime instanceof TelegramDeliveryRuntime) {
+            throw new RuntimeException('Support customer Telegram runtime resolver returned an invalid instance.');
+        }
+
+        return $runtime;
     }
 
     private function positiveInt(mixed $value, string $label): int
