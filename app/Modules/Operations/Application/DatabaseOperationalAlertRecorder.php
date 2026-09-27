@@ -32,7 +32,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
     ) {}
 
     /**
-     * @param array<string, bool|float|int|string|null> $safeContext
+     * @param  array<string, bool|float|int|string|null>  $safeContext
      */
     public function raise(
         string $severity,
@@ -146,7 +146,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
     }
 
     /**
-     * @param array<string, bool|float|int|string|null> $safeContext
+     * @param  array<string, bool|float|int|string|null>  $safeContext
      *
      * @throws JsonException
      */
