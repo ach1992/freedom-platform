@@ -7,7 +7,7 @@ namespace App\Shared\Application;
 interface OperationalAlertRecorder
 {
     /**
-     * @param array<string, bool|float|int|string|null> $safeContext
+     * @param  array<string, bool|float|int|string|null>  $safeContext
      */
     public function raise(
         string $severity,
