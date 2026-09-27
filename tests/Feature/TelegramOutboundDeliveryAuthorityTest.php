@@ -683,9 +683,14 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             self::assertSame(0, DB::table('telegram_delivery_retry_directives')
                 ->where('operation_public_id', $created->publicId)
                 ->count());
-            self::assertSame('sending', DB::table('telegram_delivery_operations')
+            self::assertSame('uncertain', DB::table('telegram_delivery_operations')
                 ->where('public_id', $created->publicId)
                 ->value('state'));
+            $this->assertDatabaseHas('outbox_messages', [
+                'id' => $created->outboxEventId,
+                'dispatch_state' => 'review_required',
+                'review_reason' => 'uncertain_result',
+            ]);
         } finally {
             $migration->up();
         }
