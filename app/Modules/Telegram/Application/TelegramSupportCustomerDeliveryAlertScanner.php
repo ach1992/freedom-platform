@@ -275,8 +275,16 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
                 'aggregate_id',
                 'payload',
                 'correlation_id',
+                'dispatch_state',
+                'processed_at',
             ]);
         if ($row === null) {
+            return null;
+        }
+
+        if ((string) $row->dispatch_state !== 'processed'
+            || $row->processed_at === null
+        ) {
             return null;
         }
 
