@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Support\Application\SupportAlertService;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Domain\SupportTicketPriority;
@@ -42,7 +43,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $firstUser = $this->user();
         $secondUser = $this->user();
 
@@ -87,7 +88,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $user = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest($user, 'other', 'Strict replay', 'Initial body', 'create:strict'));
 
@@ -108,7 +109,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $customer = $this->user();
         $assignee = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest($customer, 'other', 'Triage', 'Needs review', 'create:triage'));
@@ -126,7 +127,7 @@ final class SupportTicketFoundationTest extends TestCase
         $this->seed(SupportTicketCategorySeeder::class);
         $closedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $clock = new MutableSupportClock($closedAt);
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $user = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest($user, 'other', 'Reopen', 'Need help', 'create:reopen'));
         $expectedReopenUntil = $closedAt->modify('+72 hours')->format('Y-m-d H:i:s.u');
@@ -173,7 +174,7 @@ final class SupportTicketFoundationTest extends TestCase
         $closedAt = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $expectedReopenUntil = $closedAt->modify('+24 hours')->format('Y-m-d H:i:s.u');
         $clock = new MutableSupportClock($closedAt);
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $customer = $this->user();
         $support = $this->user();
 
@@ -230,7 +231,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $customer = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest(
             $customer,
@@ -257,7 +258,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $user = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest($user, 'other', 'Immutable', 'Original body', 'create:immutable'));
 
@@ -283,7 +284,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $customer = $this->user();
         $support = $this->user();
 
@@ -356,7 +357,7 @@ final class SupportTicketFoundationTest extends TestCase
     {
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $customer = $this->user();
         $support = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest(
@@ -427,7 +428,7 @@ final class SupportTicketFoundationTest extends TestCase
 
         $this->seed(SupportTicketCategorySeeder::class);
         $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $clock);
+        $service = $this->supportTicketService($clock);
         $customer = $this->user();
         $support = $this->user();
         $ticket = $service->create(new SupportTicketCreateRequest(
@@ -456,8 +457,7 @@ final class SupportTicketFoundationTest extends TestCase
                         usleep(1000);
                     }
                     DB::reconnect();
-                    $childService = new SupportTicketService(
-                        $this->app->make(DatabaseManager::class),
+                    $childService = $this->supportTicketService(
                         new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:01:00+00:00')),
                     );
                     $receipt = $childService->replyAsCustomer(
@@ -536,4 +536,15 @@ final class MutableSupportClock implements Clock
     {
         $this->value = $value;
     }
+
+    private function supportTicketService(Clock $clock): SupportTicketService
+    {
+        return new SupportTicketService(
+            $this->app->make(DatabaseManager::class),
+            $clock,
+            $this->app->make(OutboxPublisher::class),
+            $this->app->make(SupportAlertService::class),
+        );
+    }
+
 }
