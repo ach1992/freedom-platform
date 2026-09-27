@@ -9,6 +9,7 @@ require_once __DIR__.'/PurchaseOrderTestSupport.php';
 
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
+use App\Modules\Support\Application\SupportAlertService;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketRoutingService;
 use App\Modules\Support\Application\SupportTicketSearchField;
@@ -22,6 +23,8 @@ use Database\Seeders\SupportTicketAccessFoundationSeeder;
 use Database\Seeders\SupportTicketCategorySeeder;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -51,7 +54,7 @@ final class SupportTicketRoutingDiscoveryTest extends TestCase
     public function test_authorized_exact_search_covers_ticket_user_order_payment_and_service_without_free_form_surface(): void
     {
         $references = $this->referenceBundle('support-routing-search');
-        $tickets = new SupportTicketService($this->app->make(DatabaseManager::class), $this->purchaseOrderClock);
+        $tickets = $this->supportTicketService($this->purchaseOrderClock);
         $ticket = $tickets->create(new SupportTicketCreateRequest(
             $references['user_id'],
             'technical_service',
@@ -259,4 +262,15 @@ final class SupportTicketRoutingDiscoveryTest extends TestCase
 
         return $userId;
     }
+
+    private function supportTicketService(Clock $clock): SupportTicketService
+    {
+        return new SupportTicketService(
+            $this->app->make(DatabaseManager::class),
+            $clock,
+            $this->app->make(OutboxPublisher::class),
+            $this->app->make(SupportAlertService::class),
+        );
+    }
+
 }
