@@ -6,6 +6,7 @@ namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Support\Application\SupportCustomerDeliveryAlertScanner;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
@@ -84,6 +85,8 @@ use App\Modules\Telegram\Application\TelegramServiceNotificationPreferenceNaviga
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationNavigationHandler;
 use App\Modules\Telegram\Application\TelegramSourceMessageInteractionGateway;
 use App\Modules\Telegram\Application\TelegramSourceMessageReferenceDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramSupportCustomerDeliveryAlertScanner;
+use App\Modules\Telegram\Application\TelegramSupportCustomerReplyOutboxHandler;
 use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
@@ -206,6 +209,8 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);
         $this->app->singleton(TelegramSupportNavigationHandler::class);
+        $this->app->singleton(TelegramSupportCustomerReplyOutboxHandler::class);
+        $this->app->singleton(SupportCustomerDeliveryAlertScanner::class, TelegramSupportCustomerDeliveryAlertScanner::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramWalletTransferNavigationHandler::class);
@@ -441,6 +446,7 @@ final class TelegramServiceProvider extends ServiceProvider
             TelegramProtectedReferenceDeliveryOutboxHandler::class,
             TelegramPrivateMediaReferenceDeliveryOutboxHandler::class,
             TelegramSourceMessageReferenceDeliveryOutboxHandler::class,
+            TelegramSupportCustomerReplyOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }
