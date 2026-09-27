@@ -11,6 +11,7 @@ use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use JsonException;
+use RuntimeException;
 
 final readonly class DatabaseOperationalAlertRecorder implements OperationalAlertRecorder
 {
@@ -81,7 +82,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 ->lockForUpdate()
                 ->first(['id', 'occurrence_count', 'acknowledged_at', 'resolved_at']);
             if ($existing === null) {
-                throw new InvalidArgumentException('Operational alert deduplication conflict could not be reconciled.');
+                throw new RuntimeException('Operational alert deduplication conflict could not be reconciled.');
             }
 
             $reopened = $existing->resolved_at !== null;
