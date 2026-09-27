@@ -701,6 +701,7 @@ return [
         'telegram_delivery_interactive_presentations' => 'Telegram',
         'telegram_delivery_operations' => 'Telegram',
         'telegram_delivery_retry_directives' => 'Telegram',
+        'telegram_rate_retry_retention_lifecycle' => 'Telegram',
         'telegram_interaction_authority_capability' => 'Telegram',
         'telegram_interaction_callbacks' => 'Telegram',
         'telegram_interaction_sessions' => 'Telegram',
