@@ -256,7 +256,7 @@ SQL);
         }
 
         DB::statement(
-            "ALTER TABLE ".self::LIFECYCLE_TABLE." COMMENT='".self::ROLLBACK_COMMENT."'",
+            'ALTER TABLE '.self::LIFECYCLE_TABLE." COMMENT='".self::ROLLBACK_COMMENT."'",
         );
         $this->assertLifecycleComment(self::ROLLBACK_COMMENT);
     }
@@ -267,7 +267,7 @@ SQL);
         $this->assertLifecycleComment(self::ROLLBACK_COMMENT);
 
         DB::statement(
-            "ALTER TABLE ".self::LIFECYCLE_TABLE." COMMENT='".self::ACTIVE_COMMENT."'",
+            'ALTER TABLE '.self::LIFECYCLE_TABLE." COMMENT='".self::ACTIVE_COMMENT."'",
         );
         $this->assertLifecycleComment(self::ACTIVE_COMMENT);
     }
