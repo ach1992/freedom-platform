@@ -712,7 +712,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->where('operation_group_public_id', $batch->groupPublicId)
             ->first(['id', 'state', 'retry_not_before']);
         self::assertNotNull($operation);
-        self::assertSame('queued', $operation->state);
+        self::assertSame('retryable', $operation->state);
         self::assertIsString($operation->retry_not_before);
         self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $operation->retry_not_before);
 
