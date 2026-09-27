@@ -1035,6 +1035,56 @@ final class TelegramSupportNavigationTest extends TestCase
         ]));
     }
 
+    public function test_sla_scan_rotates_beyond_batch_without_starving_tail(): void
+    {
+        $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 20:00:00', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
+        config([
+            'support.alerts.new_ticket.enabled' => false,
+            'support.alerts.sla_delay.enabled' => true,
+            'support.alerts.sla_delay.threshold_seconds' => 60,
+            'support.alerts.delivery_failure.enabled' => false,
+        ]);
+
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $telegramUserId = 9845;
+        $this->accept($this->payload(8450, $telegramUserId, 'support_sla_fairness', 'fa', '/start'));
+        $processor->process('123456789', 8450);
+        $customer = $this->account($telegramUserId);
+        $tickets = $this->app->make(SupportTicketService::class);
+
+        for ($index = 1; $index <= 3; $index++) {
+            $tickets->create(new SupportTicketCreateRequest(
+                $customer['user_id'],
+                'other',
+                'SLA fairness '.$index,
+                'Each overdue ticket must eventually enter the bounded scan window.',
+                'telegram-support-sla-fairness:'.$index,
+            ));
+        }
+
+        $clock->advance('+61 seconds');
+        $alerts = $this->app->make(SupportAlertService::class);
+        self::assertSame(1, $alerts->scanSla(1));
+        self::assertSame(1, $alerts->scanSla(1));
+        self::assertSame(1, DB::table('alerts')
+            ->where('event_name', SupportAlertService::SLA_DELAY_EVENT)
+            ->count());
+
+        $clock->advance('+60 seconds');
+        self::assertSame(1, $alerts->scanSla(1));
+        $clock->advance('+60 seconds');
+        self::assertSame(1, $alerts->scanSla(1));
+
+        self::assertSame(3, DB::table('alerts')
+            ->where('event_name', SupportAlertService::SLA_DELAY_EVENT)
+            ->count());
+        self::assertSame(3, DB::table('alerts')
+            ->where('event_name', SupportAlertService::SLA_DELAY_EVENT)
+            ->where('occurrence_count', 1)
+            ->count());
+    }
+
     public function test_material_support_delivery_failure_alerts_only_after_canonical_retry_boundary(): void
     {
         $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 19:00:00', new \DateTimeZone('UTC')));
