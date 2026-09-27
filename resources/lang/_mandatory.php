@@ -42,7 +42,7 @@ return [
         'wallet' => ['top_up', 'balance', 'transfer', 'hold', 'debit', 'credit', 'refund', 'correction'],
         'promotion' => ['discount', 'gift_code', 'referral', 'reward.pending', 'reward.released', 'reward.reversed'],
         'ticket' => [
-            'create', 'category', 'assignment', 'reply', 'close', 'reopen', 'rating',
+            'create', 'category', 'assignment', 'reply', 'customer_reply_notification', 'close', 'reopen', 'rating',
             'canned.acknowledge.label', 'canned.acknowledge.body',
             'canned.details.label', 'canned.details.body',
             'canned.recheck.label', 'canned.recheck.body',
