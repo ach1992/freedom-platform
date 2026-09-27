@@ -8,8 +8,12 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    private const LIFECYCLE_TABLE = 'telegram_rate_retry_retention_lifecycle';
+
     public function up(): void
     {
+        $this->ensureLifecycleFence();
+        $this->establishLifecycleFence();
         $this->ensureInteractionRateAuthorizationColumn();
 
         if (! Schema::hasTable('telegram_delivery_retry_directives')) {
@@ -89,16 +93,42 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Telegram provider retry evidence is non-deletable.';
 END
 SQL);
+
+        if (! $this->tableMatchesExpected()
+            || ! Schema::hasColumn('processed_telegram_updates', 'interaction_rate_authorized_at')) {
+            throw new RuntimeException('Telegram rate/retry/retention foundation did not reach its exact ready surface.');
+        }
+
+        $this->releaseLifecycleFence();
     }
 
     public function down(): void
     {
-        if (Schema::hasTable('telegram_delivery_retry_directives')
-            && DB::table('telegram_delivery_retry_directives')->exists()) {
+        $hasDirectiveTable = Schema::hasTable('telegram_delivery_retry_directives');
+        $hasAuthorizationColumn = Schema::hasColumn(
+            'processed_telegram_updates',
+            'interaction_rate_authorized_at',
+        );
+        if (! Schema::hasTable(self::LIFECYCLE_TABLE)) {
+            if (! $hasDirectiveTable && ! $hasAuthorizationColumn) {
+                return;
+            }
+
+            throw new RuntimeException('Telegram rate/retry/retention rollback found an unfenced partial surface.');
+        }
+
+        $this->assertLifecycleFenceShape();
+        $this->establishLifecycleFence();
+
+        if ($hasDirectiveTable && DB::table('telegram_delivery_retry_directives')->exists()) {
+            $this->releaseLifecycleFence();
+
             throw new RuntimeException('Telegram provider retry evidence exists; rollback is refused.');
         }
-        if (Schema::hasColumn('processed_telegram_updates', 'interaction_rate_authorized_at')
+        if ($hasAuthorizationColumn
             && DB::table('processed_telegram_updates')->whereNotNull('interaction_rate_authorized_at')->exists()) {
+            $this->releaseLifecycleFence();
+
             throw new RuntimeException('Telegram interaction rate authorization evidence exists; rollback is refused.');
         }
 
@@ -110,6 +140,145 @@ SQL);
         if (Schema::hasColumn('processed_telegram_updates', 'interaction_rate_authorized_at')) {
             DB::statement('ALTER TABLE processed_telegram_updates DROP COLUMN interaction_rate_authorized_at');
         }
+
+        Schema::dropIfExists(self::LIFECYCLE_TABLE);
+    }
+
+    private function ensureLifecycleFence(): void
+    {
+        if (! Schema::hasTable(self::LIFECYCLE_TABLE)) {
+            DB::statement(<<<'SQL'
+CREATE TABLE telegram_rate_retry_retention_lifecycle (
+    id TINYINT UNSIGNED NOT NULL,
+    rollback_started_at DATETIME(6) NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT telegram_rate_retry_retention_lifecycle_id_chk CHECK (id = 1)
+) ENGINE=InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+SQL);
+            DB::statement(<<<'SQL'
+INSERT INTO telegram_rate_retry_retention_lifecycle
+    (id, rollback_started_at, created_at, updated_at)
+VALUES
+    (1, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6))
+SQL);
+        }
+
+        $this->assertLifecycleFenceShape();
+    }
+
+    private function assertLifecycleFenceShape(): void
+    {
+        $connection = DB::connection();
+        if ($connection->getDriverName() !== 'mysql') {
+            throw new RuntimeException('Telegram rate/retry/retention lifecycle fence requires MariaDB/MySQL.');
+        }
+
+        $database = $connection->getDatabaseName();
+        $table = $connection->table('information_schema.TABLES')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', self::LIFECYCLE_TABLE)
+            ->first(['ENGINE', 'TABLE_COLLATION']);
+        if ($table === null
+            || strtoupper((string) $table->ENGINE) !== 'INNODB'
+            || strtolower((string) $table->TABLE_COLLATION) !== 'utf8mb4_bin') {
+            throw new RuntimeException('Telegram rate/retry/retention lifecycle fence has an unexpected table shape.');
+        }
+
+        $columns = $connection->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $database)
+            ->where('TABLE_NAME', self::LIFECYCLE_TABLE)
+            ->orderBy('ORDINAL_POSITION')
+            ->get(['COLUMN_NAME', 'COLUMN_TYPE', 'IS_NULLABLE'])
+            ->map(static fn (object $row): array => [
+                (string) $row->COLUMN_NAME,
+                strtolower((string) $row->COLUMN_TYPE),
+                (string) $row->IS_NULLABLE,
+            ])
+            ->all();
+        if ($columns !== [
+            ['id', 'tinyint(3) unsigned', 'NO'],
+            ['rollback_started_at', 'datetime(6)', 'YES'],
+            ['created_at', 'datetime(6)', 'NO'],
+            ['updated_at', 'datetime(6)', 'NO'],
+        ]) {
+            throw new RuntimeException('Telegram rate/retry/retention lifecycle fence has unexpected columns.');
+        }
+
+        $checks = $connection->table('information_schema.TABLE_CONSTRAINTS')
+            ->where('CONSTRAINT_SCHEMA', $database)
+            ->where('TABLE_NAME', self::LIFECYCLE_TABLE)
+            ->where('CONSTRAINT_TYPE', 'CHECK')
+            ->pluck('CONSTRAINT_NAME')
+            ->map(static fn (mixed $name): string => (string) $name)
+            ->all();
+        sort($checks, SORT_STRING);
+        if ($checks !== ['telegram_rate_retry_retention_lifecycle_id_chk']) {
+            throw new RuntimeException('Telegram rate/retry/retention lifecycle fence has unexpected constraints.');
+        }
+
+        $rows = $connection->table(self::LIFECYCLE_TABLE)->get(['id', 'rollback_started_at']);
+        if ($rows->count() !== 1 || (int) $rows->first()->id !== 1) {
+            throw new RuntimeException('Telegram rate/retry/retention lifecycle fence row is invalid.');
+        }
+    }
+
+    private function establishLifecycleFence(): void
+    {
+        DB::connection()->transaction(function ($connection): void {
+            $row = $connection->selectOne(<<<'SQL'
+SELECT id, rollback_started_at
+FROM telegram_rate_retry_retention_lifecycle
+WHERE id = 1
+FOR UPDATE
+SQL, [], false);
+            if ($row === null || (int) ($row->id ?? 0) !== 1) {
+                throw new RuntimeException('Telegram rate/retry/retention lifecycle fence row is unavailable.');
+            }
+            if (($row->rollback_started_at ?? null) !== null) {
+                return;
+            }
+
+            $updated = $connection->table(self::LIFECYCLE_TABLE)
+                ->where('id', 1)
+                ->whereNull('rollback_started_at')
+                ->update([
+                    'rollback_started_at' => $connection->raw('CURRENT_TIMESTAMP(6)'),
+                    'updated_at' => $connection->raw('CURRENT_TIMESTAMP(6)'),
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Telegram rate/retry/retention lifecycle fence activation was lost.');
+            }
+        }, 3);
+    }
+
+    private function releaseLifecycleFence(): void
+    {
+        DB::connection()->transaction(function ($connection): void {
+            $row = $connection->selectOne(<<<'SQL'
+SELECT id, rollback_started_at
+FROM telegram_rate_retry_retention_lifecycle
+WHERE id = 1
+FOR UPDATE
+SQL, [], false);
+            if ($row === null
+                || (int) ($row->id ?? 0) !== 1
+                || ($row->rollback_started_at ?? null) === null) {
+                throw new RuntimeException('Telegram rate/retry/retention lifecycle fence cannot be released from this state.');
+            }
+
+            $updated = $connection->table(self::LIFECYCLE_TABLE)
+                ->where('id', 1)
+                ->whereNotNull('rollback_started_at')
+                ->update([
+                    'rollback_started_at' => null,
+                    'updated_at' => $connection->raw('CURRENT_TIMESTAMP(6)'),
+                ]);
+            if ($updated !== 1) {
+                throw new RuntimeException('Telegram rate/retry/retention lifecycle fence release was lost.');
+            }
+        }, 3);
     }
 
     private function ensureInteractionRateAuthorizationColumn(): void
