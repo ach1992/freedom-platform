@@ -10,6 +10,7 @@ use App\Modules\Support\Application\SupportCustomerDeliveryAlertScanner;
 use App\Modules\Support\Application\SupportCustomerReplyNotification;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
+use App\Shared\Application\Clock;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Query\Builder;
 use InvalidArgumentException;
@@ -23,6 +24,7 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         private SupportTicketService $support,
         private SupportAlertPolicy $policy,
         private SupportAlertService $alerts,
+        private Clock $clock,
     ) {}
 
     /** @requirement SUP-002 ARCH-004 DAT-002 DAT-003 OPS-003 QUA-004 */
@@ -35,33 +37,50 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
             return 0;
         }
 
-        $recorded = $this->scanNotificationHandoffFailures($limit);
-        if ($recorded >= $limit) {
-            return $recorded;
-        }
-
-        return $recorded + $this->scanTelegramDeliveryFailures($limit - $recorded);
+        return $this->scanNotificationHandoffFailures($limit)
+            + $this->scanTelegramDeliveryFailures($limit);
     }
 
     private function scanNotificationHandoffFailures(int $limit): int
     {
-        $rows = $this->database->connection()->table('outbox_messages')
+        $query = $this->database->connection()->table('outbox_messages')
             ->where('event_type', SupportCustomerReplyNotification::EVENT_TYPE)
             ->where('contract_version', SupportCustomerReplyNotification::CONTRACT_VERSION)
             ->where('aggregate_type', SupportCustomerReplyNotification::AGGREGATE_TYPE)
             ->where('dispatch_state', 'review_required')
-            ->whereNull('processed_at')
+            ->whereNull('processed_at');
+
+        $total = (int) (clone $query)->count('id');
+        if ($total === 0) {
+            return 0;
+        }
+
+        $windowSize = min($limit, $total);
+        $offset = $this->rotationOffset($total, $windowSize);
+        $columns = [
+            'event_key',
+            'aggregate_id',
+            'payload',
+            'correlation_id',
+            'dispatch_state',
+            'review_reason',
+            'last_error_code',
+        ];
+        $rows = (clone $query)
             ->orderBy('id')
-            ->limit($limit)
-            ->get([
-                'event_key',
-                'aggregate_id',
-                'payload',
-                'correlation_id',
-                'dispatch_state',
-                'review_reason',
-                'last_error_code',
-            ]);
+            ->offset($offset)
+            ->limit($windowSize)
+            ->get($columns);
+
+        $remaining = $windowSize - $rows->count();
+        if ($remaining > 0) {
+            $rows = $rows->concat(
+                (clone $query)
+                    ->orderBy('id')
+                    ->limit($remaining)
+                    ->get($columns),
+            );
+        }
 
         $recorded = 0;
         foreach ($rows as $row) {
@@ -111,25 +130,46 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
             TelegramDeliveryOperationState::ReviewRequired->value,
         ];
 
-        $rows = $this->database->connection()
+        $query = $this->database->connection()
             ->table('telegram_delivery_operations as operation')
             ->join('outbox_messages as outbox', 'outbox.id', '=', 'operation.outbox_event_id')
             ->where('operation.correlation_id', 'like', 'support.reply.%')
             ->where(function (Builder $query) use ($terminalStates): void {
                 $query->whereIn('operation.state', $terminalStates)
                     ->orWhere('outbox.dispatch_state', 'review_required');
-            })
+            });
+
+        $total = (int) (clone $query)->count('operation.id');
+        if ($total === 0) {
+            return 0;
+        }
+
+        $windowSize = min($limit, $total);
+        $offset = $this->rotationOffset($total, $windowSize);
+        $columns = [
+            'operation.public_id',
+            'operation.request_key_hash',
+            'operation.state',
+            'operation.result_code',
+            'operation.correlation_id',
+            'outbox.dispatch_state as outbox_state',
+            'outbox.review_reason',
+        ];
+        $rows = (clone $query)
             ->orderBy('operation.id')
-            ->limit($limit)
-            ->get([
-                'operation.public_id',
-                'operation.request_key_hash',
-                'operation.state',
-                'operation.result_code',
-                'operation.correlation_id',
-                'outbox.dispatch_state as outbox_state',
-                'outbox.review_reason',
-            ]);
+            ->offset($offset)
+            ->limit($windowSize)
+            ->get($columns);
+
+        $remaining = $windowSize - $rows->count();
+        if ($remaining > 0) {
+            $rows = $rows->concat(
+                (clone $query)
+                    ->orderBy('operation.id')
+                    ->limit($remaining)
+                    ->get($columns),
+            );
+        }
 
         $recorded = 0;
         foreach ($rows as $row) {
@@ -155,6 +195,17 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         }
 
         return $recorded;
+    }
+
+    private function rotationOffset(int $total, int $windowSize): int
+    {
+        if ($total < 1 || $windowSize < 1 || $windowSize > $total) {
+            throw new RuntimeException('Support delivery alert rotation window is invalid.');
+        }
+
+        $minute = intdiv($this->clock->now()->getTimestamp(), 60);
+
+        return ($minute * $windowSize) % $total;
     }
 
     private function messageIdFromCorrelation(string $correlationId): int
