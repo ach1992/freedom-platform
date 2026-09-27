@@ -40,6 +40,39 @@ final class SupportTicketFoundationTest extends TestCase
         self::assertSame('Custom other', DB::table('support_ticket_categories')->where('code', 'other')->value('name_en'));
     }
 
+    public function test_new_ticket_alert_rolls_back_with_ticket_transaction(): void
+    {
+        $this->seed(SupportTicketCategorySeeder::class);
+        config(['support.alerts.new_ticket.enabled' => true]);
+        $clock = new MutableSupportClock(new DateTimeImmutable('2026-09-16T00:00:00+00:00'));
+        $service = $this->supportTicketService($clock);
+        $user = $this->user();
+
+        try {
+            DB::transaction(function () use ($service, $user): void {
+                $service->create(new SupportTicketCreateRequest(
+                    $user,
+                    'other',
+                    'Rollback alert coupling',
+                    'The ticket and its alert must share one transaction boundary.',
+                    'create:rollback-alert-coupling',
+                ));
+
+                throw new RuntimeException('Force outer rollback.');
+            });
+            self::fail('The outer transaction must roll back.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Force outer rollback.', $exception->getMessage());
+        }
+
+        self::assertFalse(DB::table('support_tickets')
+            ->where('title', 'Rollback alert coupling')
+            ->exists());
+        self::assertSame(0, DB::table('alerts')
+            ->where('event_name', SupportAlertService::NEW_TICKET_EVENT)
+            ->count());
+    }
+
     public function test_customer_reads_are_owner_scoped_and_duplicate_reply_is_idempotent(): void
     {
         $this->seed(SupportTicketCategorySeeder::class);
