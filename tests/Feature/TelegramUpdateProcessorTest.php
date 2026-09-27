@@ -12,9 +12,11 @@ use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramRateLimitDecision;
+use App\Modules\Telegram\Application\TelegramRateRetryRetentionLifecycleFence;
 use App\Modules\Telegram\Application\TelegramReferralStartAttributionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -646,6 +648,81 @@ SQL);
             ->where('update_id', 3081)
             ->value('interaction_rate_authorized_at'));
         self::assertNull(DB::table('processed_telegram_updates')->where('update_id', 3081)->value('payload_ciphertext'));
+    }
+
+    public function test_interaction_authorization_writer_entered_before_rollback_cut_commits_and_forces_refusal(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram interaction authorization rollback-race verification requires MariaDB/MySQL.');
+        }
+
+        $this->accept($this->payload(3083, 9183, 'rollback_race_user', 'hello'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $reflection = new \ReflectionClass($processor);
+        $claimMethod = $reflection->getMethod('claim');
+        $authorizeMethod = $reflection->getMethod('authorizeInteractionRate');
+        $claimed = $claimMethod->invoke($processor, '123456789', 3083);
+        self::assertIsArray($claimed);
+
+        $database = $this->app->make(DatabaseManager::class);
+        $default = (string) config('database.default');
+        $connectionConfig = config('database.connections.'.$default);
+        self::assertIsArray($connectionConfig);
+        $contenderName = 'telegram_interaction_authorization_rollback_contender';
+        config(['database.connections.'.$contenderName => $connectionConfig]);
+        $primary = $database->connection($default);
+        $contender = $database->connection($contenderName);
+        $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+
+        $primary->beginTransaction();
+        try {
+            $this->app->make(TelegramRateRetryRetentionLifecycleFence::class)
+                ->acquireRuntimeWriteFence($primary);
+
+            config(['database.default' => $contenderName]);
+            try {
+                try {
+                    $migration->down();
+                    self::fail('Rollback must wait for the interaction writer that entered before the cut.');
+                } catch (QueryException $exception) {
+                    self::assertStringContainsString('Lock wait timeout', $exception->getMessage());
+                }
+            } finally {
+                config(['database.default' => $default]);
+            }
+
+            $authorizeMethod->invoke($processor, '123456789', 3083);
+            $primary->commit();
+        } catch (\Throwable $exception) {
+            if ($primary->transactionLevel() > 0) {
+                $primary->rollBack();
+            }
+
+            throw $exception;
+        }
+
+        config(['database.default' => $contenderName]);
+        try {
+            try {
+                $migration->down();
+                self::fail('Committed interaction authorization must make rollback refuse after the writer drains.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Telegram interaction rate authorization evidence exists; rollback is refused.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            config(['database.default' => $default]);
+            DB::purge($contenderName);
+        }
+
+        self::assertNotNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3083)
+            ->value('interaction_rate_authorized_at'));
     }
 
     public function test_rollback_cut_blocks_new_interaction_rate_authorization_evidence(): void
