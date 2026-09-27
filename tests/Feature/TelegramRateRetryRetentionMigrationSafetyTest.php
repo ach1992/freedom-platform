@@ -58,6 +58,7 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         $primary = $database->connection($default);
         $contender = $database->connection($contenderName);
         $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
+        $contender->statement('SET SESSION lock_wait_timeout = 1');
 
         $primary->beginTransaction();
         try {
@@ -127,9 +128,14 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
             'processed_telegram_updates',
             'interaction_rate_authorized_at',
         ));
-        self::assertNull(DB::table('telegram_rate_retry_retention_lifecycle')
-            ->where('id', 1)
-            ->value('rollback_started_at'));
+        self::assertTrue(Schema::hasColumn(
+            'telegram_rate_retry_retention_lifecycle',
+            'runtime_write_gate',
+        ));
+        self::assertFalse(Schema::hasColumn(
+            'telegram_rate_retry_retention_lifecycle',
+            'rollback_fence',
+        ));
 
         DB::connection()->transaction(function ($connection): void {
             app(TelegramRateRetryRetentionLifecycleFence::class)
@@ -171,9 +177,14 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         self::assertNotNull(DB::table('processed_telegram_updates')
             ->where('update_id', 998001)
             ->value('interaction_rate_authorized_at'));
-        self::assertNull(DB::table('telegram_rate_retry_retention_lifecycle')
-            ->where('id', 1)
-            ->value('rollback_started_at'));
+        self::assertTrue(Schema::hasColumn(
+            'telegram_rate_retry_retention_lifecycle',
+            'runtime_write_gate',
+        ));
+        self::assertFalse(Schema::hasColumn(
+            'telegram_rate_retry_retention_lifecycle',
+            'rollback_fence',
+        ));
     }
 
     private function establishRollbackCut(): void
