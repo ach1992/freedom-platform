@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Support\Application\SupportAlertService;
+use App\Modules\Support\Application\SupportCustomerDeliveryAlertScanner;
 use App\Modules\Support\Application\SupportCustomerReplyNotification;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
