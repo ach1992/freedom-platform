@@ -224,6 +224,7 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
 
         $recorded = 0;
         foreach ($rows as $row) {
+            /** @var SupportDeliveryRow $row */
             $messageId = $this->messageIdFromCorrelation((string) $row->correlation_id);
             $handoff = $this->supportNotificationHandoff($messageId);
             if ($handoff === null) {
