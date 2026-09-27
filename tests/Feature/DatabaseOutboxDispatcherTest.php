@@ -75,6 +75,27 @@ final class DatabaseOutboxDispatcherTest extends TestCase
         self::assertSame('2026-08-12T00:00:05+00:00', (new DateTimeImmutable($availableAt))->format(DateTimeImmutable::ATOM));
     }
 
+
+    public function test_retryable_settlement_preserves_a_later_domain_available_at_floor(): void
+    {
+        $id = $this->publish('order:9:paid:v1');
+
+        $result = $this->dispatcher()->dispatchOne(
+            new DeferringRetryableOutboxHandler(
+                app(DatabaseManager::class),
+                '2026-08-12 00:01:13.000000',
+            ),
+        );
+
+        self::assertNotNull($result);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $id,
+            'dispatch_state' => 'retry',
+            'attempts' => 1,
+            'available_at' => '2026-08-12 00:01:13.000000',
+        ]);
+    }
+
     public function test_retryable_failure_requires_review_after_the_bounded_attempt_limit(): void
     {
         $id = $this->publish('order:8:paid:v1');
@@ -227,6 +248,30 @@ final class RecordingOutboxHandler implements OutboxMessageHandler
         $this->transactionLevelAtHandle = $this->database?->connection()->transactionLevel();
 
         return $this->outcome;
+    }
+}
+
+final readonly class DeferringRetryableOutboxHandler implements OutboxMessageHandler
+{
+    public function __construct(
+        private DatabaseManager $database,
+        private string $availableAt,
+    ) {}
+
+    public function handle(OutboxMessage $message): OutboxDispatchOutcome
+    {
+        $updated = $this->database->connection()->table('outbox_messages')
+            ->where('id', $message->id)
+            ->where('dispatch_state', 'leased')
+            ->update([
+                'available_at' => $this->availableAt,
+                'updated_at' => $this->availableAt,
+            ]);
+        if ($updated !== 1) {
+            throw new RuntimeException('Test domain deferral lost its Outbox lease.');
+        }
+
+        return OutboxDispatchOutcome::RetryableFailure;
     }
 }
 

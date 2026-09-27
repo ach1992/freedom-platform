@@ -6,10 +6,12 @@ namespace Tests\Feature;
 
 use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
+use App\Modules\Telegram\Application\TelegramRateLimitDecision;
 use App\Modules\Telegram\Application\TelegramReferralStartAttributionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
@@ -77,6 +79,15 @@ final class TelegramUpdateProcessorTest extends TestCase
             'state' => 'processed',
             'attempt_count' => 1,
         ]);
+        $processedUpdate = DB::table('processed_telegram_updates')->where('update_id', 3001)->first([
+            'payload_hash',
+            'payload_ciphertext',
+            'payload_size',
+        ]);
+        self::assertNotNull($processedUpdate);
+        self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $processedUpdate->payload_hash);
+        self::assertNull($processedUpdate->payload_ciphertext);
+        self::assertNull($processedUpdate->payload_size);
 
         $attribution = DB::table('telegram_start_attributions')->first();
         self::assertNotNull($attribution);
@@ -550,6 +561,36 @@ SQL);
             ->count());
     }
 
+
+    public function test_shared_interaction_rate_limit_stops_business_dispatch_and_still_terminalizes_raw_payload(): void
+    {
+        $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::limited(19));
+        $this->app->instance(TelegramSharedRateLimiter::class, $limiter);
+
+        $this->accept($this->payload(3080, 9180, 'rate_limited_user', '/start campaign_should_not_bind'));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3080);
+
+        $userId = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9180)->value('user_id');
+        self::assertGreaterThan(0, $userId);
+        self::assertSame([$userId], $limiter->interactionUserIds);
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('user_id', $userId)->count());
+        self::assertSame(0, DB::table('telegram_start_attributions')->where('user_id', $userId)->count());
+
+        $stored = DB::table('processed_telegram_updates')->where('update_id', 3080)->first([
+            'state',
+            'attempt_count',
+            'payload_hash',
+            'payload_ciphertext',
+            'payload_size',
+        ]);
+        self::assertNotNull($stored);
+        self::assertSame('processed', (string) $stored->state);
+        self::assertSame(1, (int) $stored->attempt_count);
+        self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $stored->payload_hash);
+        self::assertNull($stored->payload_ciphertext);
+        self::assertNull($stored->payload_size);
+    }
+
     public function test_unknown_update_is_processed_without_creating_identity(): void
     {
         $this->accept(['update_id' => 4001, 'poll' => ['id' => 'poll-id']]);
@@ -613,5 +654,26 @@ SQL);
                 'text' => $text,
             ],
         ];
+    }
+}
+final class ProcessorTelegramSharedRateLimiter implements TelegramSharedRateLimiter
+{
+    /** @var list<int> */
+    public array $interactionUserIds = [];
+
+    public function __construct(private readonly TelegramRateLimitDecision $interactionDecision) {}
+
+    public function consumeInteraction(int $userId): TelegramRateLimitDecision
+    {
+        $this->interactionUserIds[] = $userId;
+
+        return $this->interactionDecision;
+    }
+
+    public function reserveOutbound(int $recipientChatId): TelegramRateLimitDecision
+    {
+        unset($recipientChatId);
+
+        return TelegramRateLimitDecision::allowed();
     }
 }
