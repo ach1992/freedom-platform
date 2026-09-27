@@ -15,6 +15,7 @@ use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramRateLimitDecision;
+use App\Modules\Telegram\Application\TelegramRateRetryRetentionLifecycleFence;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Modules\Telegram\Infrastructure\HttpTelegramMutationTransport;
@@ -565,6 +566,87 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         } catch (QueryException) {
             // Expected.
         }
+    }
+
+    public function test_retry_directive_writer_entered_before_rollback_cut_commits_and_forces_refusal(): void
+    {
+        $created = NonRestrictedTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900020,
+            null,
+            NonRestrictedTelegramPresentationTestFactory::plainText('retry directive rollback race'),
+            'telegram-retry-directive-rollback-race',
+            'correlation-retry-directive-rollback-race-179',
+        );
+        $executor = $this->executor(new RecordingTelegramMutationTransport([], DB::getFacadeRoot()));
+        $this->enterProviderBoundaryWithoutCallingTransport($executor, $created->publicId);
+
+        $reflection = new ReflectionClass($executor);
+        $operationMethod = $reflection->getMethod('operation');
+        $recordMethod = $reflection->getMethod('recordRetryDirective');
+        $database = app(DatabaseManager::class);
+        $default = (string) config('database.default');
+        $connectionConfig = config('database.connections.'.$default);
+        self::assertIsArray($connectionConfig);
+        $contenderName = 'telegram_retry_directive_rollback_contender';
+        config(['database.connections.'.$contenderName => $connectionConfig]);
+        $primary = $database->connection($default);
+        $contender = $database->connection($contenderName);
+        $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+
+        $primary->beginTransaction();
+        try {
+            app(TelegramRateRetryRetentionLifecycleFence::class)
+                ->acquireRuntimeWriteFence($primary);
+            $row = $operationMethod->invoke($executor, $primary, $created->publicId, true);
+
+            config(['database.default' => $contenderName]);
+            try {
+                try {
+                    $migration->down();
+                    self::fail('Rollback must wait for the retry-directive writer that entered before the cut.');
+                } catch (QueryException $exception) {
+                    self::assertStringContainsString('Lock wait timeout', $exception->getMessage());
+                }
+            } finally {
+                config(['database.default' => $default]);
+            }
+
+            $recordMethod->invoke($executor, $primary, $row, 37);
+            $primary->commit();
+        } catch (\Throwable $exception) {
+            if ($primary->transactionLevel() > 0) {
+                $primary->rollBack();
+            }
+
+            throw $exception;
+        }
+
+        config(['database.default' => $contenderName]);
+        try {
+            try {
+                $migration->down();
+                self::fail('Committed retry evidence must make rollback refuse after the writer drains.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Telegram provider retry evidence exists; rollback is refused.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            config(['database.default' => $default]);
+            DB::purge($contenderName);
+        }
+
+        $this->assertDatabaseHas('telegram_delivery_retry_directives', [
+            'operation_public_id' => $created->publicId,
+            'provider_attempt' => 1,
+            'retry_after_seconds' => 37,
+        ]);
     }
 
     public function test_rollback_cut_blocks_new_provider_retry_directive_evidence(): void
