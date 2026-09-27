@@ -65,6 +65,20 @@ final class TelegramSharedRateLimiterTest extends TestCase
         $this->app->make(TelegramSharedRateLimiter::class)->consumeInteraction($userId);
     }
 
+    public function test_non_positive_existing_interaction_bucket_fails_closed_even_with_expiry(): void
+    {
+        $prefix = config('telegram.rate_limits.prefix');
+        self::assertIsString($prefix);
+        $userId = random_int(1_000_000, 2_000_000_000);
+        $key = $prefix.'interaction:'.hash('sha256', (string) $userId);
+        $redis = $this->app->make(RedisManager::class)->connection();
+        $redis->command('set', [$key, '0']);
+        $redis->command('expire', [$key, '60']);
+
+        $this->expectException(RuntimeException::class);
+        $this->app->make(TelegramSharedRateLimiter::class)->consumeInteraction($userId);
+    }
+
     public function test_corrupt_outbound_global_bucket_without_expiry_below_limit_fails_closed(): void
     {
         config([

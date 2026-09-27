@@ -18,7 +18,7 @@ final readonly class RedisTelegramSharedRateLimiter implements TelegramSharedRat
         local current = tonumber(stored or '0')
         local limit = tonumber(ARGV[1])
         local window = tonumber(ARGV[2])
-        if stored and (not current or current < 0) then
+        if stored and (not current or current < 1) then
             return {-1, -1}
         end
         local ttl_ms = -2
@@ -48,10 +48,10 @@ final readonly class RedisTelegramSharedRateLimiter implements TelegramSharedRat
         local chat_limit = tonumber(ARGV[3])
         local chat_window = tonumber(ARGV[4])
 
-        if global_stored and (not global_current or global_current < 0) then
+        if global_stored and (not global_current or global_current < 1) then
             return {-1, -1}
         end
-        if chat_stored and (not chat_current or chat_current < 0) then
+        if chat_stored and (not chat_current or chat_current < 1) then
             return {-1, -1}
         end
 
