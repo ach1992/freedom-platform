@@ -15,8 +15,8 @@ use App\Modules\Support\Domain\SupportTicketState;
 use App\Modules\Telegram\Application\ConfidentialTelegramPresentation;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
-use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionPayload;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
@@ -35,6 +35,7 @@ use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -1021,7 +1022,7 @@ final class TelegramSupportNavigationTest extends TestCase
             ->value('resolved_at'));
 
         config(['support.alerts.sla_delay.threshold_seconds' => null]);
-        self::assertSame(1, \Illuminate\Support\Facades\Artisan::call('support:alerts:scan', [
+        self::assertSame(1, Artisan::call('support:alerts:scan', [
             '--limit' => 10,
             '--json' => true,
         ]));
