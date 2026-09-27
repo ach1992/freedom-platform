@@ -648,6 +648,44 @@ SQL);
         self::assertNull(DB::table('processed_telegram_updates')->where('update_id', 3081)->value('payload_ciphertext'));
     }
 
+    public function test_rollback_cut_blocks_new_interaction_rate_authorization_evidence(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram rollback-fence verification requires MariaDB/MySQL.');
+        }
+
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+        $reflection = new \ReflectionClass($migration);
+        $reflection->getMethod('establishLifecycleFence')->invoke($migration);
+
+        $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::allowed());
+        $this->app->instance(TelegramSharedRateLimiter::class, $limiter);
+        $this->accept($this->payload(3082, 9182, 'rollback_fenced_user', 'hello'));
+
+        try {
+            try {
+                $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3082);
+                self::fail('A post-cut interaction-rate writer must fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+
+            self::assertCount(1, $limiter->interactionUserIds);
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => 3082,
+                'state' => 'failed',
+                'attempt_count' => 1,
+            ]);
+            self::assertNull(DB::table('processed_telegram_updates')
+                ->where('update_id', 3082)
+                ->value('interaction_rate_authorized_at'));
+        } finally {
+            $migration->up();
+        }
+    }
+
     public function test_unknown_update_is_processed_without_creating_identity(): void
     {
         $this->accept(['update_id' => 4001, 'poll' => ['id' => 'poll-id']]);
