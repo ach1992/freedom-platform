@@ -14,6 +14,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use DateInterval;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -33,6 +34,7 @@ final readonly class TelegramDeliveryOperationExecutor
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private OutboxDeferrer $outboxDeferrer,
         private TelegramDeliveryRuntime $runtime,
         private TelegramMutationTransport $transport,
         private TelegramDeliveryDatabaseCapability $databaseCapability,
@@ -124,7 +126,7 @@ final readonly class TelegramDeliveryOperationExecutor
             if ($state === TelegramDeliveryOperationState::Retryable) {
                 $retryDelay = $this->retryDirectiveDelaySeconds($connection, $row);
                 if ($retryDelay !== null && $retryDelay > 0) {
-                    $this->deferOutboxBySeconds($connection, $row, $retryDelay);
+                    $this->deferOutboxBySeconds($row, $retryDelay);
 
                     return [
                         'row' => $row,
@@ -271,7 +273,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 if (! $budget->allowed) {
                     $retryAfter = $budget->retryAfterSeconds
                         ?? throw new RuntimeException('Telegram outbound rate budget omitted its retry delay.');
-                    $this->deferOutboxBySeconds($connection, $row, $retryAfter);
+                    $this->deferOutboxBySeconds($row, $retryAfter);
 
                     return [
                         'row' => $row,
@@ -364,7 +366,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 $retryAfter = $result->retryAfterSeconds
                     ?? throw new RuntimeException('Telegram provider retry result omitted its delay.');
                 $this->recordRetryDirective($connection, $row, $retryAfter);
-                $this->deferOutboxBySeconds($connection, $row, $retryAfter);
+                $this->deferOutboxBySeconds($row, $retryAfter);
             }
 
             $updated = $this->transition(
@@ -710,45 +712,19 @@ final readonly class TelegramDeliveryOperationExecutor
     /**
      * @param  DeliveryOperationRow  $row
      */
-    private function deferOutboxBySeconds(Connection $connection, object $row, int $seconds): void
+    private function deferOutboxBySeconds(object $row, int $seconds): void
     {
         if ($seconds < 1 || $seconds > 86_400) {
             throw new RuntimeException('Telegram Outbox deferral delay is invalid.');
         }
 
-        $notBefore = $this->clock->now()->add(new DateInterval('PT'.$seconds.'S'));
-        $outbox = $connection->table('outbox_messages')
-            ->where('id', (string) $row->outbox_event_id)
-            ->where('event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)
-            ->where('aggregate_id', (string) $row->public_id)
-            ->where('correlation_id', (string) $row->correlation_id)
-            ->whereNull('processed_at')
-            ->lockForUpdate()
-            ->first(['dispatch_state', 'available_at']);
-
-        if ($outbox === null
-            || ! in_array((string) $outbox->dispatch_state, ['pending', 'retry', 'leased'], true)
-            || ! is_string($outbox->available_at)) {
-            throw new RuntimeException('Telegram delivery Outbox command is not deferrable.');
-        }
-
-        $current = new DateTimeImmutable($outbox->available_at, new DateTimeZone('UTC'));
-        if ($current >= $notBefore) {
-            return;
-        }
-
-        $updated = $connection->table('outbox_messages')
-            ->where('id', (string) $row->outbox_event_id)
-            ->where('dispatch_state', (string) $outbox->dispatch_state)
-            ->where('available_at', (string) $outbox->available_at)
-            ->whereNull('processed_at')
-            ->update([
-                'available_at' => $this->formatTime($notBefore),
-                'updated_at' => $this->timestamp(),
-            ]);
-        if ($updated !== 1) {
-            throw new RuntimeException('Telegram delivery Outbox deferral lost its exact lifecycle state.');
-        }
+        $this->outboxDeferrer->deferUntil(
+            (string) $row->outbox_event_id,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            (string) $row->public_id,
+            (string) $row->correlation_id,
+            $this->clock->now()->add(new DateInterval('PT'.$seconds.'S')),
+        );
     }
 
     private function formatTime(DateTimeImmutable $time): string

@@ -29,6 +29,7 @@ use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Modules\Telegram\Infrastructure\HttpProtectedTelegramMessageSender;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
@@ -809,6 +810,7 @@ final class TelegramMembershipJoinPresentationTest extends TestCase
         return new TelegramDeliveryOperationExecutor(
             $database,
             $this->clock,
+            app(OutboxDeferrer::class),
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,

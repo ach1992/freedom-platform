@@ -20,6 +20,7 @@ use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Modules\Telegram\Infrastructure\HttpTelegramMutationTransport;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
@@ -976,6 +977,7 @@ SQL);
         return new TelegramDeliveryOperationExecutor(
             app(DatabaseManager::class),
             $this->clock,
+            app(OutboxDeferrer::class),
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,

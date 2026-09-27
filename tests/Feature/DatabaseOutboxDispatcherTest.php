@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
 use App\Shared\Application\OutboxMessageHandler;
@@ -81,8 +82,8 @@ final class DatabaseOutboxDispatcherTest extends TestCase
 
         $result = $this->dispatcher()->dispatchOne(
             new DeferringRetryableOutboxHandler(
-                app(DatabaseManager::class),
-                '2026-08-12 00:01:13.000000',
+                app(OutboxDeferrer::class),
+                new DateTimeImmutable('2026-08-12T00:01:13+00:00'),
             ),
         );
 
@@ -253,22 +254,19 @@ final class RecordingOutboxHandler implements OutboxMessageHandler
 final readonly class DeferringRetryableOutboxHandler implements OutboxMessageHandler
 {
     public function __construct(
-        private DatabaseManager $database,
-        private string $availableAt,
+        private OutboxDeferrer $deferrer,
+        private DateTimeImmutable $notBefore,
     ) {}
 
     public function handle(OutboxMessage $message): OutboxDispatchOutcome
     {
-        $updated = $this->database->connection()->table('outbox_messages')
-            ->where('id', $message->id)
-            ->where('dispatch_state', 'leased')
-            ->update([
-                'available_at' => $this->availableAt,
-                'updated_at' => $this->availableAt,
-            ]);
-        if ($updated !== 1) {
-            throw new RuntimeException('Test domain deferral lost its Outbox lease.');
-        }
+        $this->deferrer->deferUntil(
+            $message->id,
+            $message->eventType,
+            $message->aggregateId,
+            $message->correlationId,
+            $this->notBefore,
+        );
 
         return OutboxDispatchOutcome::RetryableFailure;
     }

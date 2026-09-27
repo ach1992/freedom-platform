@@ -15,6 +15,7 @@ use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
@@ -77,6 +78,7 @@ final class TelegramOutboundDeliveryStaleLeaseTest extends TestCase
         $executor = new TelegramDeliveryOperationExecutor(
             $database,
             $this->clock,
+            app(OutboxDeferrer::class),
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,

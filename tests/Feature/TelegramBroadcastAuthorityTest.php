@@ -712,7 +712,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->where('operation_group_public_id', $batch->groupPublicId)
             ->first(['id', 'state', 'retry_not_before']);
         self::assertNotNull($operation);
-        self::assertSame('retryable', $operation->state);
+        self::assertSame('queued', $operation->state);
         self::assertIsString($operation->retry_not_before);
         self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $operation->retry_not_before);
 
@@ -1007,35 +1007,41 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             $this->app->make(OutboxMessageRouter::class),
         );
         self::assertNotNull($dispatch);
-        self::assertSame('review_required', DB::table('telegram_delivery_operations')
+        self::assertSame('retryable', DB::table('telegram_delivery_operations')
             ->where('public_id', $operationPublicId)
             ->value('state'));
-        self::assertSame(120, (int) DB::table('telegram_delivery_operations')
+        self::assertNull(DB::table('telegram_delivery_operations')
             ->where('public_id', $operationPublicId)
             ->value('retry_after_seconds'));
+        $directive = DB::table('telegram_delivery_retry_directives')
+            ->where('operation_public_id', $operationPublicId)
+            ->where('provider_attempt', 1)
+            ->first(['retry_after_seconds', 'retry_not_before']);
+        self::assertNotNull($directive);
+        self::assertSame(120, (int) $directive->retry_after_seconds);
+        self::assertIsString($directive->retry_not_before);
 
         self::assertGreaterThanOrEqual(1, $runner->reconcile(10));
         $recipient = DB::table('broadcast_recipients')
             ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
             ->first(['delivery_state', 'retry_not_before']);
         self::assertNotNull($recipient);
-        self::assertSame('failed_transient', $recipient->delivery_state);
-        self::assertIsString($recipient->retry_not_before);
-        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $recipient->retry_not_before);
+        self::assertSame('sending', $recipient->delivery_state);
+        self::assertSame($directive->retry_not_before, $recipient->retry_not_before);
 
-        try {
-            $this->app->make(TelegramBroadcastRetryService::class)->retryFailed(
-                $actor['user_id'],
-                $created->publicId,
-                $service->current($actor['user_id'], $created->publicId)->stateVersion,
-                'broadcast-generic-retry-too-early',
-            );
-            self::fail('Generic Telegram RetryAfter must block an early broadcast retry.');
-        } catch (DomainException) {
-            self::assertSame('failed_transient', DB::table('broadcast_recipients')
-                ->where('broadcast_campaign_id', $this->campaignId($created->publicId))
-                ->value('delivery_state'));
-        }
+        $message = DB::table('broadcast_recipient_messages')
+            ->where('delivery_operation_public_id', $operationPublicId)
+            ->first(['state', 'retry_not_before']);
+        self::assertNotNull($message);
+        self::assertSame('queued', $message->state);
+        self::assertSame($directive->retry_not_before, $message->retry_not_before);
+
+        $outbox = DB::table('outbox_messages')
+            ->where('aggregate_id', $operationPublicId)
+            ->first(['dispatch_state', 'available_at']);
+        self::assertNotNull($outbox);
+        self::assertSame('retry', $outbox->dispatch_state);
+        self::assertSame($directive->retry_not_before, $outbox->available_at);
     }
 
     public function test_generic_owner_test_retry_after_is_projected_to_test_retry_deadline(): void
@@ -1077,7 +1083,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
 
         $reconciled = $ownerTests->reconcileCurrent($actor['user_id'], $created->publicId);
         self::assertNotNull($reconciled);
-        self::assertSame('failed', $reconciled->state);
+        self::assertSame('queued', $reconciled->state);
         $retryNotBefore = DB::table('broadcast_campaign_tests')
             ->where('public_id', $reconciled->publicId)
             ->value('retry_not_before');
@@ -1093,7 +1099,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             );
             self::fail('Generic Owner-test RetryAfter must block an early replacement test.');
         } catch (DomainException) {
-            self::assertSame('failed', DB::table('broadcast_campaign_tests')
+            self::assertSame('queued', DB::table('broadcast_campaign_tests')
                 ->where('public_id', $reconciled->publicId)
                 ->value('state'));
         }
@@ -1174,7 +1180,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->where('id', (int) $operation->id)
             ->first(['state', 'retry_not_before']);
         self::assertNotNull($operation);
-        self::assertSame('retryable', $operation->state);
+        self::assertSame('queued', $operation->state);
         self::assertIsString($operation->retry_not_before);
         self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $operation->retry_not_before);
     }

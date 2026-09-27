@@ -19,7 +19,17 @@ final class TelegramUpdateRetentionTest extends TestCase
     {
         parent::setUp();
         Queue::fake();
-        config(['telegram.queue' => 'telegram-ingress']);
+        config([
+            'app.url' => 'https://bot.example.test',
+            'telegram.bot_token' => '123456789:abcdefghijklmnopqrstuvwxyz_ABCDE',
+            'telegram.webhook_secret' => 'telegram_webhook_secret_1234567890_safe',
+            'telegram.webhook_path' => 'api/telegram/webhook',
+            'telegram.max_body_bytes' => 1_048_576,
+            'telegram.queue' => 'telegram-ingress',
+            'telegram.processing_lease_seconds' => 120,
+            'telegram.api_base_url' => 'https://api.telegram.org',
+            'telegram.api_timeout_seconds' => 15,
+        ]);
     }
 
     public function test_explicit_failed_retention_terminalizes_only_due_payloads_and_requeue_excludes_them(): void

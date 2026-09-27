@@ -31,6 +31,7 @@ final readonly class TelegramBroadcastDeliveryRunner
         private TelegramSourceMessageSender $sourceMessages,
         private TelegramBroadcastCampaignService $campaigns,
         private TelegramDeliveryRuntime $runtime,
+        private TelegramDeliveryRetryDirectiveReader $retryDirectives,
     ) {}
 
     /** @requirement COM-002 DAT-002 DAT-003 DAT-004 ACL-002 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
@@ -890,6 +891,7 @@ final readonly class TelegramBroadcastDeliveryRunner
              *     broadcast_campaign_id:int|string,
              *     delivery_state:string,
              *     delivery_operation_public_id:string|null,
+             *     retry_not_before:string|null,
              *     campaign_public_id:string,
              *     campaign_state:string,
              *     campaign_state_version:int|string
@@ -905,6 +907,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'recipient.broadcast_campaign_id',
                     'recipient.delivery_state',
                     'recipient.delivery_operation_public_id',
+                    'recipient.retry_not_before',
                     'campaign.public_id as campaign_public_id',
                     'campaign.state as campaign_state',
                     'campaign.state_version as campaign_state_version',
@@ -922,6 +925,7 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'telegram_message_id',
                     'result_code',
                     'retry_after_seconds',
+                    'provider_attempts',
                     'completed_at',
                 ]);
             if ($operation === null) {
@@ -933,7 +937,9 @@ final readonly class TelegramBroadcastDeliveryRunner
              *     public_id:string,
              *     broadcast_message_version_id:int|string,
              *     requested_by_administrator_id:int|string|null,
-             *     state:string
+             *     state:string,
+             *     result_code:string|null,
+             *     retry_not_before:string|null
              * }|null $message
              */
             $message = $connection->table('broadcast_recipient_messages')
@@ -946,6 +952,8 @@ final readonly class TelegramBroadcastDeliveryRunner
                     'broadcast_message_version_id',
                     'requested_by_administrator_id',
                     'state',
+                    'result_code',
+                    'retry_not_before',
                 ]);
             if ($message === null) {
                 throw new RuntimeException('Broadcast linked recipient-message evidence is missing.');
@@ -954,9 +962,11 @@ final readonly class TelegramBroadcastDeliveryRunner
             $operationState = TelegramDeliveryOperationState::tryFrom((string) $operation->state)
                 ?? throw new RuntimeException('Broadcast linked Telegram delivery state is invalid.');
 
-            if ($operationState === TelegramDeliveryOperationState::Prepared
-                && $this->outboxRequiresReview($connection, (string) $operation->outbox_event_id)
-            ) {
+            $outboxRequiresReview = $this->outboxRequiresReview(
+                $connection,
+                (string) $operation->outbox_event_id,
+            );
+            if ($operationState === TelegramDeliveryOperationState::Prepared && $outboxRequiresReview) {
                 return $this->reconcilePreEffectReview(
                     $connection,
                     $recipient,
@@ -964,20 +974,88 @@ final readonly class TelegramBroadcastDeliveryRunner
                 );
             }
 
+            if ($operationState === TelegramDeliveryOperationState::Retryable && $outboxRequiresReview) {
+                $retryNotBefore = $this->retryDirectives->retryNotBefore(
+                    $connection,
+                    (string) $recipient->delivery_operation_public_id,
+                    $operation->provider_attempts,
+                );
+                $now = $this->timestamp();
+                $failureCode = $this->resultCode(
+                    $operation->result_code,
+                    'telegram_delivery_retry_exhausted',
+                );
+                $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $message->id)
+                    ->update([
+                        'state' => 'retryable',
+                        'telegram_message_id' => null,
+                        'result_code' => $operation->result_code,
+                        'retry_not_before' => $retryNotBefore,
+                        'updated_at' => $now,
+                    ]);
+                $connection->table('broadcast_recipients')
+                    ->where('id', (int) $recipient->id)
+                    ->update([
+                        'delivery_state' => 'failed_transient',
+                        'telegram_message_id' => null,
+                        'failure_code' => $failureCode,
+                        'retry_not_before' => $retryNotBefore,
+                        'sent_at' => null,
+                        'claim_token_hash' => null,
+                        'claim_expires_at' => null,
+                        'updated_at' => $now,
+                    ]);
+
+                return true;
+            }
+
             if (in_array($operationState, [
                 TelegramDeliveryOperationState::Prepared,
                 TelegramDeliveryOperationState::Sending,
                 TelegramDeliveryOperationState::Retryable,
             ], true)) {
-                $connection->table('broadcast_recipient_messages')
-                    ->where('id', (int) $message->id)
-                    ->update([
-                        'state' => 'queued',
-                        'result_code' => $operation->result_code,
-                        'updated_at' => $this->timestamp(),
-                    ]);
+                $retryNotBefore = $operationState === TelegramDeliveryOperationState::Retryable
+                    ? $this->retryDirectives->retryNotBefore(
+                        $connection,
+                        (string) $recipient->delivery_operation_public_id,
+                        $operation->provider_attempts,
+                    )
+                    : null;
+                $resultCode = $operation->result_code === null ? null : (string) $operation->result_code;
+                $messageResultCode = $message->result_code === null ? null : (string) $message->result_code;
+                $messageRetryNotBefore = $message->retry_not_before === null
+                    ? null
+                    : (string) $message->retry_not_before;
+                $recipientRetryNotBefore = $recipient->retry_not_before === null
+                    ? null
+                    : (string) $recipient->retry_not_before;
+                $messageChanged = (string) $message->state !== 'queued'
+                    || $messageResultCode !== $resultCode
+                    || $messageRetryNotBefore !== $retryNotBefore;
+                $recipientChanged = $recipientRetryNotBefore !== $retryNotBefore;
+                $now = $this->timestamp();
 
-                return false;
+                if ($messageChanged) {
+                    $connection->table('broadcast_recipient_messages')
+                        ->where('id', (int) $message->id)
+                        ->update([
+                            'state' => 'queued',
+                            'result_code' => $resultCode,
+                            'retry_not_before' => $retryNotBefore,
+                            'updated_at' => $now,
+                        ]);
+                }
+                if ($recipientChanged) {
+                    $connection->table('broadcast_recipients')
+                        ->where('id', (int) $recipient->id)
+                        ->update([
+                            'retry_not_before' => $retryNotBefore,
+                            'updated_at' => $now,
+                        ]);
+                }
+
+                return $messageChanged || $recipientChanged;
             }
 
             [$messageState, $recipientState, $messageId, $failureCode] = match ($operationState) {

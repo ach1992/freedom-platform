@@ -25,6 +25,7 @@ use App\Modules\Telegram\Application\TelegramProtectedPresentationResolver;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
 use App\Shared\Application\RestrictedValue;
@@ -339,6 +340,7 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
         $executor = new TelegramDeliveryOperationExecutor(
             $database,
             $this->clock,
+            app(OutboxDeferrer::class),
             $this->runtime,
             $generic,
             new TelegramDeliveryDatabaseCapability,
@@ -425,6 +427,7 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
         return new TelegramDeliveryOperationExecutor(
             $database,
             $this->clock,
+            app(OutboxDeferrer::class),
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,
