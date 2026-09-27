@@ -55,12 +55,12 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
             $encodedContext,
         ): void {
             $now = $this->clock->now()->format('Y-m-d H:i:s.u');
-            /** @var object{id:string,occurrence_count:int|string,resolved_at:?string}|null $existing */
+            /** @var object{id:string,occurrence_count:int|string,acknowledged_at:?string,resolved_at:?string}|null $existing */
             $existing = $connection->table('alerts')
                 ->where('event_name', $eventName)
                 ->where('deduplication_key', $deduplicationKey)
                 ->lockForUpdate()
-                ->first(['id', 'occurrence_count', 'resolved_at']);
+                ->first(['id', 'occurrence_count', 'acknowledged_at', 'resolved_at']);
 
             if ($existing === null) {
                 $connection->table('alerts')->insert([
@@ -82,15 +82,16 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 return;
             }
 
+            $reopened = $existing->resolved_at !== null;
             $connection->table('alerts')
                 ->where('id', $existing->id)
                 ->update([
                     'severity' => $severity,
                     'correlation_id' => $correlationId,
                     'safe_context' => $encodedContext,
-                    'occurrence_count' => (int) $existing->occurrence_count + 1,
+                    'occurrence_count' => (int) $existing->occurrence_count + ($reopened ? 1 : 0),
                     'last_seen_at' => $now,
-                    'acknowledged_at' => $existing->resolved_at === null ? null : null,
+                    'acknowledged_at' => $reopened ? null : $existing->acknowledged_at,
                     'resolved_at' => null,
                     'updated_at' => $now,
                 ]);
