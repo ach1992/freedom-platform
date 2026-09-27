@@ -522,6 +522,7 @@ final class SupportTicketFoundationTest extends TestCase
             'updated_at' => $now,
         ]);
     }
+
     private function supportTicketService(Clock $clock): SupportTicketService
     {
         return new SupportTicketService(
@@ -531,7 +532,6 @@ final class SupportTicketFoundationTest extends TestCase
             $this->app->make(SupportAlertService::class),
         );
     }
-
 }
 
 final class MutableSupportClock implements Clock
