@@ -18,6 +18,7 @@ use App\Modules\Promotions\Presentation\Console\ProcessReferralRewardsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceAutoRenewalsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceNotificationsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceSynchronizationsCommand;
+use App\Modules\Telegram\Presentation\Console\ApplyTelegramUpdateRetentionCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\ProcessTelegramBroadcastsCommand;
 use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
@@ -52,6 +53,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ConfigureTelegramWebhookCommand::class,
         DispatchOutboxCommand::class,
         RequeueTelegramUpdatesCommand::class,
+        ApplyTelegramUpdateRetentionCommand::class,
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
         ProcessServiceAutoRenewalsCommand::class,

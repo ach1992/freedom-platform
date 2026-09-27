@@ -9,10 +9,15 @@ use App\Modules\Telegram\Application\Contracts\TelegramDeliveryEffectGuard;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
+use DateInterval;
+use DateTimeImmutable;
+use DateTimeZone;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -29,6 +34,7 @@ final readonly class TelegramDeliveryOperationExecutor
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private OutboxDeferrer $outboxDeferrer,
         private TelegramDeliveryRuntime $runtime,
         private TelegramMutationTransport $transport,
         private TelegramDeliveryDatabaseCapability $databaseCapability,
@@ -40,6 +46,8 @@ final readonly class TelegramDeliveryOperationExecutor
         private ?TelegramAdministratorDirectMessageService $directMessages = null,
         private ?TelegramSourceMessageSender $sourceMessageSender = null,
         private ?TelegramDeliveryEffectGuard $effectGuard = null,
+        private ?TelegramSharedRateLimiter $rateLimiter = null,
+        private ?TelegramRateRetryRetentionLifecycleFence $rateRetryRetentionFence = null,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -114,6 +122,22 @@ final readonly class TelegramDeliveryOperationExecutor
                     'private_media_presentation' => null,
                     'source_message_presentation' => null,
                 ];
+            }
+
+            if ($state === TelegramDeliveryOperationState::Retryable) {
+                $retryNotBefore = $this->retryDirectiveNotBefore($connection, $row);
+                if ($retryNotBefore !== null && $retryNotBefore > $this->clock->now()) {
+                    $this->deferOutboxUntil($row, $retryNotBefore);
+
+                    return [
+                        'row' => $row,
+                        'boundary_entered' => false,
+                        'request' => null,
+                        'protected_presentation' => null,
+                        'private_media_presentation' => null,
+                        'source_message_presentation' => null,
+                    ];
+                }
             }
 
             // Interactive resolution and durable fingerprint verification must
@@ -245,6 +269,24 @@ final readonly class TelegramDeliveryOperationExecutor
                 );
             }
 
+            if ($this->rateLimiter !== null) {
+                $budget = $this->rateLimiter->reserveOutbound($request->recipientChatId);
+                if (! $budget->allowed) {
+                    $retryAfter = $budget->retryAfterSeconds
+                        ?? throw new RuntimeException('Telegram outbound rate budget omitted its retry delay.');
+                    $this->deferOutboxBySeconds($row, $retryAfter);
+
+                    return [
+                        'row' => $row,
+                        'boundary_entered' => false,
+                        'request' => null,
+                        'protected_presentation' => null,
+                        'private_media_presentation' => null,
+                        'source_message_presentation' => null,
+                    ];
+                }
+            }
+
             return [
                 'row' => $this->enterProviderBoundary($connection, $row),
                 'boundary_entered' => true,
@@ -317,9 +359,16 @@ final readonly class TelegramDeliveryOperationExecutor
                 TelegramMutationOutcome::Success => [TelegramDeliveryOperationState::Succeeded, true],
                 TelegramMutationOutcome::DefinitiveNoEffectRetryable => [TelegramDeliveryOperationState::Retryable, false],
                 TelegramMutationOutcome::DefinitiveFailure => [TelegramDeliveryOperationState::FailedFinal, true],
-                TelegramMutationOutcome::RetryAfter => [TelegramDeliveryOperationState::ReviewRequired, true],
+                TelegramMutationOutcome::RetryAfter => [TelegramDeliveryOperationState::Retryable, false],
                 TelegramMutationOutcome::UncertainResult => [TelegramDeliveryOperationState::Uncertain, true],
             };
+
+            if ($result->outcome === TelegramMutationOutcome::RetryAfter) {
+                $retryAfter = $result->retryAfterSeconds
+                    ?? throw new RuntimeException('Telegram provider retry result omitted its delay.');
+                $retryNotBefore = $this->recordRetryDirective($connection, $row, $retryAfter);
+                $this->deferOutboxUntil($row, $retryNotBefore);
+            }
 
             $updated = $this->transition(
                 $connection,
@@ -327,7 +376,7 @@ final readonly class TelegramDeliveryOperationExecutor
                 $state,
                 $result->resultCode,
                 $result->messageId,
-                $result->retryAfterSeconds,
+                null,
                 $completed,
             );
 
@@ -600,6 +649,109 @@ final readonly class TelegramDeliveryOperationExecutor
             $row->result_code === null ? null : (string) $row->result_code,
             $row->retry_after_seconds === null ? null : (int) $row->retry_after_seconds,
         );
+    }
+
+    /**
+     * @param  DeliveryOperationRow  $row
+     */
+    private function retryDirectiveNotBefore(Connection $connection, object $row): ?DateTimeImmutable
+    {
+        $attempt = $this->positiveInt($row->provider_attempts, 'Telegram provider attempt count');
+        $directive = $connection->table('telegram_delivery_retry_directives')
+            ->where('operation_public_id', (string) $row->public_id)
+            ->where('provider_attempt', $attempt)
+            ->first(['retry_after_seconds', 'retry_not_before']);
+
+        if ($directive === null) {
+            return null;
+        }
+
+        $retryAfter = $this->positiveInt($directive->retry_after_seconds, 'Telegram provider retry delay');
+        if ($retryAfter > 86_400 || ! is_string($directive->retry_not_before)) {
+            throw new RuntimeException('Telegram provider retry directive is invalid.');
+        }
+
+        $notBefore = DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s.u',
+            $directive->retry_not_before,
+            new DateTimeZone('UTC'),
+        );
+        if ($notBefore === false) {
+            throw new RuntimeException('Telegram provider retry directive deadline is invalid.');
+        }
+
+        return $notBefore;
+    }
+
+    /**
+     * @param  DeliveryOperationRow  $row
+     */
+    private function recordRetryDirective(Connection $connection, object $row, int $retryAfterSeconds): DateTimeImmutable
+    {
+        ($this->rateRetryRetentionFence ?? new TelegramRateRetryRetentionLifecycleFence)
+            ->acquireRuntimeWriteFence($connection);
+
+        if ($retryAfterSeconds < 1 || $retryAfterSeconds > 86_400) {
+            throw new RuntimeException('Telegram provider retry directive delay is invalid.');
+        }
+
+        $attempt = $this->positiveInt($row->provider_attempts, 'Telegram provider attempt count');
+        $version = $this->positiveInt($row->state_version, 'Telegram delivery state version');
+        $observedAt = $this->clock->now();
+        $notBefore = $observedAt->add(new DateInterval('PT'.$retryAfterSeconds.'S'));
+        $values = [
+            'operation_public_id' => (string) $row->public_id,
+            'provider_attempt' => $attempt,
+            'retry_after_seconds' => $retryAfterSeconds,
+            'observed_at' => $this->formatTime($observedAt),
+            'retry_not_before' => $this->formatTime($notBefore),
+            'created_at' => $this->formatTime($observedAt),
+        ];
+
+        $inserted = $this->databaseCapability->runEffect(
+            $connection,
+            self::EFFECT_AUTHORITY,
+            (string) $row->public_id,
+            $version,
+            fn (): bool => $connection->table('telegram_delivery_retry_directives')->insert($values),
+        );
+        if (! $inserted) {
+            throw new RuntimeException('Telegram provider retry directive was not durably inserted.');
+        }
+
+        return $notBefore;
+    }
+
+    /**
+     * @param  DeliveryOperationRow  $row
+     */
+    private function deferOutboxBySeconds(object $row, int $seconds): void
+    {
+        if ($seconds < 1 || $seconds > 86_400) {
+            throw new RuntimeException('Telegram Outbox deferral delay is invalid.');
+        }
+
+        $this->deferOutboxUntil(
+            $row,
+            $this->clock->now()->add(new DateInterval('PT'.$seconds.'S')),
+        );
+    }
+
+    /** @param DeliveryOperationRow $row */
+    private function deferOutboxUntil(object $row, DateTimeImmutable $notBefore): void
+    {
+        $this->outboxDeferrer->deferUntil(
+            (string) $row->outbox_event_id,
+            TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
+            (string) $row->public_id,
+            (string) $row->correlation_id,
+            $notBefore,
+        );
+    }
+
+    private function formatTime(DateTimeImmutable $time): string
+    {
+        return $time->format('Y-m-d H:i:s.u');
     }
 
     private function timestamp(): string

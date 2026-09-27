@@ -14,11 +14,13 @@ use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceEntitlementGrantNotificationOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceMutationOutboxHandler;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxEventHandler;
 use App\Shared\Application\OutboxMessageRouter;
 use App\Shared\Application\OutboxPublisher;
 use App\Shared\Application\OutboxRuntime;
 use App\Shared\Application\RandomGenerator;
+use App\Shared\Infrastructure\DatabaseOutboxDeferrer;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use App\Shared\Infrastructure\DatabaseOutboxRuntime;
@@ -37,6 +39,13 @@ final class FoundationServiceProvider extends ServiceProvider
         $this->app->singleton(
             OutboxPublisher::class,
             fn (Application $application): OutboxPublisher => new DatabaseOutboxPublisher(
+                $application->make(DatabaseManager::class),
+                $application->make(Clock::class),
+            ),
+        );
+        $this->app->singleton(
+            OutboxDeferrer::class,
+            fn (Application $application): OutboxDeferrer => new DatabaseOutboxDeferrer(
                 $application->make(DatabaseManager::class),
                 $application->make(Clock::class),
             ),

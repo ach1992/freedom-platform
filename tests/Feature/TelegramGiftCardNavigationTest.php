@@ -263,15 +263,13 @@ final class TelegramGiftCardNavigationTest extends TestCase
         $storedUpdate = DB::table('processed_telegram_updates')
             ->where('bot_id', '123456789')
             ->where('update_id', 8110)
-            ->first(['payload_ciphertext', 'state', 'attempt_count']);
+            ->first(['payload_hash', 'payload_ciphertext', 'payload_size', 'state', 'attempt_count']);
         self::assertNotNull($storedUpdate);
         self::assertSame('processed', (string) $storedUpdate->state);
         self::assertSame(1, (int) $storedUpdate->attempt_count);
-        self::assertStringNotContainsString($rawCode, (string) $storedUpdate->payload_ciphertext);
-        self::assertStringContainsString(
-            $rawCode,
-            $this->app->make(StringEncrypter::class)->decryptString((string) $storedUpdate->payload_ciphertext),
-        );
+        self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $storedUpdate->payload_hash);
+        self::assertNull($storedUpdate->payload_ciphertext);
+        self::assertNull($storedUpdate->payload_size);
 
         self::assertStringNotContainsString($rawCode, $this->navigationCommonDurableEvidence($sessionId, $telegramUserId));
         $presentation = $this->latestConfidentialPresentation();

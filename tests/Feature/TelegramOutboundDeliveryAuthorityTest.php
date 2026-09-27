@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\TelegramDeliveryDatabaseCapability;
 use App\Modules\Telegram\Application\TelegramDeliveryOperationExecutor;
 use App\Modules\Telegram\Application\TelegramDeliveryOutboxHandler;
@@ -13,11 +14,14 @@ use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
+use App\Modules\Telegram\Application\TelegramRateLimitDecision;
+use App\Modules\Telegram\Application\TelegramRateRetryRetentionLifecycleFence;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Modules\Telegram\Infrastructure\HttpTelegramMutationTransport;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
@@ -57,6 +61,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
 
         $migration = require database_path('migrations/2026_08_25_000200_enable_telegram_outbound_delivery_authority.php');
         $migration->up();
+        (require database_path('migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php'))->up();
 
         $this->clock = new TelegramOutboundTestClock(new DateTimeImmutable('2026-08-25T12:00:00+00:00'));
         $this->runtime = new TelegramOutboundTestRuntime('123456');
@@ -396,13 +401,71 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         ]);
     }
 
-    public function test_provider_retry_after_is_quarantined_and_never_retried_early_or_blindly(): void
+    public function test_proactive_outbound_budget_defers_before_provider_boundary_then_allows_one_effect(): void
+    {
+        $rateLimiter = new ScriptedTelegramSharedRateLimiter([
+            TelegramRateLimitDecision::limited(7),
+            TelegramRateLimitDecision::allowed(),
+        ]);
+        $transport = new RecordingTelegramMutationTransport([
+            new TelegramMutationResult(TelegramMutationOutcome::Success, 'telegram_success', messageId: 711),
+        ], DB::getFacadeRoot());
+        $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
+            TelegramDeliveryAction::Send,
+            900018,
+            null,
+            NonRestrictedTelegramPresentationTestFactory::plainText('proactive rate budget'),
+            'telegram-rate-budget-request',
+            'correlation-rate-budget-402',
+        );
+        $handler = $this->handler($this->executor($transport, $rateLimiter));
+        $dispatcher = $this->dispatcher();
+
+        $dispatcher->dispatchOne($handler);
+
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'prepared',
+            'provider_attempts' => 0,
+        ]);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $created->outboxEventId,
+            'dispatch_state' => 'retry',
+            'attempts' => 1,
+            'available_at' => '2026-08-25 12:00:07.000000',
+        ]);
+        self::assertSame(0, $transport->attempts);
+        self::assertSame([900018], $rateLimiter->outboundChatIds);
+
+        $this->clock->advance('+6 seconds');
+        self::assertNull($dispatcher->dispatchOne($handler));
+        self::assertSame(0, $transport->attempts);
+
+        $this->clock->advance('+1 second');
+        $dispatcher->dispatchOne($handler);
+
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'succeeded',
+            'provider_attempts' => 1,
+            'telegram_message_id' => 711,
+        ]);
+        self::assertSame(1, $transport->attempts);
+        self::assertSame([900018, 900018], $rateLimiter->outboundChatIds);
+    }
+
+    public function test_provider_retry_after_is_respected_and_retried_only_after_the_due_time(): void
     {
         $transport = new RecordingTelegramMutationTransport([
             new TelegramMutationResult(
                 TelegramMutationOutcome::RetryAfter,
                 'telegram_retry_after',
                 retryAfterSeconds: 73,
+            ),
+            new TelegramMutationResult(
+                TelegramMutationOutcome::Success,
+                'telegram_success',
+                messageId: 712,
             ),
         ], DB::getFacadeRoot());
         $created = NonRestrictedTelegramPresentationTestFactory::queue($this->queue(),
@@ -413,27 +476,224 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
             'telegram-retry-after-request',
             'correlation-retry-after-179',
         );
-        $handler = $this->handler($this->executor($transport));
+        $executor = $this->executor($transport);
+        $handler = $this->handler($executor);
         $dispatcher = $this->dispatcher();
+
+        try {
+            DB::table('telegram_delivery_retry_directives')->insert([
+                'operation_public_id' => $created->publicId,
+                'provider_attempt' => 1,
+                'retry_after_seconds' => 73,
+                'observed_at' => '2026-08-25 12:00:00.000000',
+                'retry_not_before' => '2026-08-25 12:01:13.000000',
+                'created_at' => '2026-08-25 12:00:00.000000',
+            ]);
+            self::fail('Direct SQL must not forge Telegram provider retry evidence.');
+        } catch (QueryException $exception) {
+            self::assertStringContainsString('insert authority is invalid', $exception->getMessage());
+        }
 
         $dispatcher->dispatchOne($handler);
 
         $this->assertDatabaseHas('telegram_delivery_operations', [
             'public_id' => $created->publicId,
-            'state' => 'review_required',
+            'state' => 'retryable',
             'provider_attempts' => 1,
             'result_code' => 'telegram_retry_after',
+            'retry_after_seconds' => null,
+        ]);
+        $this->assertDatabaseHas('telegram_delivery_retry_directives', [
+            'operation_public_id' => $created->publicId,
+            'provider_attempt' => 1,
             'retry_after_seconds' => 73,
+            'retry_not_before' => '2026-08-25 12:01:13.000000',
         ]);
         $this->assertDatabaseHas('outbox_messages', [
             'id' => $created->outboxEventId,
-            'dispatch_state' => 'review_required',
-            'review_reason' => 'definitive_failure',
+            'dispatch_state' => 'retry',
             'attempts' => 1,
+            'available_at' => '2026-08-25 12:01:13.000000',
         ]);
-        $this->clock->advance('+1 day');
-        self::assertNull($dispatcher->dispatchOne($handler));
         self::assertSame(1, $transport->attempts);
+
+        $restartExecutor = $this->executor($transport);
+        $early = $restartExecutor->execute(
+            $created->publicId,
+            $created->outboxEventId,
+            'correlation-retry-after-179',
+        );
+        self::assertSame(TelegramDeliveryOperationState::Retryable, $early->state);
+        self::assertSame(1, $transport->attempts);
+
+        $this->clock->advance('+72 seconds');
+        self::assertNull($dispatcher->dispatchOne($this->handler($restartExecutor)));
+        self::assertSame(1, $transport->attempts);
+
+        $this->clock->advance('+1 second');
+        $dispatcher->dispatchOne($this->handler($restartExecutor));
+
+        $this->assertDatabaseHas('telegram_delivery_operations', [
+            'public_id' => $created->publicId,
+            'state' => 'succeeded',
+            'provider_attempts' => 2,
+            'telegram_message_id' => 712,
+        ]);
+        $this->assertDatabaseHas('outbox_messages', [
+            'id' => $created->outboxEventId,
+            'dispatch_state' => 'processed',
+            'attempts' => 2,
+        ]);
+        self::assertSame(2, $transport->attempts);
+        self::assertSame(1, DB::table('telegram_delivery_retry_directives')
+            ->where('operation_public_id', $created->publicId)
+            ->count());
+
+        try {
+            DB::table('telegram_delivery_retry_directives')
+                ->where('operation_public_id', $created->publicId)
+                ->update(['retry_after_seconds' => 1]);
+            self::fail('Telegram provider retry evidence must be append-only.');
+        } catch (QueryException) {
+            // Expected.
+        }
+
+        try {
+            DB::table('telegram_delivery_retry_directives')
+                ->where('operation_public_id', $created->publicId)
+                ->delete();
+            self::fail('Telegram provider retry evidence must be non-deletable.');
+        } catch (QueryException) {
+            // Expected.
+        }
+    }
+
+    public function test_retry_directive_writer_entered_before_rollback_cut_commits_and_forces_refusal(): void
+    {
+        $created = NonRestrictedTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900020,
+            null,
+            NonRestrictedTelegramPresentationTestFactory::plainText('retry directive rollback race'),
+            'telegram-retry-directive-rollback-race',
+            'correlation-retry-directive-rollback-race-179',
+        );
+        $executor = $this->executor(new RecordingTelegramMutationTransport([], DB::getFacadeRoot()));
+        $this->enterProviderBoundaryWithoutCallingTransport($executor, $created->publicId);
+
+        $reflection = new ReflectionClass($executor);
+        $operationMethod = $reflection->getMethod('operation');
+        $recordMethod = $reflection->getMethod('recordRetryDirective');
+        $database = app(DatabaseManager::class);
+        $default = (string) config('database.default');
+        $connectionConfig = config('database.connections.'.$default);
+        self::assertIsArray($connectionConfig);
+        $contenderName = 'telegram_retry_directive_rollback_contender';
+        config(['database.connections.'.$contenderName => $connectionConfig]);
+        $primary = $database->connection($default);
+        $contender = $database->connection($contenderName);
+        $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
+        $contender->statement('SET SESSION lock_wait_timeout = 1');
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+
+        $primary->beginTransaction();
+        try {
+            app(TelegramRateRetryRetentionLifecycleFence::class)
+                ->acquireRuntimeWriteFence($primary);
+            $row = $operationMethod->invoke($executor, $primary, $created->publicId, true);
+
+            config(['database.default' => $contenderName]);
+            try {
+                try {
+                    $migration->down();
+                    self::fail('Rollback must wait for the retry-directive writer that entered before the cut.');
+                } catch (QueryException $exception) {
+                    self::assertStringContainsString('Lock wait timeout', $exception->getMessage());
+                }
+            } finally {
+                config(['database.default' => $default]);
+            }
+
+            $recordMethod->invoke($executor, $primary, $row, 37);
+            $primary->commit();
+        } catch (\Throwable $exception) {
+            if ($primary->transactionLevel() > 0) {
+                $primary->rollBack();
+            }
+
+            throw $exception;
+        }
+
+        config(['database.default' => $contenderName]);
+        try {
+            try {
+                $migration->down();
+                self::fail('Committed retry evidence must make rollback refuse after the writer drains.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Telegram provider retry evidence exists; rollback is refused.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            config(['database.default' => $default]);
+            DB::purge($contenderName);
+        }
+
+        $this->assertDatabaseHas('telegram_delivery_retry_directives', [
+            'operation_public_id' => $created->publicId,
+            'provider_attempt' => 1,
+            'retry_after_seconds' => 37,
+        ]);
+    }
+
+    public function test_rollback_cut_blocks_new_provider_retry_directive_evidence(): void
+    {
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+        (new ReflectionClass($migration))
+            ->getMethod('establishLifecycleFence')
+            ->invoke($migration);
+
+        $transport = new RecordingTelegramMutationTransport([
+            new TelegramMutationResult(
+                TelegramMutationOutcome::RetryAfter,
+                'telegram_retry_after',
+                retryAfterSeconds: 41,
+            ),
+        ], DB::getFacadeRoot());
+        $created = NonRestrictedTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900019,
+            null,
+            NonRestrictedTelegramPresentationTestFactory::plainText('rollback fenced retry evidence'),
+            'telegram-rollback-fenced-retry-request',
+            'correlation-rollback-fenced-retry-179',
+        );
+
+        try {
+            $this->dispatcher()->dispatchOne($this->handler($this->executor($transport)));
+
+            self::assertSame(1, $transport->attempts);
+            self::assertSame(0, DB::table('telegram_delivery_retry_directives')
+                ->where('operation_public_id', $created->publicId)
+                ->count());
+            self::assertSame('uncertain', DB::table('telegram_delivery_operations')
+                ->where('public_id', $created->publicId)
+                ->value('state'));
+            $this->assertDatabaseHas('outbox_messages', [
+                'id' => $created->outboxEventId,
+                'dispatch_state' => 'review_required',
+                'review_reason' => 'uncertain_result',
+            ]);
+        } finally {
+            $migration->up();
+        }
     }
 
     public function test_uncertain_result_and_crash_recovery_fail_toward_review_without_second_mutation(): void
@@ -839,16 +1099,20 @@ SQL);
         );
     }
 
-    private function executor(TelegramMutationTransport $transport): TelegramDeliveryOperationExecutor
-    {
+    private function executor(
+        TelegramMutationTransport $transport,
+        ?TelegramSharedRateLimiter $rateLimiter = null,
+    ): TelegramDeliveryOperationExecutor {
         return new TelegramDeliveryOperationExecutor(
             app(DatabaseManager::class),
             $this->clock,
+            app(OutboxDeferrer::class),
             $this->runtime,
             $transport,
             new TelegramDeliveryDatabaseCapability,
             TelegramInteractivePresentationTestFactory::service($this->clock, $this->runtime),
             ConfidentialTelegramPresentationTestFactory::service($this->clock),
+            rateLimiter: $rateLimiter,
         );
     }
 
@@ -916,6 +1180,36 @@ final readonly class TelegramOutboundTestRuntime implements TelegramDeliveryRunt
     public function botId(): string
     {
         return $this->botId;
+    }
+}
+
+final class ScriptedTelegramSharedRateLimiter implements TelegramSharedRateLimiter
+{
+    /** @var list<TelegramRateLimitDecision> */
+    private array $outboundDecisions;
+
+    /** @var list<int> */
+    public array $outboundChatIds = [];
+
+    /** @param list<TelegramRateLimitDecision> $outboundDecisions */
+    public function __construct(array $outboundDecisions)
+    {
+        $this->outboundDecisions = $outboundDecisions;
+    }
+
+    public function consumeInteraction(int $userId): TelegramRateLimitDecision
+    {
+        unset($userId);
+
+        return TelegramRateLimitDecision::allowed();
+    }
+
+    public function reserveOutbound(int $recipientChatId): TelegramRateLimitDecision
+    {
+        $this->outboundChatIds[] = $recipientChatId;
+
+        return array_shift($this->outboundDecisions)
+            ?? TelegramRateLimitDecision::allowed();
     }
 }
 

@@ -15,6 +15,19 @@ return [
     'private_media_max_bytes' => (int) env('TELEGRAM_PRIVATE_MEDIA_MAX_BYTES', 10_000_000),
     'api_base_url' => 'https://api.telegram.org',
     'api_timeout_seconds' => (int) env('TELEGRAM_API_TIMEOUT_SECONDS', 15),
+    'rate_limits' => [
+        'prefix' => env('TELEGRAM_RATE_LIMIT_PREFIX', 'freedom:telegram:rate:'),
+        'interaction' => [
+            'max_attempts' => (int) env('TELEGRAM_INTERACTION_RATE_LIMIT_MAX', 60),
+            'window_seconds' => (int) env('TELEGRAM_INTERACTION_RATE_LIMIT_WINDOW_SECONDS', 60),
+        ],
+        'outbound' => [
+            'global_max_attempts' => (int) env('TELEGRAM_OUTBOUND_GLOBAL_RATE_LIMIT_MAX', 25),
+            'global_window_seconds' => (int) env('TELEGRAM_OUTBOUND_GLOBAL_RATE_LIMIT_WINDOW_SECONDS', 1),
+            'chat_max_attempts' => (int) env('TELEGRAM_OUTBOUND_CHAT_RATE_LIMIT_MAX', 1),
+            'chat_window_seconds' => (int) env('TELEGRAM_OUTBOUND_CHAT_RATE_LIMIT_WINDOW_SECONDS', 1),
+        ],
+    ],
     'inline_button_style_supported' => filter_var(env('TELEGRAM_INLINE_BUTTON_STYLE_SUPPORTED', true), FILTER_VALIDATE_BOOL),
     'inline_button_premium_emoji_supported' => filter_var(env('TELEGRAM_INLINE_BUTTON_PREMIUM_EMOJI_SUPPORTED', false), FILTER_VALIDATE_BOOL),
 ];

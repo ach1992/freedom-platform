@@ -24,6 +24,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationReso
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
@@ -167,6 +168,10 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(
             TelegramSupportCustomerRateLimiter::class,
             RedisTelegramSupportCustomerRateLimiter::class,
+        );
+        $this->app->singleton(
+            TelegramSharedRateLimiter::class,
+            RedisTelegramSharedRateLimiter::class,
         );
         $this->app->singleton(
             TelegramSupportMembershipFreshnessGuard::class,

@@ -6,13 +6,17 @@ namespace Tests\Feature;
 
 use App\Modules\Promotions\Application\ReferralAttributionService;
 use App\Modules\Telegram\Application\Contracts\TelegramInteractionHandler;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\TelegramInteractionAction;
 use App\Modules\Telegram\Application\TelegramInteractionDispatcher;
 use App\Modules\Telegram\Application\TelegramInteractionHandlerRegistry;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
+use App\Modules\Telegram\Application\TelegramRateLimitDecision;
+use App\Modules\Telegram\Application\TelegramRateRetryRetentionLifecycleFence;
 use App\Modules\Telegram\Application\TelegramReferralStartAttributionService;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -77,6 +81,15 @@ final class TelegramUpdateProcessorTest extends TestCase
             'state' => 'processed',
             'attempt_count' => 1,
         ]);
+        $processedUpdate = DB::table('processed_telegram_updates')->where('update_id', 3001)->first([
+            'payload_hash',
+            'payload_ciphertext',
+            'payload_size',
+        ]);
+        self::assertNotNull($processedUpdate);
+        self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $processedUpdate->payload_hash);
+        self::assertNull($processedUpdate->payload_ciphertext);
+        self::assertNull($processedUpdate->payload_size);
 
         $attribution = DB::table('telegram_start_attributions')->first();
         self::assertNotNull($attribution);
@@ -550,6 +563,207 @@ SQL);
             ->count());
     }
 
+    public function test_shared_interaction_rate_limit_stops_business_dispatch_and_still_terminalizes_raw_payload(): void
+    {
+        $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::limited(19));
+        $this->app->instance(TelegramSharedRateLimiter::class, $limiter);
+
+        $this->accept($this->payload(3080, 9180, 'rate_limited_user', '/start campaign_should_not_bind'));
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3080);
+
+        $userId = (int) DB::table('telegram_accounts')->where('telegram_user_id', 9180)->value('user_id');
+        self::assertGreaterThan(0, $userId);
+        self::assertSame([$userId], $limiter->interactionUserIds);
+        self::assertSame(0, DB::table('telegram_interaction_sessions')->where('user_id', $userId)->count());
+        self::assertSame(1, DB::table('telegram_start_attributions')->where('user_id', $userId)->count());
+
+        $stored = DB::table('processed_telegram_updates')->where('update_id', 3080)->first([
+            'state',
+            'attempt_count',
+            'payload_hash',
+            'payload_ciphertext',
+            'payload_size',
+        ]);
+        self::assertNotNull($stored);
+        self::assertSame('processed', (string) $stored->state);
+        self::assertSame(1, (int) $stored->attempt_count);
+        self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $stored->payload_hash);
+        self::assertNull($stored->payload_ciphertext);
+        self::assertNull($stored->payload_size);
+        self::assertNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3080)
+            ->value('interaction_rate_authorized_at'));
+    }
+
+    public function test_allowed_rate_decision_is_reused_across_retry_but_redis_failure_would_not_be_bypassed(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram rate authorization replay verification requires MariaDB/MySQL.');
+        }
+
+        $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::allowed());
+        $this->app->instance(TelegramSharedRateLimiter::class, $limiter);
+        $this->accept($this->payload(3081, 9181, 'rate_retry_user', 'hello'));
+
+        DB::unprepared(<<<'SQL'
+CREATE TRIGGER telegram_update_test_fail_processed_3081
+BEFORE UPDATE ON processed_telegram_updates
+FOR EACH ROW
+BEGIN
+    IF OLD.bot_id = '123456789' AND OLD.update_id = 3081 AND NEW.state = 'processed' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'simulated-rate-post-dispatch-failure';
+    END IF;
+END
+SQL);
+        try {
+            try {
+                $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3081);
+                self::fail('The simulated completion failure must leave the Update retryable.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS telegram_update_test_fail_processed_3081');
+        }
+
+        self::assertCount(1, $limiter->interactionUserIds);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 3081,
+            'state' => 'failed',
+            'attempt_count' => 1,
+        ]);
+        self::assertNotNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3081)
+            ->value('interaction_rate_authorized_at'));
+
+        $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3081);
+
+        self::assertCount(1, $limiter->interactionUserIds);
+        $this->assertDatabaseHas('processed_telegram_updates', [
+            'update_id' => 3081,
+            'state' => 'processed',
+            'attempt_count' => 2,
+        ]);
+        self::assertNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3081)
+            ->value('interaction_rate_authorized_at'));
+        self::assertNull(DB::table('processed_telegram_updates')->where('update_id', 3081)->value('payload_ciphertext'));
+    }
+
+    public function test_interaction_authorization_writer_entered_before_rollback_cut_commits_and_forces_refusal(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram interaction authorization rollback-race verification requires MariaDB/MySQL.');
+        }
+
+        $this->accept($this->payload(3083, 9183, 'rollback_race_user', 'hello'));
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $reflection = new \ReflectionClass($processor);
+        $claimMethod = $reflection->getMethod('claim');
+        $authorizeMethod = $reflection->getMethod('authorizeInteractionRate');
+        $claimed = $claimMethod->invoke($processor, '123456789', 3083);
+        self::assertIsArray($claimed);
+
+        $database = $this->app->make(DatabaseManager::class);
+        $default = (string) config('database.default');
+        $connectionConfig = config('database.connections.'.$default);
+        self::assertIsArray($connectionConfig);
+        $contenderName = 'telegram_interaction_authorization_rollback_contender';
+        config(['database.connections.'.$contenderName => $connectionConfig]);
+        $primary = $database->connection($default);
+        $contender = $database->connection($contenderName);
+        $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
+        $contender->statement('SET SESSION lock_wait_timeout = 1');
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+
+        $primary->beginTransaction();
+        try {
+            $this->app->make(TelegramRateRetryRetentionLifecycleFence::class)
+                ->acquireRuntimeWriteFence($primary);
+
+            config(['database.default' => $contenderName]);
+            try {
+                try {
+                    $migration->down();
+                    self::fail('Rollback must wait for the interaction writer that entered before the cut.');
+                } catch (QueryException $exception) {
+                    self::assertStringContainsString('Lock wait timeout', $exception->getMessage());
+                }
+            } finally {
+                config(['database.default' => $default]);
+            }
+
+            $authorizeMethod->invoke($processor, '123456789', 3083);
+            $primary->commit();
+        } catch (\Throwable $exception) {
+            if ($primary->transactionLevel() > 0) {
+                $primary->rollBack();
+            }
+
+            throw $exception;
+        }
+
+        config(['database.default' => $contenderName]);
+        try {
+            try {
+                $migration->down();
+                self::fail('Committed interaction authorization must make rollback refuse after the writer drains.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Telegram interaction rate authorization evidence exists; rollback is refused.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            config(['database.default' => $default]);
+            DB::purge($contenderName);
+        }
+
+        self::assertNotNull(DB::table('processed_telegram_updates')
+            ->where('update_id', 3083)
+            ->value('interaction_rate_authorized_at'));
+    }
+
+    public function test_rollback_cut_blocks_new_interaction_rate_authorization_evidence(): void
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Telegram rollback-fence verification requires MariaDB/MySQL.');
+        }
+
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+        $reflection = new \ReflectionClass($migration);
+        $reflection->getMethod('establishLifecycleFence')->invoke($migration);
+
+        $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::allowed());
+        $this->app->instance(TelegramSharedRateLimiter::class, $limiter);
+        $this->accept($this->payload(3082, 9182, 'rollback_fenced_user', 'hello'));
+
+        try {
+            try {
+                $this->app->make(TelegramUpdateProcessor::class)->process('123456789', 3082);
+                self::fail('A post-cut interaction-rate writer must fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Telegram update processing failed.', $exception->getMessage());
+            }
+
+            self::assertCount(1, $limiter->interactionUserIds);
+            $this->assertDatabaseHas('processed_telegram_updates', [
+                'update_id' => 3082,
+                'state' => 'failed',
+                'attempt_count' => 1,
+            ]);
+            self::assertNull(DB::table('processed_telegram_updates')
+                ->where('update_id', 3082)
+                ->value('interaction_rate_authorized_at'));
+        } finally {
+            $migration->up();
+        }
+    }
+
     public function test_unknown_update_is_processed_without_creating_identity(): void
     {
         $this->accept(['update_id' => 4001, 'poll' => ['id' => 'poll-id']]);
@@ -613,5 +827,26 @@ SQL);
                 'text' => $text,
             ],
         ];
+    }
+}
+final class ProcessorTelegramSharedRateLimiter implements TelegramSharedRateLimiter
+{
+    /** @var list<int> */
+    public array $interactionUserIds = [];
+
+    public function __construct(private readonly TelegramRateLimitDecision $interactionDecision) {}
+
+    public function consumeInteraction(int $userId): TelegramRateLimitDecision
+    {
+        $this->interactionUserIds[] = $userId;
+
+        return $this->interactionDecision;
+    }
+
+    public function reserveOutbound(int $recipientChatId): TelegramRateLimitDecision
+    {
+        unset($recipientChatId);
+
+        return TelegramRateLimitDecision::allowed();
     }
 }

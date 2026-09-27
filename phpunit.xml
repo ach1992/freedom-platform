@@ -42,6 +42,9 @@
         <env name="TELEGRAM_METADATA_DB_USERNAME" value="freedom_ci_metadata"/>
         <env name="TELEGRAM_LIFECYCLE_DB_PASSWORD" value="ci-only-lifecycle-password"/>
         <env name="TELEGRAM_METADATA_DB_PASSWORD" value="ci-only-metadata-password"/>
+        <env name="TELEGRAM_INTERACTION_RATE_LIMIT_MAX" value="10000"/>
+        <env name="TELEGRAM_OUTBOUND_GLOBAL_RATE_LIMIT_MAX" value="10000"/>
+        <env name="TELEGRAM_OUTBOUND_CHAT_RATE_LIMIT_MAX" value="10000"/>
         <env name="MARIADB_SHADOW_PORT" value="33068"/>
     </php>
 </phpunit>

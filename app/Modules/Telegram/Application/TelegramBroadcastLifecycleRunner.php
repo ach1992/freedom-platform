@@ -7,11 +7,13 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use DateInterval;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
@@ -30,7 +32,9 @@ final readonly class TelegramBroadcastLifecycleRunner
         private AdministratorPermissionAuthorizer $administrators,
         private TelegramBroadcastTextDeliveryGateway $textDelivery,
         private TelegramBroadcastLifecycleTransport $transport,
+        private TelegramSharedRateLimiter $rateLimiter,
         private TelegramDeliveryRuntime $runtime,
+        private TelegramDeliveryRetryDirectiveReader $retryDirectives,
     ) {}
 
     /** @requirement COM-003 ACL-002 DAT-002 DAT-003 DAT-004 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
@@ -324,6 +328,31 @@ final readonly class TelegramBroadcastLifecycleRunner
                 return false;
             }
 
+            $budget = $this->rateLimiter->reserveOutbound((int) $context['telegram_user_id']);
+            if (! $budget->allowed) {
+                $retryAfter = $budget->retryAfterSeconds
+                    ?? throw new RuntimeException('Telegram outbound rate budget omitted its retry delay.');
+                $nowInstant = $this->clock->now();
+                $now = $nowInstant->format('Y-m-d H:i:s.u');
+                $retryNotBefore = $nowInstant
+                    ->add(new DateInterval('PT'.$retryAfter.'S'))
+                    ->format('Y-m-d H:i:s.u');
+                $updated = $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'retryable',
+                        'result_code' => 'telegram_outbound_rate_limited',
+                        'retry_not_before' => $retryNotBefore,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Broadcast lifecycle rate-budget deferral transition failed.');
+                }
+
+                return false;
+            }
+
             $now = $this->timestamp();
             $updated = $connection->table('broadcast_recipient_messages')
                 ->where('id', (int) $operation->id)
@@ -477,7 +506,9 @@ final readonly class TelegramBroadcastLifecycleRunner
              *     broadcast_recipient_id:int|string,
              *     action:string,
              *     state:string,
-             *     delivery_operation_public_id:?string
+             *     delivery_operation_public_id:?string,
+             *     result_code:string|null,
+             *     retry_not_before:string|null
              * }|null $operation
              */
             $operation = $connection->table('broadcast_recipient_messages as operation')
@@ -492,28 +523,41 @@ final readonly class TelegramBroadcastLifecycleRunner
                     'operation.action',
                     'operation.state',
                     'operation.delivery_operation_public_id',
+                    'operation.result_code',
+                    'operation.retry_not_before',
                 ]);
             if ($operation === null || $operation->delivery_operation_public_id === null) {
                 return false;
             }
 
-            /** @var object{state:string,outbox_event_id:string,result_code:?string,retry_after_seconds:int|string|null,completed_at:?string}|null $delivery */
+            /** @var object{state:string,outbox_event_id:string,result_code:?string,retry_after_seconds:int|string|null,provider_attempts:int|string,completed_at:?string}|null $delivery */
             $delivery = $connection->table('telegram_delivery_operations')
                 ->where('public_id', $operation->delivery_operation_public_id)
-                ->first(['state', 'outbox_event_id', 'result_code', 'retry_after_seconds', 'completed_at']);
+                ->first([
+                    'state',
+                    'outbox_event_id',
+                    'result_code',
+                    'retry_after_seconds',
+                    'provider_attempts',
+                    'completed_at',
+                ]);
             if ($delivery === null) {
                 throw new RuntimeException('Broadcast lifecycle linked delivery operation is missing.');
             }
             $deliveryState = TelegramDeliveryOperationState::tryFrom($delivery->state)
                 ?? throw new RuntimeException('Broadcast lifecycle linked delivery state is invalid.');
 
-            if ($deliveryState === TelegramDeliveryOperationState::Prepared
+            $outboxRequiresReview = in_array($deliveryState, [
+                TelegramDeliveryOperationState::Prepared,
+                TelegramDeliveryOperationState::Retryable,
+            ], true)
                 && $connection->table('outbox_messages')
                     ->where('id', $delivery->outbox_event_id)
                     ->whereNull('processed_at')
                     ->where('dispatch_state', 'review_required')
-                    ->exists()
-            ) {
+                    ->exists();
+
+            if ($deliveryState === TelegramDeliveryOperationState::Prepared && $outboxRequiresReview) {
                 $now = $this->timestamp();
                 $connection->table('broadcast_recipient_messages')
                     ->where('id', (int) $operation->id)
@@ -527,12 +571,52 @@ final readonly class TelegramBroadcastLifecycleRunner
                 return true;
             }
 
+            if ($deliveryState === TelegramDeliveryOperationState::Retryable && $outboxRequiresReview) {
+                $retryNotBefore = $this->retryDirectives->retryNotBefore(
+                    $connection,
+                    (string) $operation->delivery_operation_public_id,
+                    $delivery->provider_attempts,
+                );
+                $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->update([
+                        'state' => 'retryable',
+                        'result_code' => $this->resultCode(
+                            $delivery->result_code,
+                            'telegram_lifecycle_retry_exhausted',
+                        ),
+                        'retry_not_before' => $retryNotBefore,
+                        'updated_at' => $this->timestamp(),
+                    ]);
+
+                return true;
+            }
+
             if (in_array($deliveryState, [
                 TelegramDeliveryOperationState::Prepared,
                 TelegramDeliveryOperationState::Sending,
                 TelegramDeliveryOperationState::Retryable,
             ], true)) {
-                return false;
+                $resultCode = $delivery->result_code === null ? null : (string) $delivery->result_code;
+                $currentResultCode = $operation->result_code === null
+                    ? null
+                    : (string) $operation->result_code;
+                $currentRetryNotBefore = $operation->retry_not_before === null
+                    ? null
+                    : (string) $operation->retry_not_before;
+                if ($currentResultCode === $resultCode && $currentRetryNotBefore === null) {
+                    return false;
+                }
+
+                $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->update([
+                        'result_code' => $resultCode,
+                        'retry_not_before' => null,
+                        'updated_at' => $this->timestamp(),
+                    ]);
+
+                return true;
             }
 
             [$state, $resultCode] = match ($deliveryState) {

@@ -158,7 +158,7 @@ final readonly class DatabaseOutboxDispatcher
                 ]
                 : [
                     'dispatch_state' => 'retry',
-                    'available_at' => $this->format($now->add(new DateInterval('PT'.$this->retryDelaySeconds($claim->message->attempt).'S'))),
+                    'available_at' => $this->retryAvailableAt($claim, $now),
                     'lease_token' => null,
                     'leased_until' => null,
                     'review_reason' => null,
@@ -221,6 +221,24 @@ final readonly class DatabaseOutboxDispatcher
         }
 
         return $decoded;
+    }
+
+    private function retryAvailableAt(OutboxDispatchClaim $claim, \DateTimeImmutable $now): string
+    {
+        $generic = $now->add(new DateInterval('PT'.$this->retryDelaySeconds($claim->message->attempt).'S'));
+        $current = $this->database->connection()->table('outbox_messages')
+            ->where('id', $claim->message->id)
+            ->where('dispatch_state', 'leased')
+            ->where('lease_token', $claim->leaseToken)
+            ->value('available_at');
+
+        if (! is_string($current)) {
+            throw new LogicException('Outbox retry scheduling lost its exact lease.');
+        }
+
+        $domainMinimum = new \DateTimeImmutable($current, new \DateTimeZone('UTC'));
+
+        return $this->format($domainMinimum > $generic ? $domainMinimum : $generic);
     }
 
     private function retryDelaySeconds(int $attempt): int

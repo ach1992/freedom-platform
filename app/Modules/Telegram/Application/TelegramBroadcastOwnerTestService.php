@@ -6,11 +6,13 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use DateInterval;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -29,7 +31,9 @@ final readonly class TelegramBroadcastOwnerTestService
         private TelegramDeliveryRuntime $runtime,
         private TelegramBroadcastTextDeliveryGateway $textDelivery,
         private TelegramSourceMessageSender $sourceMessages,
+        private TelegramSharedRateLimiter $rateLimiter,
         private Clock $clock,
+        private TelegramDeliveryRetryDirectiveReader $retryDirectives,
     ) {}
 
     /** @requirement COM-002 ACL-001 ACL-002 DAT-002 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 */
@@ -74,16 +78,32 @@ final readonly class TelegramBroadcastOwnerTestService
                     return (string) $existing->public_id;
                 }
 
+                $now = $this->timestamp();
                 $retryWindowActive = $connection->table('broadcast_campaign_tests')
                     ->where('broadcast_campaign_id', $context['campaign_id'])
                     ->where('broadcast_message_version_id', $context['message_version_id'])
                     ->where('telegram_account_id', $context['telegram_account_id'])
                     ->where('state', 'failed')
                     ->whereNotNull('retry_not_before')
-                    ->where('retry_not_before', '>', $this->timestamp())
+                    ->where('retry_not_before', '>', $now)
                     ->exists();
-                if ($retryWindowActive) {
-                    throw new DomainException('Broadcast Owner-test provider retry window has not elapsed.');
+                $automaticRetryUnresolved = $connection->table('broadcast_campaign_tests as existing_test')
+                    ->where('existing_test.broadcast_campaign_id', $context['campaign_id'])
+                    ->where('existing_test.broadcast_message_version_id', $context['message_version_id'])
+                    ->where('existing_test.telegram_account_id', $context['telegram_account_id'])
+                    ->whereIn('existing_test.state', ['queued', 'sending'])
+                    ->whereNotNull('existing_test.delivery_operation_public_id')
+                    ->whereExists(function ($directive): void {
+                        $directive->selectRaw('1')
+                            ->from('telegram_delivery_retry_directives as retry_directive')
+                            ->whereColumn(
+                                'retry_directive.operation_public_id',
+                                'existing_test.delivery_operation_public_id',
+                            );
+                    })
+                    ->exists();
+                if ($retryWindowActive || $automaticRetryUnresolved) {
+                    throw new DomainException('Broadcast Owner-test provider retry is still unresolved.');
                 }
 
                 $publicId = (string) Str::ulid();
@@ -279,6 +299,31 @@ final readonly class TelegramBroadcastOwnerTestService
                 $context['source_chat_id'],
             );
 
+            $budget = $this->rateLimiter->reserveOutbound((int) $context['telegram_user_id']);
+            if (! $budget->allowed) {
+                $retryAfter = $budget->retryAfterSeconds
+                    ?? throw new RuntimeException('Telegram outbound rate budget omitted its retry delay.');
+                $nowInstant = $this->clock->now();
+                $now = $nowInstant->format('Y-m-d H:i:s.u');
+                $retryNotBefore = $nowInstant
+                    ->add(new DateInterval('PT'.$retryAfter.'S'))
+                    ->format('Y-m-d H:i:s.u');
+                $updated = $connection->table('broadcast_campaign_tests')
+                    ->where('public_id', $testPublicId)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'failed',
+                        'result_code' => 'telegram_outbound_rate_limited',
+                        'retry_not_before' => $retryNotBefore,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Broadcast Owner test rate-budget deferral transition failed.');
+                }
+
+                return false;
+            }
+
             $now = $this->timestamp();
             $updated = $connection->table('broadcast_campaign_tests')
                 ->where('public_id', $testPublicId)
@@ -396,6 +441,7 @@ final readonly class TelegramBroadcastOwnerTestService
                     'test.delivery_operation_public_id',
                     'test.telegram_message_id',
                     'test.result_code',
+                    'test.retry_not_before',
                     'test.provider_boundary_started_at',
                     'test.provider_boundary_finished_at',
                     'message.version as tested_message_version',
@@ -448,6 +494,7 @@ final readonly class TelegramBroadcastOwnerTestService
                         'telegram_message_id',
                         'result_code',
                         'retry_after_seconds',
+                        'provider_attempts',
                         'completed_at',
                     ]);
                 if ($operation === null) {
@@ -456,34 +503,57 @@ final readonly class TelegramBroadcastOwnerTestService
 
                 $operationState = TelegramDeliveryOperationState::tryFrom((string) $operation->state)
                     ?? throw new RuntimeException('Broadcast Owner test delivery state is invalid.');
-                $preEffectReview = $operationState === TelegramDeliveryOperationState::Prepared
+                $outboxRequiresReview = in_array($operationState, [
+                    TelegramDeliveryOperationState::Prepared,
+                    TelegramDeliveryOperationState::Retryable,
+                ], true)
                     && $connection->table('outbox_messages')
                         ->where('id', (string) $operation->outbox_event_id)
                         ->whereNull('processed_at')
                         ->where('dispatch_state', 'review_required')
                         ->exists();
+                $preEffectReview = $operationState === TelegramDeliveryOperationState::Prepared
+                    && $outboxRequiresReview;
+                $retryableReview = $operationState === TelegramDeliveryOperationState::Retryable
+                    && $outboxRequiresReview;
                 [$state, $messageId, $resultCode] = $preEffectReview
                     ? ['failed', null, 'telegram_broadcast_owner_test_pre_effect_review_required']
-                    : match ($operationState) {
-                        TelegramDeliveryOperationState::Prepared,
-                        TelegramDeliveryOperationState::Retryable => ['queued', null, $operation->result_code],
-                        TelegramDeliveryOperationState::Sending => ['sending', null, $operation->result_code],
-                        TelegramDeliveryOperationState::Succeeded => [
-                            'succeeded',
-                            $this->positiveNullableInt($operation->telegram_message_id, 'Broadcast Owner test message ID'),
-                            $operation->result_code,
-                        ],
-                        TelegramDeliveryOperationState::FailedFinal,
-                        TelegramDeliveryOperationState::ReviewRequired => ['failed', null, $operation->result_code],
-                        TelegramDeliveryOperationState::Uncertain => ['uncertain', null, $operation->result_code],
-                    };
+                    : ($retryableReview
+                        ? ['failed', null, $operation->result_code]
+                        : match ($operationState) {
+                            TelegramDeliveryOperationState::Prepared,
+                            TelegramDeliveryOperationState::Retryable => ['queued', null, $operation->result_code],
+                            TelegramDeliveryOperationState::Sending => ['sending', null, $operation->result_code],
+                            TelegramDeliveryOperationState::Succeeded => [
+                                'succeeded',
+                                $this->positiveNullableInt($operation->telegram_message_id, 'Broadcast Owner test message ID'),
+                                $operation->result_code,
+                            ],
+                            TelegramDeliveryOperationState::FailedFinal,
+                            TelegramDeliveryOperationState::ReviewRequired => ['failed', null, $operation->result_code],
+                            TelegramDeliveryOperationState::Uncertain => ['uncertain', null, $operation->result_code],
+                        });
 
-                $retryNotBefore = $operationState === TelegramDeliveryOperationState::ReviewRequired
-                    ? $this->retryNotBeforeStoredOperation($operation->completed_at, $operation->retry_after_seconds, 'Broadcast Owner-test retry delay')
-                    : null;
+                $retryNotBefore = $retryableReview
+                    ? $this->retryDirectives->retryNotBefore(
+                        $connection,
+                        $deliveryPublicId,
+                        $operation->provider_attempts,
+                    )
+                    : ($operationState === TelegramDeliveryOperationState::ReviewRequired
+                        ? $this->retryNotBeforeStoredOperation(
+                            $operation->completed_at,
+                            $operation->retry_after_seconds,
+                            'Broadcast Owner-test retry delay',
+                        )
+                        : null);
+                $currentRetryNotBefore = $row->retry_not_before === null
+                    ? null
+                    : (string) $row->retry_not_before;
                 if ($state !== (string) $row->state
                     || $messageId !== ($row->telegram_message_id === null ? null : (int) $row->telegram_message_id)
                     || ($resultCode !== null && ! hash_equals((string) ($row->result_code ?? ''), (string) $resultCode))
+                    || $currentRetryNotBefore !== $retryNotBefore
                 ) {
                     $connection->table('broadcast_campaign_tests')
                         ->where('id', (int) $row->id)

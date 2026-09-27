@@ -183,3 +183,26 @@ Keep detailed operational evidence in protected target storage. Repository relea
 
 [1]: ../database/migrations/2026_08_20_000110_enable_paid_service_mutation_authority.php "Paid Service mutation authority migration"
 [2]: ../database/migrations/2026_08_20_000100_enable_service_package_quotes.php "Service package Quote authority migration"
+
+## Telegram shared rate control and Update payload retention
+
+Phase 0.7 applies a shared generic Telegram capacity boundary without replacing stricter feature-specific controls:
+
+- generic recognized-user interactions consume the configured per-user Redis budget before business/navigation dispatch;
+- outbound delivery consumes one atomic global + per-chat Redis budget before the existing Telegram provider boundary;
+- Support ticket/content quotas and OTP abuse controls remain separate stricter layers and are not replaced by the generic budget;
+- Redis corruption/unavailability fails closed instead of silently bypassing the capacity boundary.
+
+The generic runtime defaults are exposed through `TELEGRAM_RATE_LIMIT_PREFIX`, `TELEGRAM_INTERACTION_RATE_LIMIT_*`, `TELEGRAM_OUTBOUND_GLOBAL_RATE_LIMIT_*`, and `TELEGRAM_OUTBOUND_CHAT_RATE_LIMIT_*`. Tune them only from observed operational capacity; do not weaken Support/OTP controls to compensate for these budgets.
+
+A Telegram API rate rejection with a valid `retry_after` is a provider-confirmed no-effect result. The canonical delivery operation remains retryable, an append-only directive records the exact provider attempt and not-before time, and the linked Outbox command cannot be delivered before that time. Generic Outbox backoff may extend the delay but may not shorten it. Transport/server ambiguity and crash-at-boundary states remain `uncertain`/manual-review and are never automatically converted into retryable delivery.
+
+Raw inbound Update retention is intentionally split by recoverability:
+
+- after successful processing, `processed_telegram_updates` keeps durable bot/update identity, payload hash, state and processing evidence while `payload_ciphertext` and `payload_size` are cleared immediately;
+- a failed Update remains encrypted and explicitly requeueable while it is in `failed` state;
+- after an externally approved retention age expires, operators may run `php artisan telegram:updates:retention --failed-older-than=<seconds> --limit=<n>` to move those rows to `failed_terminal` and clear the remaining raw payload bytes while retaining identity/hash/error evidence;
+- `failed_terminal` rows are not eligible for `telegram:updates:requeue --include-failed`.
+
+Phase 0.7 deliberately defines **no default retention age and no scheduler entry** for failed Update payloads. The exact legal/business retention duration and recurring operational schedule belong to the later Operations policy. Until that policy is approved, do not invent a duration or schedule this command implicitly.
+
