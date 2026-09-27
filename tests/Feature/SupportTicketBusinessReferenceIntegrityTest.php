@@ -12,12 +12,12 @@ use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Support\Application\SupportAlertService;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
+use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\SupportTicketCategorySeeder;
-use App\Shared\Application\Clock;
-use App\Shared\Application\OutboxPublisher;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
@@ -176,5 +176,4 @@ final class SupportTicketBusinessReferenceIntegrityTest extends TestCase
             $this->app->make(SupportAlertService::class),
         );
     }
-
 }
