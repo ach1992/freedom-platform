@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use JsonException;
 use RuntimeException;
@@ -23,6 +24,7 @@ final readonly class TelegramUpdateProcessor
         private TelegramInteractionDispatcher $interactionDispatcher,
         private TelegramRuntime $configuration,
         private TelegramSharedRateLimiter $rateLimiter,
+        private TelegramRateRetryRetentionLifecycleFence $rateRetryRetentionFence,
     ) {}
 
     public function process(string $botId, int $updateId): void
@@ -163,20 +165,24 @@ final readonly class TelegramUpdateProcessor
 
     private function authorizeInteractionRate(string $botId, int $updateId): void
     {
-        $now = now('UTC')->format('Y-m-d H:i:s.u');
-        $updated = $this->database->connection()->table('processed_telegram_updates')
-            ->where('bot_id', $botId)
-            ->where('update_id', $updateId)
-            ->where('state', 'processing')
-            ->whereNull('interaction_rate_authorized_at')
-            ->update([
-                'interaction_rate_authorized_at' => $now,
-                'updated_at' => $now,
-            ]);
+        $this->database->connection()->transaction(function (Connection $connection) use ($botId, $updateId): void {
+            $this->rateRetryRetentionFence->acquireRuntimeWriteFence($connection);
 
-        if ($updated !== 1) {
-            throw new RuntimeException('Telegram interaction rate authorization lost processing authority.');
-        }
+            $now = now('UTC')->format('Y-m-d H:i:s.u');
+            $updated = $connection->table('processed_telegram_updates')
+                ->where('bot_id', $botId)
+                ->where('update_id', $updateId)
+                ->where('state', 'processing')
+                ->whereNull('interaction_rate_authorized_at')
+                ->update([
+                    'interaction_rate_authorized_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+            if ($updated !== 1) {
+                throw new RuntimeException('Telegram interaction rate authorization lost processing authority.');
+            }
+        }, 3);
     }
 
     private function completeAndMinimize(string $botId, int $updateId): void
