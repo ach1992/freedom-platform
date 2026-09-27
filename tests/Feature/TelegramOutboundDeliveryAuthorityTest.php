@@ -399,7 +399,6 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         ]);
     }
 
-
     public function test_proactive_outbound_budget_defers_before_provider_boundary_then_allows_one_effect(): void
     {
         $rateLimiter = new ScriptedTelegramSharedRateLimiter([

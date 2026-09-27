@@ -561,7 +561,6 @@ SQL);
             ->count());
     }
 
-
     public function test_shared_interaction_rate_limit_stops_business_dispatch_and_still_terminalizes_raw_payload(): void
     {
         $limiter = new ProcessorTelegramSharedRateLimiter(TelegramRateLimitDecision::limited(19));

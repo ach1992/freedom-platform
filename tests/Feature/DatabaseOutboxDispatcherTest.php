@@ -75,7 +75,6 @@ final class DatabaseOutboxDispatcherTest extends TestCase
         self::assertSame('2026-08-12T00:00:05+00:00', (new DateTimeImmutable($availableAt))->format(DateTimeImmutable::ATOM));
     }
 
-
     public function test_retryable_settlement_preserves_a_later_domain_available_at_floor(): void
     {
         $id = $this->publish('order:9:paid:v1');
