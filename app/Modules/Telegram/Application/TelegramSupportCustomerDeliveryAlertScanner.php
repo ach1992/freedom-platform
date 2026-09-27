@@ -8,7 +8,9 @@ use App\Modules\Support\Application\SupportAlertPolicy;
 use App\Modules\Support\Application\SupportAlertService;
 use App\Modules\Support\Application\SupportCustomerDeliveryAlertScanner;
 use App\Modules\Support\Application\SupportCustomerReplyNotification;
+use App\Modules\Support\Application\SupportTicketCustomerNotificationSnapshot;
 use App\Modules\Support\Application\SupportTicketService;
+use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
 use Illuminate\Database\DatabaseManager;
@@ -152,6 +154,19 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
             'operation.state',
             'operation.result_code',
             'operation.correlation_id',
+            'operation.action',
+            'operation.bot_id',
+            'operation.recipient_chat_id',
+            'operation.target_message_id',
+            'operation.presentation_text',
+            'outbox.id as telegram_outbox_event_id',
+            'outbox.event_key as telegram_outbox_event_key',
+            'outbox.event_type as telegram_outbox_event_type',
+            'outbox.contract_version as telegram_outbox_contract_version',
+            'outbox.aggregate_type as telegram_outbox_aggregate_type',
+            'outbox.aggregate_id as telegram_outbox_aggregate_id',
+            'outbox.payload as telegram_outbox_payload',
+            'outbox.correlation_id as telegram_outbox_correlation_id',
             'outbox.dispatch_state as outbox_state',
             'outbox.review_reason',
         ];
@@ -174,16 +189,25 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         $recorded = 0;
         foreach ($rows as $row) {
             $messageId = $this->messageIdFromCorrelation((string) $row->correlation_id);
+            $handoff = $this->supportNotificationHandoff($messageId);
+            if ($handoff === null) {
+                continue;
+            }
             if (! hash_equals(
-                hash('sha256', 'tg-support-customer-reply:'.$messageId),
+                TelegramSupportCustomerReplyDeliveryIdentity::requestKeyHash(
+                    $handoff['event_id'],
+                    $messageId,
+                ),
                 (string) $row->request_key_hash,
             )) {
-                throw new RuntimeException('Support Telegram delivery request identity is inconsistent.');
+                continue;
+            }
+            if (! $this->isExactSupportTelegramDelivery($row, $handoff['notification'])) {
+                continue;
             }
 
-            $notification = $this->support->customerNotificationForMessage($messageId);
             $this->alerts->recordDeliveryFailure(
-                $notification,
+                $handoff['notification'],
                 'telegram_delivery',
                 (string) $row->correlation_id,
                 (string) $row->state,
@@ -195,6 +219,126 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         }
 
         return $recorded;
+    }
+
+    /**
+     * @return array{event_id:string,notification:SupportTicketCustomerNotificationSnapshot}|null
+     */
+    private function supportNotificationHandoff(int $messageId): ?array
+    {
+        $row = $this->database->connection()
+            ->table('outbox_messages')
+            ->where('event_key', SupportCustomerReplyNotification::eventKey($messageId))
+            ->first([
+                'id',
+                'event_key',
+                'event_type',
+                'contract_version',
+                'aggregate_type',
+                'aggregate_id',
+                'payload',
+                'correlation_id',
+            ]);
+        if ($row === null) {
+            return null;
+        }
+
+        if ((string) $row->event_type !== SupportCustomerReplyNotification::EVENT_TYPE
+            || (int) $row->contract_version !== SupportCustomerReplyNotification::CONTRACT_VERSION
+            || (string) $row->aggregate_type !== SupportCustomerReplyNotification::AGGREGATE_TYPE
+            || ! hash_equals((string) $messageId, (string) $row->aggregate_id)
+            || ! hash_equals(
+                SupportCustomerReplyNotification::correlationId($messageId),
+                (string) $row->correlation_id,
+            )
+        ) {
+            throw new RuntimeException('Support notification Outbox envelope is inconsistent.');
+        }
+
+        try {
+            $payload = json_decode((string) $row->payload, true, 32, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            throw new RuntimeException('Support notification Outbox payload is invalid.');
+        }
+        if (! is_array($payload)
+            || array_is_list($payload)
+            || count($payload) !== 2
+            || ! array_key_exists('message_id', $payload)
+            || ! array_key_exists('ticket_id', $payload)
+        ) {
+            throw new RuntimeException('Support notification Outbox payload shape is invalid.');
+        }
+
+        $payloadMessageId = $this->positiveInt(
+            $payload['message_id'],
+            'Support notification message ID',
+        );
+        $ticketId = $this->positiveInt(
+            $payload['ticket_id'],
+            'Support notification ticket ID',
+        );
+        if ($payloadMessageId !== $messageId) {
+            throw new RuntimeException('Support notification Outbox message identity is inconsistent.');
+        }
+
+        $notification = $this->support->customerNotificationForMessage($messageId);
+        if ($notification->ticketId !== $ticketId) {
+            throw new RuntimeException('Support notification ticket identity is inconsistent.');
+        }
+
+        return [
+            'event_id' => (string) $row->id,
+            'notification' => $notification,
+        ];
+    }
+
+    private function isExactSupportTelegramDelivery(
+        object $row,
+        SupportTicketCustomerNotificationSnapshot $notification,
+    ): bool {
+        if ((string) $row->telegram_outbox_event_type !== TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE
+            || (int) $row->telegram_outbox_contract_version
+                !== TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL
+            || (string) $row->telegram_outbox_event_key
+                !== TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.(string) $row->public_id
+            || (string) $row->telegram_outbox_aggregate_type
+                !== TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE
+            || ! hash_equals((string) $row->public_id, (string) $row->telegram_outbox_aggregate_id)
+            || ! hash_equals((string) $row->correlation_id, (string) $row->telegram_outbox_correlation_id)
+            || (string) $row->action !== TelegramDeliveryAction::Send->value
+            || $row->target_message_id !== null
+            || ! hash_equals(
+                TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
+                (string) $row->presentation_text,
+            )
+        ) {
+            return false;
+        }
+
+        try {
+            $payload = json_decode((string) $row->telegram_outbox_payload, true, 32, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            throw new RuntimeException('Support Telegram delivery Outbox payload is invalid.');
+        }
+        if ($payload !== ['telegram_delivery_operation_public_id' => (string) $row->public_id]) {
+            return false;
+        }
+
+        if (! $this->database->connection()
+            ->table(TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1::TABLE)
+            ->where('delivery_operation_public_id', (string) $row->public_id)
+            ->exists()
+        ) {
+            return false;
+        }
+
+        return $this->database->connection()
+            ->table('telegram_accounts')
+            ->where('bot_id', (string) $row->bot_id)
+            ->where('user_id', $notification->requesterUserId)
+            ->where('is_bot', 0)
+            ->where('telegram_user_id', (int) $row->recipient_chat_id)
+            ->exists();
     }
 
     private function rotationOffset(int $total, int $windowSize): int
