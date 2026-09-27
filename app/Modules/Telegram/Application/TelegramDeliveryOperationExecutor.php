@@ -124,9 +124,9 @@ final readonly class TelegramDeliveryOperationExecutor
             }
 
             if ($state === TelegramDeliveryOperationState::Retryable) {
-                $retryDelay = $this->retryDirectiveDelaySeconds($connection, $row);
-                if ($retryDelay !== null && $retryDelay > 0) {
-                    $this->deferOutboxBySeconds($row, $retryDelay);
+                $retryNotBefore = $this->retryDirectiveNotBefore($connection, $row);
+                if ($retryNotBefore !== null && $retryNotBefore > $this->clock->now()) {
+                    $this->deferOutboxUntil($row, $retryNotBefore);
 
                     return [
                         'row' => $row,
@@ -365,8 +365,8 @@ final readonly class TelegramDeliveryOperationExecutor
             if ($result->outcome === TelegramMutationOutcome::RetryAfter) {
                 $retryAfter = $result->retryAfterSeconds
                     ?? throw new RuntimeException('Telegram provider retry result omitted its delay.');
-                $this->recordRetryDirective($connection, $row, $retryAfter);
-                $this->deferOutboxBySeconds($row, $retryAfter);
+                $retryNotBefore = $this->recordRetryDirective($connection, $row, $retryAfter);
+                $this->deferOutboxUntil($row, $retryNotBefore);
             }
 
             $updated = $this->transition(
@@ -653,7 +653,7 @@ final readonly class TelegramDeliveryOperationExecutor
     /**
      * @param  DeliveryOperationRow  $row
      */
-    private function retryDirectiveDelaySeconds(Connection $connection, object $row): ?int
+    private function retryDirectiveNotBefore(Connection $connection, object $row): ?DateTimeImmutable
     {
         $attempt = $this->positiveInt($row->provider_attempts, 'Telegram provider attempt count');
         $directive = $connection->table('telegram_delivery_retry_directives')
@@ -670,15 +670,22 @@ final readonly class TelegramDeliveryOperationExecutor
             throw new RuntimeException('Telegram provider retry directive is invalid.');
         }
 
-        $notBefore = new DateTimeImmutable($directive->retry_not_before, new DateTimeZone('UTC'));
+        $notBefore = DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s.u',
+            $directive->retry_not_before,
+            new DateTimeZone('UTC'),
+        );
+        if ($notBefore === false) {
+            throw new RuntimeException('Telegram provider retry directive deadline is invalid.');
+        }
 
-        return max(0, $notBefore->getTimestamp() - $this->clock->now()->getTimestamp());
+        return $notBefore;
     }
 
     /**
      * @param  DeliveryOperationRow  $row
      */
-    private function recordRetryDirective(Connection $connection, object $row, int $retryAfterSeconds): void
+    private function recordRetryDirective(Connection $connection, object $row, int $retryAfterSeconds): DateTimeImmutable
     {
         if ($retryAfterSeconds < 1 || $retryAfterSeconds > 86_400) {
             throw new RuntimeException('Telegram provider retry directive delay is invalid.');
@@ -707,6 +714,8 @@ final readonly class TelegramDeliveryOperationExecutor
         if (! $inserted) {
             throw new RuntimeException('Telegram provider retry directive was not durably inserted.');
         }
+
+        return $notBefore;
     }
 
     /**
@@ -718,12 +727,21 @@ final readonly class TelegramDeliveryOperationExecutor
             throw new RuntimeException('Telegram Outbox deferral delay is invalid.');
         }
 
+        $this->deferOutboxUntil(
+            $row,
+            $this->clock->now()->add(new DateInterval('PT'.$seconds.'S')),
+        );
+    }
+
+    /** @param DeliveryOperationRow $row */
+    private function deferOutboxUntil(object $row, DateTimeImmutable $notBefore): void
+    {
         $this->outboxDeferrer->deferUntil(
             (string) $row->outbox_event_id,
             TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE,
             (string) $row->public_id,
             (string) $row->correlation_id,
-            $this->clock->now()->add(new DateInterval('PT'.$seconds.'S')),
+            $notBefore,
         );
     }
 
