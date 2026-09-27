@@ -146,7 +146,6 @@ Schedule::command('telegram:process-broadcasts', [
     ->onOneServer()
     ->runInBackground();
 
-
 Schedule::command('support:alerts:scan', [
     '--limit' => 100,
     '--json' => true,
