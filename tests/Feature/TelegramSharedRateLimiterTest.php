@@ -154,7 +154,7 @@ final class TelegramSharedRateLimiterTest extends TestCase
         } catch (RuntimeException) {
             self::assertSame('1.5', $redis->command('get', [$globalKey]));
             self::assertSame($globalExpiresAt, $redis->command('pexpiretime', [$globalKey]));
-            self::assertNull($redis->command('get', [$chatKey]));
+            self::assertFalse($redis->command('get', [$chatKey]));
         }
     }
 
