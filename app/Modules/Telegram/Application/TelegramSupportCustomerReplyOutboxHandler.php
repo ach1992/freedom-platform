@@ -20,6 +20,10 @@ use Throwable;
 
 final readonly class TelegramSupportCustomerReplyOutboxHandler implements OutboxEventHandler
 {
+    /**
+     * @param  Closure():TelegramConfidentialDeliveryQueue  $deliveryResolver
+     * @param  Closure():TelegramDeliveryRuntime  $runtimeResolver
+     */
     public function __construct(
         private DatabaseManager $database,
         private SupportTicketService $support,
