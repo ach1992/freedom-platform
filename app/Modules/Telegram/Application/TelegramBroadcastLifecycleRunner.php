@@ -7,11 +7,13 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Domain\TelegramBroadcastLifecycleAction;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
 use App\Modules\Telegram\Domain\TelegramBroadcastSourceKind;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use DateInterval;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
@@ -30,6 +32,7 @@ final readonly class TelegramBroadcastLifecycleRunner
         private AdministratorPermissionAuthorizer $administrators,
         private TelegramBroadcastTextDeliveryGateway $textDelivery,
         private TelegramBroadcastLifecycleTransport $transport,
+        private TelegramSharedRateLimiter $rateLimiter,
         private TelegramDeliveryRuntime $runtime,
         private TelegramDeliveryRetryDirectiveReader $retryDirectives,
     ) {}
@@ -321,6 +324,31 @@ final readonly class TelegramBroadcastLifecycleRunner
                         'retry_not_before' => null,
                         'updated_at' => $this->timestamp(),
                     ]);
+
+                return false;
+            }
+
+            $budget = $this->rateLimiter->reserveOutbound((int) $context['telegram_user_id']);
+            if (! $budget->allowed) {
+                $retryAfter = $budget->retryAfterSeconds
+                    ?? throw new RuntimeException('Telegram outbound rate budget omitted its retry delay.');
+                $nowInstant = $this->clock->now();
+                $now = $nowInstant->format('Y-m-d H:i:s.u');
+                $retryNotBefore = $nowInstant
+                    ->add(new DateInterval('PT'.$retryAfter.'S'))
+                    ->format('Y-m-d H:i:s.u');
+                $updated = $connection->table('broadcast_recipient_messages')
+                    ->where('id', (int) $operation->id)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'retryable',
+                        'result_code' => 'telegram_outbound_rate_limited',
+                        'retry_not_before' => $retryNotBefore,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Broadcast lifecycle rate-budget deferral transition failed.');
+                }
 
                 return false;
             }
