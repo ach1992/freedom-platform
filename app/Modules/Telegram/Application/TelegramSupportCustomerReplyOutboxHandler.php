@@ -71,7 +71,10 @@ final readonly class TelegramSupportCustomerReplyOutboxHandler implements Outbox
             $this->delivery()->send(
                 $telegramUserId,
                 $presentation,
-                'tg-support-customer-reply:'.$notification->messageId,
+                TelegramSupportCustomerReplyDeliveryIdentity::requestKey(
+                    $message->id,
+                    $notification->messageId,
+                ),
                 SupportCustomerReplyNotification::correlationId($notification->messageId),
             );
 
