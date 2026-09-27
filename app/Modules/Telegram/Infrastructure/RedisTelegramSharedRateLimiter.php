@@ -14,14 +14,21 @@ use RuntimeException;
 final readonly class RedisTelegramSharedRateLimiter implements TelegramSharedRateLimiter
 {
     private const SINGLE_LUA = <<<'LUA'
-        local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+        local stored = redis.call('GET', KEYS[1])
+        local current = tonumber(stored or '0')
         local limit = tonumber(ARGV[1])
         local window = tonumber(ARGV[2])
-        if current >= limit then
-            local ttl_ms = tonumber(redis.call('PTTL', KEYS[1]) or '-1')
+        if stored and (not current or current < 0) then
+            return {-1, -1}
+        end
+        local ttl_ms = -2
+        if stored then
+            ttl_ms = tonumber(redis.call('PTTL', KEYS[1]) or '-1')
             if ttl_ms < 1 then
                 return {-1, ttl_ms}
             end
+        end
+        if current >= limit then
             return {0, math.floor((ttl_ms + 999) / 1000)}
         end
         local value = redis.call('INCR', KEYS[1])
@@ -32,27 +39,43 @@ final readonly class RedisTelegramSharedRateLimiter implements TelegramSharedRat
         LUA;
 
     private const OUTBOUND_LUA = <<<'LUA'
-        local global_current = tonumber(redis.call('GET', KEYS[1]) or '0')
-        local chat_current = tonumber(redis.call('GET', KEYS[2]) or '0')
+        local global_stored = redis.call('GET', KEYS[1])
+        local chat_stored = redis.call('GET', KEYS[2])
+        local global_current = tonumber(global_stored or '0')
+        local chat_current = tonumber(chat_stored or '0')
         local global_limit = tonumber(ARGV[1])
         local global_window = tonumber(ARGV[2])
         local chat_limit = tonumber(ARGV[3])
         local chat_window = tonumber(ARGV[4])
 
+        if global_stored and (not global_current or global_current < 0) then
+            return {-1, -1}
+        end
+        if chat_stored and (not chat_current or chat_current < 0) then
+            return {-1, -1}
+        end
+
+        local global_ttl = -2
+        if global_stored then
+            global_ttl = tonumber(redis.call('PTTL', KEYS[1]) or '-1')
+            if global_ttl < 1 then
+                return {-1, global_ttl}
+            end
+        end
+        local chat_ttl = -2
+        if chat_stored then
+            chat_ttl = tonumber(redis.call('PTTL', KEYS[2]) or '-1')
+            if chat_ttl < 1 then
+                return {-1, chat_ttl}
+            end
+        end
+
         if global_current >= global_limit or chat_current >= chat_limit then
             local wait_ms = 0
             if global_current >= global_limit then
-                local global_ttl = tonumber(redis.call('PTTL', KEYS[1]) or '-1')
-                if global_ttl < 1 then
-                    return {-1, global_ttl}
-                end
                 wait_ms = math.max(wait_ms, global_ttl)
             end
             if chat_current >= chat_limit then
-                local chat_ttl = tonumber(redis.call('PTTL', KEYS[2]) or '-1')
-                if chat_ttl < 1 then
-                    return {-1, chat_ttl}
-                end
                 wait_ms = math.max(wait_ms, chat_ttl)
             end
             return {0, math.floor((wait_ms + 999) / 1000)}

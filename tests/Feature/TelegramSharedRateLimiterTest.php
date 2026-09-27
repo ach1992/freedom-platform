@@ -53,15 +53,48 @@ final class TelegramSharedRateLimiterTest extends TestCase
         self::assertLessThanOrEqual(60, $globalLimited->retryAfterSeconds);
     }
 
-    public function test_corrupt_interaction_bucket_without_expiry_fails_closed(): void
+    public function test_corrupt_interaction_bucket_without_expiry_below_limit_fails_closed(): void
     {
         $prefix = config('telegram.rate_limits.prefix');
         self::assertIsString($prefix);
         $userId = random_int(1_000_000, 2_000_000_000);
         $key = $prefix.'interaction:'.hash('sha256', (string) $userId);
-        $this->app->make(RedisManager::class)->connection()->command('set', [$key, '2']);
+        $this->app->make(RedisManager::class)->connection()->command('set', [$key, '1']);
 
         $this->expectException(RuntimeException::class);
         $this->app->make(TelegramSharedRateLimiter::class)->consumeInteraction($userId);
+    }
+
+    public function test_corrupt_outbound_global_bucket_without_expiry_below_limit_fails_closed(): void
+    {
+        config([
+            'telegram.rate_limits.outbound.global_max_attempts' => 3,
+            'telegram.rate_limits.outbound.chat_max_attempts' => 2,
+        ]);
+        $prefix = config('telegram.rate_limits.prefix');
+        self::assertIsString($prefix);
+        $this->app->make(RedisManager::class)->connection()->command('set', [
+            $prefix.'outbound:global',
+            '1',
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->app->make(TelegramSharedRateLimiter::class)->reserveOutbound(901004);
+    }
+
+    public function test_corrupt_outbound_chat_bucket_without_expiry_below_limit_fails_closed(): void
+    {
+        config([
+            'telegram.rate_limits.outbound.global_max_attempts' => 3,
+            'telegram.rate_limits.outbound.chat_max_attempts' => 2,
+        ]);
+        $prefix = config('telegram.rate_limits.prefix');
+        self::assertIsString($prefix);
+        $chatId = 901005;
+        $key = $prefix.'outbound:chat:'.hash('sha256', (string) $chatId);
+        $this->app->make(RedisManager::class)->connection()->command('set', [$key, '1']);
+
+        $this->expectException(RuntimeException::class);
+        $this->app->make(TelegramSharedRateLimiter::class)->reserveOutbound($chatId);
     }
 }
