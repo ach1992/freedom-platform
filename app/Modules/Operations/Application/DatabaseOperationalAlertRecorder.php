@@ -42,6 +42,44 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
         string $correlationId,
         array $safeContext = [],
     ): void {
+        $this->record(
+            $severity,
+            $eventName,
+            $deduplicationKey,
+            $correlationId,
+            $safeContext,
+            true,
+        );
+    }
+
+    public function raiseOnce(
+        string $severity,
+        string $eventName,
+        string $deduplicationKey,
+        string $correlationId,
+        array $safeContext = [],
+    ): void {
+        $this->record(
+            $severity,
+            $eventName,
+            $deduplicationKey,
+            $correlationId,
+            $safeContext,
+            false,
+        );
+    }
+
+    /**
+     * @param  array<string, bool|float|int|string|null>  $safeContext
+     */
+    private function record(
+        string $severity,
+        string $eventName,
+        string $deduplicationKey,
+        string $correlationId,
+        array $safeContext,
+        bool $countRepeatedOccurrence,
+    ): void {
         $this->assertSeverity($severity);
         $this->assertEventName($eventName);
         $this->assertDeduplicationKey($deduplicationKey);
@@ -54,6 +92,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
             $deduplicationKey,
             $correlationId,
             $encodedContext,
+            $countRepeatedOccurrence,
         ): void {
             $now = $this->clock->now()->format('Y-m-d H:i:s.u');
             $inserted = $connection->table('alerts')->insertOrIgnore([
@@ -75,26 +114,27 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 return;
             }
 
-            /** @var object{id:string,occurrence_count:int|string,acknowledged_at:?string,resolved_at:?string}|null $existing */
+            /** @var object{id:string,occurrence_count:int|string}|null $existing */
             $existing = $connection->table('alerts')
                 ->where('event_name', $eventName)
                 ->where('deduplication_key', $deduplicationKey)
                 ->lockForUpdate()
-                ->first(['id', 'occurrence_count', 'acknowledged_at', 'resolved_at']);
+                ->first(['id', 'occurrence_count']);
             if ($existing === null) {
                 throw new RuntimeException('Operational alert deduplication conflict could not be reconciled.');
             }
+            if (! $countRepeatedOccurrence) {
+                return;
+            }
 
-            $reopened = $existing->resolved_at !== null;
             $connection->table('alerts')
                 ->where('id', $existing->id)
                 ->update([
                     'severity' => $severity,
                     'correlation_id' => $correlationId,
                     'safe_context' => $encodedContext,
-                    'occurrence_count' => (int) $existing->occurrence_count + ($reopened ? 1 : 0),
+                    'occurrence_count' => (int) $existing->occurrence_count + 1,
                     'last_seen_at' => $now,
-                    'acknowledged_at' => $reopened ? null : $existing->acknowledged_at,
                     'resolved_at' => null,
                     'updated_at' => $now,
                 ]);
