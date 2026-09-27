@@ -176,7 +176,7 @@ final readonly class SupportAlertService
         }
 
         $this->alerts->raise(
-            'error',
+            'warning',
             self::DELIVERY_FAILURE_EVENT,
             SupportCustomerReplyNotification::deduplicationKey($notification->messageId),
             $correlationId,
