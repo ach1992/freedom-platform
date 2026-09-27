@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Application;
 
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use Illuminate\Contracts\Encryption\StringEncrypter;
 use Illuminate\Database\DatabaseManager;
 use JsonException;
@@ -21,6 +22,7 @@ final readonly class TelegramUpdateProcessor
         private TelegramReferralStartAttributionService $referralAttribution,
         private TelegramInteractionDispatcher $interactionDispatcher,
         private TelegramRuntime $configuration,
+        private TelegramSharedRateLimiter $rateLimiter,
     ) {}
 
     public function process(string $botId, int $updateId): void
@@ -50,6 +52,13 @@ final readonly class TelegramUpdateProcessor
 
             $userId = $this->identitySynchronizer->synchronize($botId, $updateId, $payload);
             if ($userId !== null) {
+                $rateLimit = $this->rateLimiter->consumeInteraction($userId);
+                if (! $rateLimit->allowed) {
+                    $this->completeAndMinimize($botId, $updateId);
+
+                    return;
+                }
+
                 $this->referralAttribution->bindFirstStart($botId, $updateId, $userId);
             }
             $this->interactionDispatcher->dispatch(
@@ -59,19 +68,7 @@ final readonly class TelegramUpdateProcessor
                 $payload,
                 $record['request_ip_hash'],
             );
-            $now = now('UTC')->format('Y-m-d H:i:s.u');
-
-            $this->database->connection()->table('processed_telegram_updates')
-                ->where('bot_id', $botId)
-                ->where('update_id', $updateId)
-                ->update([
-                    'state' => 'processed',
-                    'processed_at' => $now,
-                    'failed_at' => null,
-                    'last_error_class' => null,
-                    'last_error_code' => null,
-                    'updated_at' => $now,
-                ]);
+            $this->completeAndMinimize($botId, $updateId);
         } catch (Throwable $exception) {
             $now = now('UTC')->format('Y-m-d H:i:s.u');
             $this->database->connection()->table('processed_telegram_updates')
@@ -109,7 +106,7 @@ final readonly class TelegramUpdateProcessor
                 throw new RuntimeException('Telegram update record does not exist.');
             }
 
-            if ((string) $row->state === 'processed') {
+            if (in_array((string) $row->state, ['processed', 'failed_terminal'], true)) {
                 return null;
             }
 
@@ -150,6 +147,30 @@ final readonly class TelegramUpdateProcessor
                 'request_ip_hash' => $requestIpHash,
             ];
         });
+    }
+
+    private function completeAndMinimize(string $botId, int $updateId): void
+    {
+        $now = now('UTC')->format('Y-m-d H:i:s.u');
+        $updated = $this->database->connection()->table('processed_telegram_updates')
+            ->where('bot_id', $botId)
+            ->where('update_id', $updateId)
+            ->where('state', 'processing')
+            ->update([
+                'state' => 'processed',
+                'payload_ciphertext' => null,
+                'payload_size' => null,
+                'processing_started_at' => null,
+                'processed_at' => $now,
+                'failed_at' => null,
+                'last_error_class' => null,
+                'last_error_code' => null,
+                'updated_at' => $now,
+            ]);
+
+        if ($updated !== 1) {
+            throw new RuntimeException('Telegram update completion lost processing authority.');
+        }
     }
 
     /** @return array<string, mixed> */

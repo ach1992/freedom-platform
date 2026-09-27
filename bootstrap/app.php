@@ -20,6 +20,7 @@ use App\Modules\Provisioning\Presentation\Console\ProcessServiceNotificationsCom
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceSynchronizationsCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\ProcessTelegramBroadcastsCommand;
+use App\Modules\Telegram\Presentation\Console\ApplyTelegramUpdateRetentionCommand;
 use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
 use App\Modules\Telegram\Presentation\Http\Middleware\VerifyTelegramWebhookRequest;
 use App\Modules\Wallet\Presentation\Console\WalletMaintenanceCommand;
@@ -52,6 +53,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ConfigureTelegramWebhookCommand::class,
         DispatchOutboxCommand::class,
         RequeueTelegramUpdatesCommand::class,
+        ApplyTelegramUpdateRetentionCommand::class,
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
         ProcessServiceAutoRenewalsCommand::class,
