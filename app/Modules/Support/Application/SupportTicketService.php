@@ -9,6 +9,8 @@ use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
 use App\Modules\Support\Domain\SupportTicketTransitionPolicy;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
+use App\Shared\Application\SafeOutboxPayload;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -25,6 +27,8 @@ final readonly class SupportTicketService
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private OutboxPublisher $outbox,
+        private SupportAlertService $alerts,
         private SupportTicketTransitionPolicy $transitionPolicy = new SupportTicketTransitionPolicy,
     ) {}
 
@@ -75,7 +79,10 @@ final readonly class SupportTicketService
                 $now,
             );
 
-            return $this->snapshot($connection, $ticketId);
+            $snapshot = $this->snapshot($connection, $ticketId);
+            $this->alerts->recordNewTicket($snapshot);
+
+            return $snapshot;
         });
     }
 
@@ -402,6 +409,9 @@ final readonly class SupportTicketService
 
             $now = $this->timestamp();
             $receipt = $this->insertMessage($connection, $ticketId, $actorUserId, $kind, $body, $idempotencyKey, ! $internalNote, $now);
+            if (! $internalNote) {
+                $this->publishCustomerReplyNotification($receipt);
+            }
             if ($receipt->replayed || $internalNote || $state === SupportTicketState::AwaitingCustomer) {
                 return $receipt;
             }
@@ -519,6 +529,58 @@ final readonly class SupportTicketService
         });
     }
 
+    /** @requirement SUP-002 DAT-002 DAT-003 */
+    public function customerNotificationForMessage(int $messageId): SupportTicketCustomerNotificationSnapshot
+    {
+        $this->assertPositiveId($messageId);
+
+        /** @var object{message_id:int|string,ticket_id:int|string,tracking_number:string,requester_user_id:int|string,body:string}|null $row */
+        $row = $this->database->connection()
+            ->table('support_ticket_messages as message')
+            ->join('support_tickets as ticket', 'ticket.id', '=', 'message.ticket_id')
+            ->where('message.id', $messageId)
+            ->where('message.kind', SupportTicketMessageKind::SupportReply->value)
+            ->where('message.customer_visible', 1)
+            ->first([
+                'message.id as message_id',
+                'ticket.id as ticket_id',
+                'ticket.tracking_number',
+                'ticket.requester_user_id',
+                'message.body',
+            ]);
+
+        if ($row === null) {
+            throw new RuntimeException('Support customer notification source does not exist.');
+        }
+
+        return new SupportTicketCustomerNotificationSnapshot(
+            (int) $row->message_id,
+            (int) $row->ticket_id,
+            (string) $row->tracking_number,
+            (int) $row->requester_user_id,
+            (string) $row->body,
+        );
+    }
+
+    private function publishCustomerReplyNotification(SupportTicketMessageReceipt $receipt): void
+    {
+        $payload = new SafeOutboxPayload([
+            'message_id' => $receipt->messageId,
+            'ticket_id' => $receipt->ticketId,
+        ]);
+
+        $this->outbox->publish(
+            (string) Str::uuid(),
+            SupportCustomerReplyNotification::eventKey($receipt->messageId),
+            SupportCustomerReplyNotification::EVENT_TYPE,
+            SupportCustomerReplyNotification::AGGREGATE_TYPE,
+            (string) $receipt->messageId,
+            $payload,
+            SupportCustomerReplyNotification::correlationId($receipt->messageId),
+            SupportCustomerReplyNotification::CONTRACT_VERSION,
+        );
+    }
+
     private function applyTransition(
         Connection $connection,
         int $ticketId,
@@ -572,6 +634,18 @@ final readonly class SupportTicketService
         }
 
         $connection->table('support_tickets')->where('id', $ticketId)->update($updates);
+
+        if (in_array($from, [SupportTicketState::New, SupportTicketState::AwaitingSupport], true)
+            && ! in_array($to, [SupportTicketState::New, SupportTicketState::AwaitingSupport], true)
+        ) {
+            $trackingNumber = $connection->table('support_tickets')
+                ->where('id', $ticketId)
+                ->value('tracking_number');
+            if (! is_string($trackingNumber) || $trackingNumber === '') {
+                throw new RuntimeException('Support ticket tracking identity disappeared during SLA reconciliation.');
+            }
+            $this->alerts->resolveSla($trackingNumber);
+        }
     }
 
     private function existingMessageReceipt(
