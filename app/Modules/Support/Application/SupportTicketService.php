@@ -644,7 +644,7 @@ final readonly class SupportTicketService
             if (! is_string($trackingNumber) || $trackingNumber === '') {
                 throw new RuntimeException('Support ticket tracking identity disappeared during SLA reconciliation.');
             }
-            $this->alerts->resolveSla($trackingNumber);
+            $this->alerts->resolveSla($trackingNumber, (int) $current->state_version);
         }
     }
 
