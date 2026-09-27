@@ -567,6 +567,47 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         }
     }
 
+    public function test_rollback_cut_blocks_new_provider_retry_directive_evidence(): void
+    {
+        $migration = require database_path(
+            'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
+        );
+        (new ReflectionClass($migration))
+            ->getMethod('establishLifecycleFence')
+            ->invoke($migration);
+
+        $transport = new RecordingTelegramMutationTransport([
+            new TelegramMutationResult(
+                TelegramMutationOutcome::RetryAfter,
+                'telegram_retry_after',
+                retryAfterSeconds: 41,
+            ),
+        ], DB::getFacadeRoot());
+        $created = NonRestrictedTelegramPresentationTestFactory::queue(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900019,
+            null,
+            NonRestrictedTelegramPresentationTestFactory::plainText('rollback fenced retry evidence'),
+            'telegram-rollback-fenced-retry-request',
+            'correlation-rollback-fenced-retry-179',
+        );
+
+        try {
+            $this->dispatcher()->dispatchOne($this->handler($this->executor($transport)));
+
+            self::assertSame(1, $transport->attempts);
+            self::assertSame(0, DB::table('telegram_delivery_retry_directives')
+                ->where('operation_public_id', $created->publicId)
+                ->count());
+            self::assertSame('sending', DB::table('telegram_delivery_operations')
+                ->where('public_id', $created->publicId)
+                ->value('state'));
+        } finally {
+            $migration->up();
+        }
+    }
+
     public function test_uncertain_result_and_crash_recovery_fail_toward_review_without_second_mutation(): void
     {
         $transport = new RecordingTelegramMutationTransport([
