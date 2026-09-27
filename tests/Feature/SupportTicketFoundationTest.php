@@ -546,5 +546,4 @@ final class MutableSupportClock implements Clock
             $this->app->make(SupportAlertService::class),
         );
     }
-
 }
