@@ -10,6 +10,7 @@ use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Domain\SupportTicketPriority;
 use App\Modules\Support\Domain\SupportTicketState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
 use Database\Seeders\SupportTicketCategorySeeder;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -521,6 +522,16 @@ final class SupportTicketFoundationTest extends TestCase
             'updated_at' => $now,
         ]);
     }
+    private function supportTicketService(Clock $clock): SupportTicketService
+    {
+        return new SupportTicketService(
+            $this->app->make(DatabaseManager::class),
+            $clock,
+            $this->app->make(OutboxPublisher::class),
+            $this->app->make(SupportAlertService::class),
+        );
+    }
+
 }
 
 final class MutableSupportClock implements Clock
@@ -535,15 +546,5 @@ final class MutableSupportClock implements Clock
     public function set(DateTimeImmutable $value): void
     {
         $this->value = $value;
-    }
-
-    private function supportTicketService(Clock $clock): SupportTicketService
-    {
-        return new SupportTicketService(
-            $this->app->make(DatabaseManager::class),
-            $clock,
-            $this->app->make(OutboxPublisher::class),
-            $this->app->make(SupportAlertService::class),
-        );
     }
 }
