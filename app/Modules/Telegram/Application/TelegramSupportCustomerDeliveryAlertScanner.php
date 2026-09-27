@@ -136,6 +136,18 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
             ->table('telegram_delivery_operations as operation')
             ->join('outbox_messages as outbox', 'outbox.id', '=', 'operation.outbox_event_id')
             ->where('operation.correlation_id', 'like', 'support.reply.%')
+            ->where('operation.action', TelegramDeliveryAction::Send->value)
+            ->whereNull('operation.target_message_id')
+            ->where(
+                'operation.presentation_text',
+                TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
+            )
+            ->where('outbox.event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)
+            ->where(
+                'outbox.contract_version',
+                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+            )
+            ->where('outbox.aggregate_type', TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE)
             ->where(function (Builder $query) use ($terminalStates): void {
                 $query->whereIn('operation.state', $terminalStates)
                     ->orWhere('outbox.dispatch_state', 'review_required');
