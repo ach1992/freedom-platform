@@ -6,11 +6,13 @@ namespace App\Modules\Telegram\Application;
 
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
+use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Domain\TelegramBroadcastCampaignState;
 use App\Modules\Telegram\Domain\TelegramBroadcastMessageMode;
 use App\Modules\Telegram\Domain\TelegramDeliveryOperationState;
 use App\Shared\Application\Clock;
+use DateInterval;
 use DomainException;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
@@ -29,6 +31,7 @@ final readonly class TelegramBroadcastOwnerTestService
         private TelegramDeliveryRuntime $runtime,
         private TelegramBroadcastTextDeliveryGateway $textDelivery,
         private TelegramSourceMessageSender $sourceMessages,
+        private TelegramSharedRateLimiter $rateLimiter,
         private Clock $clock,
         private TelegramDeliveryRetryDirectiveReader $retryDirectives,
     ) {}
@@ -295,6 +298,31 @@ final readonly class TelegramBroadcastOwnerTestService
                 $context['bot_id'],
                 $context['source_chat_id'],
             );
+
+            $budget = $this->rateLimiter->reserveOutbound((int) $context['telegram_user_id']);
+            if (! $budget->allowed) {
+                $retryAfter = $budget->retryAfterSeconds
+                    ?? throw new RuntimeException('Telegram outbound rate budget omitted its retry delay.');
+                $nowInstant = $this->clock->now();
+                $now = $nowInstant->format('Y-m-d H:i:s.u');
+                $retryNotBefore = $nowInstant
+                    ->add(new DateInterval('PT'.$retryAfter.'S'))
+                    ->format('Y-m-d H:i:s.u');
+                $updated = $connection->table('broadcast_campaign_tests')
+                    ->where('public_id', $testPublicId)
+                    ->where('state', 'prepared')
+                    ->update([
+                        'state' => 'failed',
+                        'result_code' => 'telegram_outbound_rate_limited',
+                        'retry_not_before' => $retryNotBefore,
+                        'updated_at' => $now,
+                    ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Broadcast Owner test rate-budget deferral transition failed.');
+                }
+
+                return false;
+            }
 
             $now = $this->timestamp();
             $updated = $connection->table('broadcast_campaign_tests')
