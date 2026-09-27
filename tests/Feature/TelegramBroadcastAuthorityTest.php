@@ -966,7 +966,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertIsString($row->inline_keyboard_snapshot);
     }
 
-    public function test_generic_text_retry_after_is_projected_to_recipient_retry_deadline(): void
+    public function test_generic_text_retry_after_defers_outbox_without_invalid_pending_retry_windows(): void
     {
         $actor = $this->owner(910211);
         $target = $this->telegramUser(910212);
@@ -1027,14 +1027,14 @@ final class TelegramBroadcastAuthorityTest extends TestCase
             ->first(['delivery_state', 'retry_not_before']);
         self::assertNotNull($recipient);
         self::assertSame('sending', $recipient->delivery_state);
-        self::assertSame($directive->retry_not_before, $recipient->retry_not_before);
+        self::assertNull($recipient->retry_not_before);
 
         $message = DB::table('broadcast_recipient_messages')
             ->where('delivery_operation_public_id', $operationPublicId)
             ->first(['state', 'retry_not_before']);
         self::assertNotNull($message);
         self::assertSame('queued', $message->state);
-        self::assertSame($directive->retry_not_before, $message->retry_not_before);
+        self::assertNull($message->retry_not_before);
 
         $outbox = DB::table('outbox_messages')
             ->where('aggregate_id', $operationPublicId)
@@ -1044,7 +1044,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertSame($directive->retry_not_before, $outbox->available_at);
     }
 
-    public function test_generic_owner_test_retry_after_is_projected_to_test_retry_deadline(): void
+    public function test_generic_owner_test_retry_after_keeps_pending_row_schema_valid_and_blocks_replacement(): void
     {
         $actor = $this->owner(910221);
         $campaigns = $this->app->make(TelegramBroadcastCampaignService::class);
@@ -1084,11 +1084,20 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         $reconciled = $ownerTests->reconcileCurrent($actor['user_id'], $created->publicId);
         self::assertNotNull($reconciled);
         self::assertSame('queued', $reconciled->state);
-        $retryNotBefore = DB::table('broadcast_campaign_tests')
+        $ownerTest = DB::table('broadcast_campaign_tests')
             ->where('public_id', $reconciled->publicId)
-            ->value('retry_not_before');
-        self::assertIsString($retryNotBefore);
-        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $retryNotBefore);
+            ->first(['delivery_operation_public_id', 'retry_not_before']);
+        self::assertNotNull($ownerTest);
+        self::assertIsString($ownerTest->delivery_operation_public_id);
+        self::assertNull($ownerTest->retry_not_before);
+        $ownerDirective = DB::table('telegram_delivery_retry_directives')
+            ->where('operation_public_id', $ownerTest->delivery_operation_public_id)
+            ->where('provider_attempt', 1)
+            ->first(['retry_after_seconds', 'retry_not_before']);
+        self::assertNotNull($ownerDirective);
+        self::assertSame(90, (int) $ownerDirective->retry_after_seconds);
+        self::assertIsString($ownerDirective->retry_not_before);
+        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $ownerDirective->retry_not_before);
 
         try {
             $ownerTests->send(
@@ -1105,7 +1114,7 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         }
     }
 
-    public function test_generic_lifecycle_retry_after_is_projected_to_operation_retry_deadline(): void
+    public function test_generic_lifecycle_retry_after_keeps_pending_operation_schema_valid_until_outbox_retry(): void
     {
         $actor = $this->owner(910231);
         $campaign = $this->startedCampaign($actor, 'broadcast-generic-lifecycle-retry');
@@ -1176,13 +1185,21 @@ final class TelegramBroadcastAuthorityTest extends TestCase
         self::assertNotNull($dispatch);
         self::assertGreaterThanOrEqual(1, $runner->reconcile(10));
 
+        $deliveryOperationPublicId = (string) $operation->delivery_operation_public_id;
         $operation = DB::table('broadcast_recipient_messages')
             ->where('id', (int) $operation->id)
             ->first(['state', 'retry_not_before']);
         self::assertNotNull($operation);
         self::assertSame('queued', $operation->state);
-        self::assertIsString($operation->retry_not_before);
-        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $operation->retry_not_before);
+        self::assertNull($operation->retry_not_before);
+        $lifecycleDirective = DB::table('telegram_delivery_retry_directives')
+            ->where('operation_public_id', $deliveryOperationPublicId)
+            ->where('provider_attempt', 1)
+            ->first(['retry_after_seconds', 'retry_not_before']);
+        self::assertNotNull($lifecycleDirective);
+        self::assertSame(75, (int) $lifecycleDirective->retry_after_seconds);
+        self::assertIsString($lifecycleDirective->retry_not_before);
+        self::assertGreaterThan(now('UTC')->format('Y-m-d H:i:s.u'), $lifecycleDirective->retry_not_before);
     }
 
     public function test_broadcast_effect_guard_holds_campaign_fence_against_pause_until_boundary_transaction_finishes(): void

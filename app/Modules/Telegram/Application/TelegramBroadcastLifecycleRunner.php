@@ -569,13 +569,6 @@ final readonly class TelegramBroadcastLifecycleRunner
                 TelegramDeliveryOperationState::Sending,
                 TelegramDeliveryOperationState::Retryable,
             ], true)) {
-                $retryNotBefore = $deliveryState === TelegramDeliveryOperationState::Retryable
-                    ? $this->retryDirectives->retryNotBefore(
-                        $connection,
-                        (string) $operation->delivery_operation_public_id,
-                        $delivery->provider_attempts,
-                    )
-                    : null;
                 $resultCode = $delivery->result_code === null ? null : (string) $delivery->result_code;
                 $currentResultCode = $operation->result_code === null
                     ? null
@@ -583,7 +576,7 @@ final readonly class TelegramBroadcastLifecycleRunner
                 $currentRetryNotBefore = $operation->retry_not_before === null
                     ? null
                     : (string) $operation->retry_not_before;
-                if ($currentResultCode === $resultCode && $currentRetryNotBefore === $retryNotBefore) {
+                if ($currentResultCode === $resultCode && $currentRetryNotBefore === null) {
                     return false;
                 }
 
@@ -591,7 +584,7 @@ final readonly class TelegramBroadcastLifecycleRunner
                     ->where('id', (int) $operation->id)
                     ->update([
                         'result_code' => $resultCode,
-                        'retry_not_before' => $retryNotBefore,
+                        'retry_not_before' => null,
                         'updated_at' => $this->timestamp(),
                     ]);
 

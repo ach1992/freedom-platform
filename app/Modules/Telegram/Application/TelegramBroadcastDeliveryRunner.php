@@ -1015,26 +1015,14 @@ final readonly class TelegramBroadcastDeliveryRunner
                 TelegramDeliveryOperationState::Sending,
                 TelegramDeliveryOperationState::Retryable,
             ], true)) {
-                $retryNotBefore = $operationState === TelegramDeliveryOperationState::Retryable
-                    ? $this->retryDirectives->retryNotBefore(
-                        $connection,
-                        (string) $recipient->delivery_operation_public_id,
-                        $operation->provider_attempts,
-                    )
-                    : null;
                 $resultCode = $operation->result_code === null ? null : (string) $operation->result_code;
                 $messageResultCode = $message->result_code === null ? null : (string) $message->result_code;
                 $messageRetryNotBefore = $message->retry_not_before === null
                     ? null
                     : (string) $message->retry_not_before;
-                $recipientRetryNotBefore = $recipient->retry_not_before === null
-                    ? null
-                    : (string) $recipient->retry_not_before;
                 $messageChanged = (string) $message->state !== 'queued'
                     || $messageResultCode !== $resultCode
-                    || $messageRetryNotBefore !== $retryNotBefore;
-                $recipientChanged = $recipientRetryNotBefore !== $retryNotBefore;
-                $now = $this->timestamp();
+                    || $messageRetryNotBefore !== null;
 
                 if ($messageChanged) {
                     $connection->table('broadcast_recipient_messages')
@@ -1042,20 +1030,12 @@ final readonly class TelegramBroadcastDeliveryRunner
                         ->update([
                             'state' => 'queued',
                             'result_code' => $resultCode,
-                            'retry_not_before' => $retryNotBefore,
-                            'updated_at' => $now,
-                        ]);
-                }
-                if ($recipientChanged) {
-                    $connection->table('broadcast_recipients')
-                        ->where('id', (int) $recipient->id)
-                        ->update([
-                            'retry_not_before' => $retryNotBefore,
-                            'updated_at' => $now,
+                            'retry_not_before' => null,
+                            'updated_at' => $this->timestamp(),
                         ]);
                 }
 
-                return $messageChanged || $recipientChanged;
+                return $messageChanged;
             }
 
             [$messageState, $recipientState, $messageId, $failureCode] = match ($operationState) {

@@ -80,19 +80,27 @@ final readonly class TelegramBroadcastOwnerTestService
                     ->where('broadcast_campaign_id', $context['campaign_id'])
                     ->where('broadcast_message_version_id', $context['message_version_id'])
                     ->where('telegram_account_id', $context['telegram_account_id'])
-                    ->where(function ($retry) use ($now): void {
-                        $retry->where(function ($queued): void {
-                            $queued->where('state', 'queued')
-                                ->whereNotNull('retry_not_before');
-                        })->orWhere(function ($failed) use ($now): void {
-                            $failed->where('state', 'failed')
-                                ->whereNotNull('retry_not_before')
-                                ->where('retry_not_before', '>', $now);
-                        });
+                    ->where('state', 'failed')
+                    ->whereNotNull('retry_not_before')
+                    ->where('retry_not_before', '>', $now)
+                    ->exists();
+                $automaticRetryUnresolved = $connection->table('broadcast_campaign_tests as existing_test')
+                    ->where('existing_test.broadcast_campaign_id', $context['campaign_id'])
+                    ->where('existing_test.broadcast_message_version_id', $context['message_version_id'])
+                    ->where('existing_test.telegram_account_id', $context['telegram_account_id'])
+                    ->whereIn('existing_test.state', ['queued', 'sending'])
+                    ->whereNotNull('existing_test.delivery_operation_public_id')
+                    ->whereExists(function ($directive): void {
+                        $directive->selectRaw('1')
+                            ->from('telegram_delivery_retry_directives as retry_directive')
+                            ->whereColumn(
+                                'retry_directive.operation_public_id',
+                                'existing_test.delivery_operation_public_id',
+                            );
                     })
                     ->exists();
-                if ($retryWindowActive) {
-                    throw new DomainException('Broadcast Owner-test provider retry window has not elapsed.');
+                if ($retryWindowActive || $automaticRetryUnresolved) {
+                    throw new DomainException('Broadcast Owner-test provider retry is still unresolved.');
                 }
 
                 $publicId = (string) Str::ulid();
@@ -498,7 +506,7 @@ final readonly class TelegramBroadcastOwnerTestService
                             TelegramDeliveryOperationState::Uncertain => ['uncertain', null, $operation->result_code],
                         });
 
-                $retryNotBefore = $operationState === TelegramDeliveryOperationState::Retryable
+                $retryNotBefore = $retryableReview
                     ? $this->retryDirectives->retryNotBefore(
                         $connection,
                         $deliveryPublicId,
