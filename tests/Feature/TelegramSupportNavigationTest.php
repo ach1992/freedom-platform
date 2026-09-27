@@ -116,6 +116,7 @@ final class TelegramSupportNavigationTest extends TestCase
 
     public function test_customer_text_ticket_journey_is_owner_bound_restart_safe_and_replay_single_effect(): void
     {
+        config(['support.alerts.new_ticket.enabled' => true]);
         $processor = $this->app->make(TelegramUpdateProcessor::class);
         $telegramUserId = 9810;
         $otherTelegramUserId = 9811;
@@ -180,6 +181,11 @@ final class TelegramSupportNavigationTest extends TestCase
         $processor->process('123456789', 8108);
         self::assertSame(1, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame(1, DB::table('support_ticket_messages')->where('ticket_id', (int) $ticket->id)->count());
+        self::assertSame(1, DB::table('alerts')
+            ->where('event_name', SupportAlertService::NEW_TICKET_EVENT)
+            ->where('correlation_id', 'support.ticket.'.(int) $ticket->id)
+            ->where('occurrence_count', 1)
+            ->count());
 
         $reply = $this->callbackToken('navigation.support.reply', $account['account_id']);
         $this->accept($this->callbackPayload(8109, $telegramUserId, 'support_customer', 'fa', $reply));
