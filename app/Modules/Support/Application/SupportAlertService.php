@@ -36,7 +36,7 @@ final readonly class SupportAlertService
             return;
         }
 
-        $this->alerts->raise(
+        $this->alerts->raiseOnce(
             'info',
             self::NEW_TICKET_EVENT,
             hash('sha256', 'support-new-ticket:'.$ticket->trackingNumber),
@@ -50,15 +50,18 @@ final readonly class SupportAlertService
         );
     }
 
-    public function resolveSla(string $trackingNumber): void
+    public function resolveSla(string $trackingNumber, int $stateVersion): void
     {
         if ($trackingNumber === '') {
             throw new InvalidArgumentException('Support ticket tracking number is required.');
         }
+        if ($stateVersion < 1) {
+            throw new InvalidArgumentException('Support ticket SLA state version is invalid.');
+        }
 
         $this->alerts->resolve(
             self::SLA_DELAY_EVENT,
-            $this->slaDeduplicationKey($trackingNumber),
+            $this->slaDeduplicationKey($trackingNumber, $stateVersion),
         );
     }
 
@@ -149,15 +152,19 @@ final readonly class SupportAlertService
                         return false;
                     }
 
-                    $this->alerts->raise(
+                    $this->alerts->raiseOnce(
                         'warning',
                         self::SLA_DELAY_EVENT,
-                        $this->slaDeduplicationKey((string) $ticket->tracking_number),
+                        $this->slaDeduplicationKey(
+                            (string) $ticket->tracking_number,
+                            (int) $ticket->state_version,
+                        ),
                         'support.ticket.'.(int) $ticket->id,
                         [
                             'ticket_id' => (int) $ticket->id,
                             'tracking_number' => (string) $ticket->tracking_number,
                             'state' => (string) $ticket->state,
+                            'state_version' => (int) $ticket->state_version,
                             'priority' => (string) $ticket->priority,
                             'threshold_seconds' => $thresholdSeconds,
                         ],
@@ -203,7 +210,7 @@ final readonly class SupportAlertService
             $context['result_code'] = mb_substr($resultCode, 0, 191);
         }
 
-        $this->alerts->raise(
+        $this->alerts->raiseOnce(
             'warning',
             self::DELIVERY_FAILURE_EVENT,
             SupportCustomerReplyNotification::deduplicationKey($notification->messageId),
@@ -212,9 +219,9 @@ final readonly class SupportAlertService
         );
     }
 
-    private function slaDeduplicationKey(string $trackingNumber): string
+    private function slaDeduplicationKey(string $trackingNumber, int $stateVersion): string
     {
-        return hash('sha256', 'support-sla-delay:'.$trackingNumber);
+        return hash('sha256', 'support-sla-delay:'.$trackingNumber.':'.$stateVersion);
     }
 
     private function utcTimestamp(string $value): DateTimeImmutable
