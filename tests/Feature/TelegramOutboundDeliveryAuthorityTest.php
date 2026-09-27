@@ -594,6 +594,7 @@ final class TelegramOutboundDeliveryAuthorityTest extends TestCase
         $primary = $database->connection($default);
         $contender = $database->connection($contenderName);
         $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
+        $contender->statement('SET SESSION lock_wait_timeout = 1');
         $migration = require database_path(
             'migrations/2026_09_27_000100_add_telegram_rate_retry_retention_foundation.php',
         );
