@@ -24,13 +24,13 @@ final readonly class TelegramDeliveryQueueService
 {
     private const QUEUE_AUTHORITY = 'telegram_delivery_queue_v1';
 
-    public const OUTBOX_EVENT_TYPE = 'telegram.delivery.requested';
+    public const OUTBOX_EVENT_TYPE = TelegramDeliveryOutboxContract::EVENT_TYPE;
 
     public const OUTBOX_CONTRACT_VERSION = 1;
 
     public const OUTBOX_CONTRACT_VERSION_INTERACTIVE = 2;
 
-    public const OUTBOX_CONTRACT_VERSION_CONFIDENTIAL = 3;
+    public const OUTBOX_CONTRACT_VERSION_CONFIDENTIAL = TelegramDeliveryOutboxContract::CONTRACT_VERSION_CONFIDENTIAL;
 
     public const OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE = 4;
 
@@ -38,9 +38,9 @@ final readonly class TelegramDeliveryQueueService
 
     public const OUTBOX_CONTRACT_VERSION_SOURCE_MESSAGE_REFERENCE = 6;
 
-    public const OUTBOX_AGGREGATE_TYPE = 'telegram_delivery_operation';
+    public const OUTBOX_AGGREGATE_TYPE = TelegramDeliveryOutboxContract::AGGREGATE_TYPE;
 
-    public const OUTBOX_EVENT_KEY_PREFIX = 'telegram-delivery-requested:';
+    public const OUTBOX_EVENT_KEY_PREFIX = TelegramDeliveryOutboxContract::EVENT_KEY_PREFIX;
 
     public function __construct(
         private DatabaseManager $database,
