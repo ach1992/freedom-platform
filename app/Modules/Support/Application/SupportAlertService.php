@@ -11,6 +11,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Query\JoinClause;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -73,27 +74,33 @@ final readonly class SupportAlertService
         }
 
         $cutoff = $this->clock->now()->modify('-'.$thresholdSeconds.' seconds');
-        $candidateIds = $this->database->connection()->table('support_tickets')
-            ->whereIn('state', [
+        $candidateIds = $this->database->connection()
+            ->table('support_tickets as ticket')
+            ->join('support_ticket_state_histories as history', function (JoinClause $join): void {
+                $join->on('history.ticket_id', '=', 'ticket.id')
+                    ->on('history.to_version', '=', 'ticket.state_version')
+                    ->on('history.to_state', '=', 'ticket.state');
+            })
+            ->whereIn('ticket.state', [
                 SupportTicketState::New->value,
                 SupportTicketState::AwaitingSupport->value,
             ])
-            ->where('updated_at', '<=', $cutoff->format('Y-m-d H:i:s.u'))
-            ->orderBy('updated_at')
-            ->orderBy('id')
+            ->where('history.created_at', '<=', $cutoff->format('Y-m-d H:i:s.u'))
+            ->orderBy('history.created_at')
+            ->orderBy('ticket.id')
             ->limit($limit)
-            ->pluck('id')
+            ->pluck('ticket.id')
             ->all();
 
         $raised = 0;
         foreach ($candidateIds as $candidateId) {
             $didRaise = $this->database->connection()->transaction(
                 function (Connection $connection) use ($candidateId, $cutoff, $thresholdSeconds): bool {
-                    /** @var object{id:int|string,tracking_number:string,state:string,priority:string,updated_at:string}|null $ticket */
+                    /** @var object{id:int|string,tracking_number:string,state:string,state_version:int|string,priority:string}|null $ticket */
                     $ticket = $connection->table('support_tickets')
                         ->where('id', $candidateId)
                         ->lockForUpdate()
-                        ->first(['id', 'tracking_number', 'state', 'priority', 'updated_at']);
+                        ->first(['id', 'tracking_number', 'state', 'state_version', 'priority']);
                     if ($ticket === null
                         || ! in_array((string) $ticket->state, [
                             SupportTicketState::New->value,
@@ -103,8 +110,14 @@ final readonly class SupportAlertService
                         return false;
                     }
 
-                    $updatedAt = $this->utcTimestamp((string) $ticket->updated_at);
-                    if ($updatedAt > $cutoff) {
+                    $episodeStartedAt = $connection->table('support_ticket_state_histories')
+                        ->where('ticket_id', (int) $ticket->id)
+                        ->where('to_version', (int) $ticket->state_version)
+                        ->where('to_state', (string) $ticket->state)
+                        ->value('created_at');
+                    if (! is_string($episodeStartedAt)
+                        || $this->utcTimestamp($episodeStartedAt) > $cutoff
+                    ) {
                         return false;
                     }
 
