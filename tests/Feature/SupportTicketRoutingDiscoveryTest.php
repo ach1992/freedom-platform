@@ -272,5 +272,4 @@ final class SupportTicketRoutingDiscoveryTest extends TestCase
             $this->app->make(SupportAlertService::class),
         );
     }
-
 }
