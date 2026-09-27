@@ -73,8 +73,9 @@ final readonly class SupportAlertService
             return 0;
         }
 
-        $cutoff = $this->clock->now()->modify('-'.$thresholdSeconds.' seconds');
-        $candidateIds = $this->database->connection()
+        $now = $this->clock->now();
+        $cutoff = $now->modify('-'.$thresholdSeconds.' seconds');
+        $candidateQuery = $this->database->connection()
             ->table('support_tickets as ticket')
             ->join('support_ticket_state_histories as history', function (JoinClause $join): void {
                 $join->on('history.ticket_id', '=', 'ticket.id')
@@ -85,12 +86,39 @@ final readonly class SupportAlertService
                 SupportTicketState::New->value,
                 SupportTicketState::AwaitingSupport->value,
             ])
-            ->where('history.created_at', '<=', $cutoff->format('Y-m-d H:i:s.u'))
+            ->where('history.created_at', '<=', $cutoff->format('Y-m-d H:i:s.u'));
+
+        $totalCandidates = (int) (clone $candidateQuery)->count('ticket.id');
+        if ($totalCandidates === 0) {
+            return 0;
+        }
+
+        // A fixed "oldest N" window would permanently starve the tail after
+        // those N tickets already have active deduplicated alerts. Derive the
+        // bounded window from UTC minute + current candidate count so restart
+        // at the same instant selects the same work while later runs rotate
+        // through every eligible ticket without durable cursor state.
+        $windowSize = min($limit, $totalCandidates);
+        $minute = intdiv($now->getTimestamp(), 60);
+        $offset = ($minute * $windowSize) % $totalCandidates;
+        $candidateIds = (clone $candidateQuery)
             ->orderBy('history.created_at')
             ->orderBy('ticket.id')
-            ->limit($limit)
+            ->offset($offset)
+            ->limit($windowSize)
             ->pluck('ticket.id')
             ->all();
+
+        $remaining = $windowSize - count($candidateIds);
+        if ($remaining > 0) {
+            $wrapped = (clone $candidateQuery)
+                ->orderBy('history.created_at')
+                ->orderBy('ticket.id')
+                ->limit($remaining)
+                ->pluck('ticket.id')
+                ->all();
+            $candidateIds = array_merge($candidateIds, $wrapped);
+        }
 
         $raised = 0;
         foreach ($candidateIds as $candidateId) {
