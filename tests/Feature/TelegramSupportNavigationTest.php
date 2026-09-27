@@ -35,9 +35,11 @@ use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Shared\Application\Clock;
 use App\Shared\Application\OutboxDispatchOutcome;
 use App\Shared\Application\OutboxMessage;
+use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
 use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -1251,21 +1253,28 @@ final class TelegramSupportNavigationTest extends TestCase
         self::assertNotNull($supportEvent);
         $supportPayload = json_decode((string) $supportEvent->payload, true, 32, JSON_THROW_ON_ERROR);
         self::assertIsArray($supportPayload);
-        $supportMessage = new OutboxMessage(
-            (string) $supportEvent->id,
-            (string) $supportEvent->event_key,
-            (string) $supportEvent->event_type,
-            (string) $supportEvent->aggregate_type,
-            (string) $supportEvent->aggregate_id,
-            $supportPayload,
-            (string) $supportEvent->correlation_id,
-            1,
-            (int) $supportEvent->contract_version,
-        );
-        self::assertSame(
-            OutboxDispatchOutcome::Success,
-            $this->app->make(TelegramSupportCustomerReplyOutboxHandler::class)->handle($supportMessage),
-        );
+        DB::table('outbox_messages')
+            ->whereNull('processed_at')
+            ->where('id', '<>', (string) $supportEvent->id)
+            ->update(['available_at' => '2037-01-01 00:00:00.000000']);
+        DB::table('outbox_messages')
+            ->where('id', (string) $supportEvent->id)
+            ->update(['available_at' => '2000-01-01 00:00:00.000000']);
+
+        $supportDispatch = (new DatabaseOutboxDispatcher(
+            $this->app->make(DatabaseManager::class),
+            $clock,
+            60,
+        ))->dispatchOne($this->app->make(TelegramSupportCustomerReplyOutboxHandler::class));
+        self::assertNotNull($supportDispatch);
+        self::assertSame((string) $supportEvent->id, $supportDispatch->messageId);
+        self::assertSame(OutboxDispatchOutcome::Success, $supportDispatch->outcome);
+        self::assertSame('processed', DB::table('outbox_messages')
+            ->where('id', (string) $supportEvent->id)
+            ->value('dispatch_state'));
+        self::assertNotNull(DB::table('outbox_messages')
+            ->where('id', (string) $supportEvent->id)
+            ->value('processed_at'));
 
         $operation = DB::table('telegram_delivery_operations')
             ->where('correlation_id', SupportCustomerReplyNotification::correlationId($reply->messageId))
@@ -1412,6 +1421,32 @@ final class TelegramSupportNavigationTest extends TestCase
             SupportCustomerReplyNotification::correlationId($reply->messageId),
         );
 
+        DB::table('outbox_messages')
+            ->whereNull('processed_at')
+            ->whereNotIn('id', [(string) $supportEvent->id, $generic->outboxEventId])
+            ->update(['available_at' => '2037-01-01 00:00:00.000000']);
+        DB::table('outbox_messages')
+            ->where('id', (string) $supportEvent->id)
+            ->update(['available_at' => '2000-01-01 00:00:00.000000']);
+        DB::table('outbox_messages')
+            ->where('id', $generic->outboxEventId)
+            ->update(['available_at' => '2036-01-01 00:00:00.000000']);
+
+        $supportDispatch = (new DatabaseOutboxDispatcher(
+            $this->app->make(DatabaseManager::class),
+            $clock,
+            60,
+        ))->dispatchOne($this->app->make(TelegramSupportCustomerReplyOutboxHandler::class));
+        self::assertNotNull($supportDispatch);
+        self::assertSame((string) $supportEvent->id, $supportDispatch->messageId);
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $supportDispatch->outcome);
+        self::assertSame('review_required', DB::table('outbox_messages')
+            ->where('id', (string) $supportEvent->id)
+            ->value('dispatch_state'));
+        self::assertNull(DB::table('outbox_messages')
+            ->where('id', (string) $supportEvent->id)
+            ->value('processed_at'));
+
         $telegramEvent = DB::table('outbox_messages')
             ->where('id', $generic->outboxEventId)
             ->first();
@@ -1446,10 +1481,16 @@ final class TelegramSupportNavigationTest extends TestCase
         );
 
         $scanner = $this->app->make(SupportCustomerDeliveryAlertScanner::class);
-        self::assertSame(0, $scanner->scan(10));
-        self::assertSame(0, DB::table('alerts')
+        self::assertSame(1, $scanner->scan(10));
+        $alerts = DB::table('alerts')
             ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
-            ->count());
+            ->get(['occurrence_count', 'safe_context']);
+        self::assertCount(1, $alerts);
+        self::assertSame(1, (int) $alerts[0]->occurrence_count);
+        $safeContext = json_decode((string) $alerts[0]->safe_context, true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($safeContext);
+        self::assertSame('notification_handoff', $safeContext['stage'] ?? null);
+        self::assertNotSame('telegram_delivery', $safeContext['stage'] ?? null);
     }
 
     public function test_support_session_timeout_uses_shared_expiry_authority_without_ticket_effect(): void
