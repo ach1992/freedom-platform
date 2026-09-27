@@ -1028,6 +1028,26 @@ final class TelegramSupportNavigationTest extends TestCase
             ->where('correlation_id', 'support.ticket.'.$ticket->id)
             ->value('resolved_at'));
 
+        $tickets->replyAsCustomer(
+            $ticket->id,
+            $customer['user_id'],
+            'Customer reply starts a new awaiting-support SLA episode.',
+            'telegram-support-alert:customer-reply',
+        );
+        $clock->advance('+61 seconds');
+        self::assertSame(1, $alerts->scanSla(10));
+
+        $slaEpisodes = DB::table('alerts')
+            ->where('event_name', SupportAlertService::SLA_DELAY_EVENT)
+            ->where('correlation_id', 'support.ticket.'.$ticket->id)
+            ->orderBy('first_seen_at')
+            ->get(['occurrence_count', 'resolved_at']);
+        self::assertCount(2, $slaEpisodes);
+        self::assertSame(1, (int) $slaEpisodes[0]->occurrence_count);
+        self::assertNotNull($slaEpisodes[0]->resolved_at);
+        self::assertSame(1, (int) $slaEpisodes[1]->occurrence_count);
+        self::assertNull($slaEpisodes[1]->resolved_at);
+
         config(['support.alerts.sla_delay.threshold_seconds' => null]);
         self::assertSame(1, Artisan::call('support:alerts:scan', [
             '--limit' => 10,
