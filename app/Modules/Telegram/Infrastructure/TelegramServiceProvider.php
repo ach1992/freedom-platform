@@ -29,6 +29,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportCustomerRateLimiter;
+use App\Modules\Telegram\Application\ConfidentialTelegramPresentationFactory;
 use App\Modules\Telegram\Application\NonRestrictedTelegramPresentationFactory;
 use App\Modules\Telegram\Application\TelegramActionMembershipRevalidator;
 use App\Modules\Telegram\Application\TelegramActionMembershipService;
