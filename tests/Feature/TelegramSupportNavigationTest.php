@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Support\Application\SupportAlertService;
+use App\Modules\Support\Application\SupportCustomerReplyNotification;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Support\Application\SupportTicketSupportService;
@@ -17,8 +19,11 @@ use App\Modules\Telegram\Application\TelegramInteractionRejected;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramMembershipEvidence;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramSupportCustomerReplyOutboxHandler;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxDispatchOutcome;
+use App\Shared\Application\OutboxMessage;
 use DateTimeImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Encryption\StringEncrypter;
@@ -275,11 +280,57 @@ final class TelegramSupportNavigationTest extends TestCase
         self::assertSame('support_queue_reply', $this->supportSession($staff['account_id'])['state']);
         $this->accept($this->payload(8207, $supportTelegramId, 'support_staff', 'en', 'Public support answer'));
         $processor->process('123456789', 8207);
-        $publicReply = DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->where('kind', 'support_reply')->first(['body', 'customer_visible']);
+        $publicReply = DB::table('support_ticket_messages')->where('ticket_id', $ticket->id)->where('kind', 'support_reply')->first(['id', 'body', 'customer_visible']);
         self::assertNotNull($publicReply);
         self::assertSame('Public support answer', (string) $publicReply->body);
         self::assertSame(1, (int) $publicReply->customer_visible);
         self::assertSame(SupportTicketState::AwaitingCustomer->value, DB::table('support_tickets')->where('id', $ticket->id)->value('state'));
+
+        $notificationEvent = DB::table('outbox_messages')
+            ->where('event_type', SupportCustomerReplyNotification::EVENT_TYPE)
+            ->where('aggregate_id', (string) $publicReply->id)
+            ->first([
+                'id',
+                'event_key',
+                'event_type',
+                'contract_version',
+                'aggregate_type',
+                'aggregate_id',
+                'payload',
+                'correlation_id',
+            ]);
+        self::assertNotNull($notificationEvent);
+        self::assertStringNotContainsString('Public support answer', (string) $notificationEvent->payload);
+        $notificationPayload = json_decode((string) $notificationEvent->payload, true, 32, JSON_THROW_ON_ERROR);
+        self::assertSame([
+            'message_id' => (int) $publicReply->id,
+            'ticket_id' => $ticket->id,
+        ], $notificationPayload);
+
+        $outboxMessage = new OutboxMessage(
+            (string) $notificationEvent->id,
+            (string) $notificationEvent->event_key,
+            (string) $notificationEvent->event_type,
+            (string) $notificationEvent->aggregate_type,
+            (string) $notificationEvent->aggregate_id,
+            $notificationPayload,
+            (string) $notificationEvent->correlation_id,
+            1,
+            (int) $notificationEvent->contract_version,
+        );
+        $notificationHandler = $this->app->make(TelegramSupportCustomerReplyOutboxHandler::class);
+        self::assertSame(OutboxDispatchOutcome::Success, $notificationHandler->handle($outboxMessage));
+        self::assertSame(OutboxDispatchOutcome::Success, $notificationHandler->handle($outboxMessage));
+        self::assertSame(1, DB::table('telegram_delivery_operations')
+            ->where('correlation_id', SupportCustomerReplyNotification::correlationId((int) $publicReply->id))
+            ->count());
+        $customerDelivery = DB::table('telegram_delivery_operations')
+            ->where('correlation_id', SupportCustomerReplyNotification::correlationId((int) $publicReply->id))
+            ->first(['recipient_chat_id', 'presentation_text', 'state']);
+        self::assertNotNull($customerDelivery);
+        self::assertSame($customerTelegramId, (int) $customerDelivery->recipient_chat_id);
+        self::assertSame('prepared', (string) $customerDelivery->state);
+        self::assertStringNotContainsString('Public support answer', (string) $customerDelivery->presentation_text);
 
         $priority = $this->callbackToken('navigation.support.queue.priority', $staff['account_id']);
         $this->accept($this->callbackPayload(8208, $supportTelegramId, 'support_staff', 'en', $priority));
@@ -318,6 +369,10 @@ final class TelegramSupportNavigationTest extends TestCase
         self::assertNotNull($internal);
         self::assertSame(0, (int) $internal->customer_visible);
         self::assertStringContainsString('SECRET-INTERNAL-NOTE', $this->latestConfidentialPresentation($supportTelegramId));
+        self::assertSame(1, DB::table('outbox_messages')
+            ->where('event_type', SupportCustomerReplyNotification::EVENT_TYPE)
+            ->where('aggregate_type', SupportCustomerReplyNotification::AGGREGATE_TYPE)
+            ->count());
 
         $state = $this->callbackToken('navigation.support.queue.state', $staff['account_id']);
         $this->accept($this->callbackPayload(8214, $supportTelegramId, 'support_staff', 'en', $state));
@@ -881,6 +936,74 @@ final class TelegramSupportNavigationTest extends TestCase
             ->value('status'));
         self::assertSame(0, DB::table('support_tickets')->where('requester_user_id', $account['user_id'])->count());
         self::assertSame(0, DB::table('support_ticket_messages')->where('actor_user_id', $account['user_id'])->count());
+    }
+
+    public function test_support_alerts_are_configurable_sla_deduplicated_and_resolved_by_staff_reply(): void
+    {
+        $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 18:00:00', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
+        config([
+            'support.alerts.new_ticket.enabled' => true,
+            'support.alerts.sla_delay.enabled' => true,
+            'support.alerts.sla_delay.threshold_seconds' => 60,
+            'support.alerts.delivery_failure.enabled' => true,
+        ]);
+
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $customerTelegramId = 9846;
+        $staffTelegramId = 9847;
+        $this->accept($this->payload(8460, $customerTelegramId, 'support_alert_customer', 'fa', '/start'));
+        $processor->process('123456789', 8460);
+        $customer = $this->account($customerTelegramId);
+        $this->accept($this->payload(8461, $staffTelegramId, 'support_alert_staff', 'en', '/start'));
+        $processor->process('123456789', 8461);
+        $staff = $this->account($staffTelegramId);
+
+        $tickets = $this->app->make(SupportTicketService::class);
+        $ticket = $tickets->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Alert lifecycle',
+            'Please investigate.',
+            'telegram-support-alert:create',
+        ));
+
+        $this->assertDatabaseHas('alerts', [
+            'event_name' => SupportAlertService::NEW_TICKET_EVENT,
+            'correlation_id' => 'support.ticket.'.$ticket->id,
+            'occurrence_count' => 1,
+            'resolved_at' => null,
+        ]);
+
+        $clock->advance('+61 seconds');
+        $alerts = $this->app->make(SupportAlertService::class);
+        self::assertSame(1, $alerts->scanSla(10));
+        self::assertSame(1, $alerts->scanSla(10));
+        $slaAlert = DB::table('alerts')
+            ->where('event_name', SupportAlertService::SLA_DELAY_EVENT)
+            ->where('correlation_id', 'support.ticket.'.$ticket->id)
+            ->first(['occurrence_count', 'resolved_at']);
+        self::assertNotNull($slaAlert);
+        self::assertSame(1, (int) $slaAlert->occurrence_count);
+        self::assertNull($slaAlert->resolved_at);
+
+        $tickets->addSupportMessage(
+            $ticket->id,
+            $staff['user_id'],
+            'Staff reply resolves the active SLA delay.',
+            'telegram-support-alert:staff-reply',
+            false,
+        );
+        self::assertNotNull(DB::table('alerts')
+            ->where('event_name', SupportAlertService::SLA_DELAY_EVENT)
+            ->where('correlation_id', 'support.ticket.'.$ticket->id)
+            ->value('resolved_at'));
+
+        config(['support.alerts.sla_delay.threshold_seconds' => null]);
+        self::assertSame(1, \Illuminate\Support\Facades\Artisan::call('support:alerts:scan', [
+            '--limit' => 10,
+            '--json' => true,
+        ]));
     }
 
     public function test_support_session_timeout_uses_shared_expiry_authority_without_ticket_effect(): void
