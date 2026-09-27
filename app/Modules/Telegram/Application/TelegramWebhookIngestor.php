@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Modules\Identity\Application\Contracts\PhoneLookupHasher;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Exceptions\InvalidTelegramWebhookPayload;
 use App\Modules\Telegram\Application\Exceptions\TelegramUpdateCollision;
@@ -19,10 +20,14 @@ final readonly class TelegramWebhookIngestor
         private DatabaseManager $database,
         private StringEncrypter $encrypter,
         private TelegramRuntime $configuration,
+        private PhoneLookupHasher $phoneHasher,
     ) {}
 
-    public function ingest(string $rawPayload, string $correlationId): TelegramWebhookReceipt
-    {
+    public function ingest(
+        string $rawPayload,
+        string $correlationId,
+        ?string $requestIp = null,
+    ): TelegramWebhookReceipt {
         $payload = $this->decode($rawPayload);
         $updateId = $payload['update_id'] ?? null;
 
@@ -30,7 +35,14 @@ final readonly class TelegramWebhookIngestor
             throw new InvalidTelegramWebhookPayload('Telegram update_id must be a non-negative integer.');
         }
 
+        if ($requestIp !== null && filter_var($requestIp, FILTER_VALIDATE_IP) === false) {
+            throw new InvalidTelegramWebhookPayload('Telegram webhook request IP is invalid.');
+        }
+
         $payloadHash = hash('sha256', $rawPayload);
+        $requestIpHash = $requestIp === null
+            ? null
+            : $this->phoneHasher->hashOpaque('otp-ip|'.$requestIp);
         $now = now('UTC')->format('Y-m-d H:i:s.u');
         $ciphertext = $this->encrypter->encryptString($rawPayload);
         $botId = $this->configuration->botId();
@@ -41,6 +53,7 @@ final readonly class TelegramWebhookIngestor
             $payloadHash,
             $ciphertext,
             $correlationId,
+            $requestIpHash,
             $rawPayload,
             $now,
         ): bool {
@@ -50,6 +63,7 @@ final readonly class TelegramWebhookIngestor
                 'payload_hash' => $payloadHash,
                 'payload_ciphertext' => $ciphertext,
                 'payload_size' => strlen($rawPayload),
+                'request_ip_hash' => $requestIpHash,
                 'state' => 'accepted',
                 'correlation_id' => $correlationId,
                 'received_at' => $now,

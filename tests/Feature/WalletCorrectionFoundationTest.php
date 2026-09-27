@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\AccessControl\Application\AccessChangeContext;
 use App\Modules\AccessControl\Application\SensitiveActionApprovalService;
+use App\Modules\Wallet\Application\AdministratorWalletOperationsService;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Application\WalletCorrectionService;
@@ -316,6 +317,89 @@ final class WalletCorrectionFoundationTest extends TestCase
             $this->context($financeId, 'preview-finance-large'),
         );
         self::assertTrue($large->approvalRequired);
+    }
+
+    public function test_administrator_wallet_facade_preserves_independent_approval_and_execution_time_authorization(): void
+    {
+        $this->app['config']->set('wallet.corrections.dual_approval_threshold_irr', 500_000);
+        $financeAdministratorId = $this->administrator(false, 'finance');
+        $approverAdministratorId = $this->administrator(true);
+        $financeUserId = (int) DB::table('administrators')
+            ->where('id', $financeAdministratorId)
+            ->value('user_id');
+
+        $customerUserId = $this->user();
+        $customerPublicId = (string) DB::table('users')
+            ->where('id', $customerUserId)
+            ->value('public_id');
+        $walletId = $this->walletAccount($customerUserId, 'cash', 'admin-facade');
+        $this->fundWallet($walletId, 1_000_000, 'admin-facade');
+
+        $service = $this->app->make(AdministratorWalletOperationsService::class);
+        $capabilities = $service->capabilities($financeUserId);
+        self::assertTrue($capabilities->canCorrect);
+
+        $operationKey = hash('sha256', 'administrator-wallet-facade-correction');
+        $preview = $service->previewCorrection(
+            $financeUserId,
+            $customerPublicId,
+            WalletCorrectionDirection::Credit,
+            500_000,
+            'Finance correction through administrator product facade.',
+            $operationKey,
+        );
+
+        self::assertTrue($preview->approvalRequired);
+        self::assertNotNull($preview->approvalId);
+        self::assertSame(1_000_000, $preview->availableBalanceBeforeIrr);
+        self::assertSame(1_500_000, $preview->availableBalanceAfterIrr);
+        self::assertSame(1, DB::table('sensitive_action_approvals')->count());
+
+        try {
+            $service->executeCorrection(
+                $financeUserId,
+                $customerPublicId,
+                $preview->previewId,
+                $preview->confirmationToken,
+                $preview->approvalId,
+                $operationKey,
+            );
+            self::fail('Expected pending independent approval to block correction execution.');
+        } catch (DomainException) {
+            self::assertSame(0, DB::table('wallet_corrections')->count());
+        }
+
+        $this->app->make(SensitiveActionApprovalService::class)->approve(
+            $preview->approvalId,
+            $this->context($approverAdministratorId, 'admin-facade-approve'),
+        );
+
+        $receipt = $service->executeCorrection(
+            $financeUserId,
+            $customerPublicId,
+            $preview->previewId,
+            $preview->confirmationToken,
+            $preview->approvalId,
+            $operationKey,
+        );
+        self::assertSame(1_500_000, $receipt->availableBalanceAfter->amount);
+        self::assertSame($preview->approvalId, $receipt->approvalId);
+        self::assertSame(1, DB::table('wallet_corrections')->count());
+        self::assertNotNull(DB::table('sensitive_action_approvals')
+            ->where('id', $preview->approvalId)
+            ->value('consumed_at'));
+
+        $replay = $service->executeCorrection(
+            $financeUserId,
+            $customerPublicId,
+            $preview->previewId,
+            $preview->confirmationToken,
+            $preview->approvalId,
+            $operationKey,
+        );
+        self::assertTrue($replay->replayed);
+        self::assertSame($receipt->correctionId, $replay->correctionId);
+        self::assertSame(1, DB::table('wallet_corrections')->count());
     }
 
     public function test_related_reference_validation_and_database_guards_preserve_preview_and_execution_history(): void

@@ -34,17 +34,19 @@ final readonly class TelegramDeliveryInteractivePresentationService
         Connection $connection,
         string $operationPublicId,
         int $recipientChatId,
-        TelegramInlineKeyboardSnapshot $keyboard,
+        TelegramInlineKeyboardSnapshot|TelegramContactRequestKeyboardSnapshot $keyboard,
     ): void {
         $this->assertOperationPublicId($operationPublicId);
         if ($connection->transactionLevel() < 1) {
             throw new RuntimeException('Telegram interactive presentation snapshot requires the delivery queue transaction.');
         }
         if ($recipientChatId < 1) {
-            throw new DomainException('Telegram callback keyboards are restricted to the bound private actor chat.');
+            throw new DomainException('Telegram interactive keyboards are restricted to the bound private actor chat.');
         }
 
-        $this->validatedCallbacks($connection, $keyboard, $recipientChatId, false);
+        if ($keyboard instanceof TelegramInlineKeyboardSnapshot) {
+            $this->validatedCallbacks($connection, $keyboard, $recipientChatId, false);
+        }
         $timestamp = $this->clock->now()->format('Y-m-d H:i:s.u');
         $stored = $this->databaseCapability->runStore(
             $connection,
@@ -121,18 +123,37 @@ final readonly class TelegramDeliveryInteractivePresentationService
         if ($row === null) {
             throw new DomainException('Telegram interactive presentation snapshot does not exist.');
         }
-        $snapshot = TelegramInlineKeyboardSnapshot::restore((string) $row->keyboard_snapshot);
+        $snapshot = $this->restoreSnapshot((string) $row->keyboard_snapshot);
         $storedHash = (string) $row->keyboard_snapshot_hash;
         if (! hash_equals($snapshot->hash(), $storedHash)) {
             throw new DomainException('Telegram interactive presentation snapshot integrity failed.');
         }
 
-        $callbackData = $this->validatedCallbacks($connection, $snapshot, $recipientChatId, true);
+        if ($snapshot instanceof TelegramInlineKeyboardSnapshot) {
+            $callbackData = $this->validatedCallbacks($connection, $snapshot, $recipientChatId, true);
+            $markup = TelegramResolvedInlineKeyboardMarkup::resolve($snapshot, $callbackData);
+        } else {
+            $markup = new TelegramResolvedContactRequestMarkup($snapshot);
+        }
 
-        return new TelegramResolvedInteractivePresentation(
-            TelegramResolvedInlineKeyboardMarkup::resolve($snapshot, $callbackData),
-            $storedHash,
-        );
+        return new TelegramResolvedInteractivePresentation($markup, $storedHash);
+    }
+
+    private function restoreSnapshot(
+        string $json,
+    ): TelegramInlineKeyboardSnapshot|TelegramContactRequestKeyboardSnapshot {
+        try {
+            return TelegramInlineKeyboardSnapshot::restore($json);
+        } catch (InvalidArgumentException) {
+            // The same protected snapshot table also supports the bounded
+            // contact-request reply keyboard; no arbitrary provider markup is accepted.
+        }
+
+        try {
+            return TelegramContactRequestKeyboardSnapshot::restore($json);
+        } catch (InvalidArgumentException $exception) {
+            throw new DomainException('Stored Telegram interactive presentation snapshot is invalid.', 0, $exception);
+        }
     }
 
     /**

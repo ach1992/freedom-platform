@@ -29,6 +29,7 @@ final readonly class PurchaseRefundService
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private PurchaseLifecycleOutboxPublisher $lifecycleEvents,
     ) {}
 
     /** @requirement PAY-002 PAY-003 WAL-004 DAT-002 DAT-003 QUA-004 */
@@ -146,6 +147,11 @@ final readonly class PurchaseRefundService
                         : 'purchase_refund_completed_partial',
                     $correlationId,
                     $refundId,
+                );
+                $this->lifecycleEvents->publishRefund(
+                    $publicId,
+                    $purchaseSettlementPublicId,
+                    $correlationId,
                 );
 
                 return new PurchaseRefundReceipt(

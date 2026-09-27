@@ -718,11 +718,12 @@ final class ServiceDeliveryEffectAuthorityTest extends TestCase
         );
         $this->insertTelegramAccount($scenario['user_id']);
 
-        DB::table('outbox_messages')
-            ->where('event_type', 'provisioning.initial.requested')
-            ->update([
-                'available_at' => '2037-01-01 00:00:00.000000',
-            ]);
+        // Isolate the Service-delivery event under review. The scenario may
+        // legitimately queue other product events, so park all pre-existing
+        // Outbox work before creating the resend attempt exercised here.
+        DB::table('outbox_messages')->update([
+            'available_at' => '2037-01-01 00:00:00.000000',
+        ]);
 
         $attempt = $this->deliveryQueue()->queue(
             $scenario['service_public_id'],

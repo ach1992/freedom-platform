@@ -17,9 +17,10 @@ final readonly class OtpIssueRequest
         public PhoneVerificationPolicy $policy,
         public int $policyVersion,
         public string $purpose,
-        public string $requestIp,
+        public ?string $requestIp,
         public string $idempotencyKey,
         public ?string $correlationId = null,
+        public ?string $requestIpHash = null,
     ) {
         if ($userId < 1 || $telegramAccountId < 1) {
             throw new InvalidArgumentException('OTP issue identity IDs must be positive.');
@@ -33,8 +34,11 @@ final readonly class OtpIssueRequest
             throw new InvalidArgumentException('OTP purpose is invalid.');
         }
 
-        if (filter_var($requestIp, FILTER_VALIDATE_IP) === false) {
-            throw new InvalidArgumentException('OTP request IP is invalid.');
+        $hasRawIp = $requestIp !== null && filter_var($requestIp, FILTER_VALIDATE_IP) !== false;
+        $hasHashedIp = $requestIpHash !== null
+            && preg_match('/\A[0-9a-f]{64}\z/', $requestIpHash) === 1;
+        if ($hasRawIp === $hasHashedIp) {
+            throw new InvalidArgumentException('OTP request must contain exactly one valid IP abuse-control scope.');
         }
 
         if (preg_match('/\A[A-Za-z0-9:_-]{16,128}\z/', $idempotencyKey) !== 1) {

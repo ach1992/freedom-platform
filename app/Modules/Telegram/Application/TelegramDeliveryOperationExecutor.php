@@ -267,12 +267,20 @@ final readonly class TelegramDeliveryOperationExecutor
             $privateMediaPresentation = $boundary['private_media_presentation'];
             $sourceMessagePresentation = $boundary['source_message_presentation'];
             if ($privateMediaPresentation !== null) {
+                if ($request->inlineKeyboard !== null
+                    && ! $request->inlineKeyboard instanceof TelegramResolvedInlineKeyboardMarkup) {
+                    throw new DomainException('Private Telegram media delivery supports inline reply markup only.');
+                }
                 $result = ($this->privateMediaSender ?? throw new RuntimeException('Private Telegram media sender is unavailable.'))->send(
                     $request->recipientChatId,
                     $privateMediaPresentation,
                     $request->inlineKeyboard,
                 );
             } elseif ($sourceMessagePresentation !== null) {
+                if ($request->inlineKeyboard !== null
+                    && ! $request->inlineKeyboard instanceof TelegramResolvedInlineKeyboardMarkup) {
+                    throw new DomainException('Telegram source-message delivery supports inline reply markup only.');
+                }
                 $result = ($this->sourceMessageSender ?? throw new RuntimeException('Telegram source-message sender is unavailable.'))->send(
                     $request->recipientChatId,
                     $sourceMessagePresentation,
@@ -413,7 +421,7 @@ final readonly class TelegramDeliveryOperationExecutor
     /** @param DeliveryOperationRow $row */
     private function mutationRequest(
         object $row,
-        ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard,
+        TelegramResolvedInlineKeyboardMarkup|TelegramResolvedContactRequestMarkup|null $inlineKeyboard,
         ?ConfidentialTelegramPresentation $confidentialPresentation = null,
         ?TelegramProtectedPresentationReference $protectedReference = null,
         ?TelegramPrivateMediaPresentationReference $privateMediaReference = null,

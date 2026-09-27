@@ -14,7 +14,7 @@ final readonly class TelegramMutationRequest
         public int $recipientChatId,
         public ?int $targetMessageId,
         public NonRestrictedTelegramPresentation|ConfidentialTelegramPresentation|TelegramProtectedPresentationReference|TelegramPrivateMediaPresentationReference|TelegramSourceMessagePresentationReference|null $presentation,
-        public ?TelegramResolvedInlineKeyboardMarkup $inlineKeyboard = null,
+        public TelegramResolvedInlineKeyboardMarkup|TelegramResolvedContactRequestMarkup|null $inlineKeyboard = null,
     ) {
         if ($recipientChatId === 0) {
             throw new InvalidArgumentException('Telegram recipient chat identity must be non-zero.');
@@ -26,6 +26,10 @@ final readonly class TelegramMutationRequest
             }
 
             return;
+        }
+
+        if ($inlineKeyboard instanceof TelegramResolvedContactRequestMarkup) {
+            throw new InvalidArgumentException('Telegram contact-request reply markup is supported for send mutations only.');
         }
 
         if ($targetMessageId === null || $targetMessageId < 1) {

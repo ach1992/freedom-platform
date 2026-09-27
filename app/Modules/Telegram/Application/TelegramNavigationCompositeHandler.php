@@ -19,6 +19,7 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramAdministratorAccessNavigationHandler $adminAccess,
         private TelegramAlternativePaymentReviewNavigationHandler $adminPayments,
         private TelegramAdministratorSearchNavigationHandler $adminSearch,
+        private TelegramAdministratorWalletNavigationHandler $adminWallet,
         private TelegramAdminCustomerNavigationHandler $adminCustomers,
         private TelegramAdministratorServiceOperationsNavigationHandler $adminServiceOperations,
         private TelegramBroadcastNavigationResolver $broadcastResolver,
@@ -40,6 +41,8 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         private TelegramSupportAttachmentNavigationHandler $supportAttachments,
         private TelegramSupportMembershipFreshnessGuard $supportMembership,
         private TelegramGiftCardNavigationHandler $giftCards,
+        private TelegramPhoneVerificationNavigationHandler $phoneVerification,
+        private TelegramWalletTopUpNavigationHandler $walletTopUps,
         private TelegramWalletTransferNavigationHandler $walletTransfers,
         private TelegramUsdtNavigationHandler $usdt,
         private TelegramNowPaymentsNavigationResolver $nowPaymentsResolver,
@@ -113,6 +116,11 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
 
             return;
         }
+        if ($this->adminWallet->supports($action)) {
+            $this->adminWallet->handle($action);
+
+            return;
+        }
         if ($this->adminCustomers->supports($action)) {
             $this->adminCustomers->handle($action);
 
@@ -170,6 +178,16 @@ final readonly class TelegramNavigationCompositeHandler implements TelegramInter
         }
         if ($this->giftCards->supports($action)) {
             $this->giftCards->handle($action);
+
+            return;
+        }
+        if ($this->phoneVerification->supports($action)) {
+            $this->phoneVerification->handle($action);
+
+            return;
+        }
+        if ($this->walletTopUps->supports($action)) {
+            $this->walletTopUps->handle($action);
 
             return;
         }

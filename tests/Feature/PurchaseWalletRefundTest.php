@@ -14,6 +14,7 @@ use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchaseRefundService;
 use App\Modules\Payments\Application\PurchaseWalletPaymentService;
+use App\Modules\Payments\Application\PurchaseWalletRefundAuthorityService;
 use App\Modules\Payments\Application\PurchaseWalletRefundService;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Modules\Payments\Eligibility\Application\PaymentMethodEligibilityService;
@@ -152,6 +153,50 @@ final class PurchaseWalletRefundTest extends TestCase
         );
         self::assertSame('captured', DB::table('wallet_holds')->where('source_id', $intentPublicId)->value('status'));
         self::assertSame(1, DB::table('ledger_transactions')->where('transaction_type', 'wallet_hold_capture')->count());
+    }
+
+    public function test_wallet_refund_authority_lists_only_current_remaining_amount_and_executes_exact_purchase(): void
+    {
+        [$userId, $quote, $walletId, $intentPublicId, $settlementPublicId, $fundedAmount] = $this->settledPurchase('authority-adapter');
+        $service = $this->app->make(PurchaseWalletRefundAuthorityService::class);
+
+        $candidates = $service->refundablePurchases($userId, 8);
+        self::assertCount(1, $candidates);
+        self::assertSame($settlementPublicId, $candidates[0]->purchaseSettlementPublicId);
+        self::assertSame($quote->finalPriceIrr, $candidates[0]->remainingIrr);
+
+        $partial = intdiv($quote->finalPriceIrr, 2);
+        $receipt = $service->refund(
+            'wallet-refund-authority-partial-000001',
+            $userId,
+            $settlementPublicId,
+            $partial,
+            $this->correlation('authority-adapter-partial'),
+        );
+        self::assertSame($partial, $receipt->amountIrr);
+        self::assertSame('partially_refunded', $receipt->resultingPaymentState);
+        self::assertFalse($receipt->replayed);
+
+        $remaining = $quote->finalPriceIrr - $partial;
+        $afterPartial = $service->refundablePurchases($userId, 8);
+        self::assertCount(1, $afterPartial);
+        self::assertSame($remaining, $afterPartial[0]->remainingIrr);
+
+        $final = $service->refund(
+            'wallet-refund-authority-final-000001',
+            $userId,
+            $settlementPublicId,
+            $remaining,
+            $this->correlation('authority-adapter-final'),
+        );
+        self::assertSame('refunded', $final->resultingPaymentState);
+        self::assertSame($quote->finalPriceIrr, $final->cumulativeRefundedIrr);
+        self::assertSame([], $service->refundablePurchases($userId, 8));
+        self::assertSame(
+            $fundedAmount,
+            $this->app->make(WalletHoldService::class)->balance($userId, $walletId)->availableBalance->amount,
+        );
+        self::assertSame('refunded', DB::table('payment_intents')->where('public_id', $intentPublicId)->value('state'));
     }
 
     public function test_generic_purchase_refund_cannot_forge_wallet_refund_without_exact_ledger_reversal(): void
