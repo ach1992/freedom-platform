@@ -30,7 +30,6 @@ use RuntimeException;
  *     bot_id:string,
  *     recipient_chat_id:int|string,
  *     target_message_id:int|string|null,
- *     presentation_text:?string,
  *     telegram_outbox_event_id:string,
  *     telegram_outbox_event_key:string,
  *     telegram_outbox_event_type:string,
@@ -162,16 +161,12 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
             ->where('operation.correlation_id', 'like', 'support.reply.%')
             ->where('operation.action', TelegramDeliveryAction::Send->value)
             ->whereNull('operation.target_message_id')
-            ->where(
-                'operation.presentation_text',
-                TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
-            )
-            ->where('outbox.event_type', TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE)
+            ->where('outbox.event_type', TelegramDeliveryOutboxContract::EVENT_TYPE)
             ->where(
                 'outbox.contract_version',
-                TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL,
+                TelegramDeliveryOutboxContract::CONTRACT_VERSION_CONFIDENTIAL,
             )
-            ->where('outbox.aggregate_type', TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE)
+            ->where('outbox.aggregate_type', TelegramDeliveryOutboxContract::AGGREGATE_TYPE)
             ->where(function (Builder $query) use ($terminalStates): void {
                 $query->whereIn('operation.state', $terminalStates)
                     ->orWhere('outbox.dispatch_state', 'review_required');
@@ -194,7 +189,6 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
             'operation.bot_id',
             'operation.recipient_chat_id',
             'operation.target_message_id',
-            'operation.presentation_text',
             'outbox.id as telegram_outbox_event_id',
             'outbox.event_key as telegram_outbox_event_key',
             'outbox.event_type as telegram_outbox_event_type',
@@ -342,21 +336,17 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         object $row,
         SupportTicketCustomerNotificationSnapshot $notification,
     ): bool {
-        if ((string) $row->telegram_outbox_event_type !== TelegramDeliveryQueueService::OUTBOX_EVENT_TYPE
+        if ((string) $row->telegram_outbox_event_type !== TelegramDeliveryOutboxContract::EVENT_TYPE
             || (int) $row->telegram_outbox_contract_version
-                !== TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_CONFIDENTIAL
+                !== TelegramDeliveryOutboxContract::CONTRACT_VERSION_CONFIDENTIAL
             || (string) $row->telegram_outbox_event_key
-                !== TelegramDeliveryQueueService::OUTBOX_EVENT_KEY_PREFIX.(string) $row->public_id
+                !== TelegramDeliveryOutboxContract::EVENT_KEY_PREFIX.(string) $row->public_id
             || (string) $row->telegram_outbox_aggregate_type
-                !== TelegramDeliveryQueueService::OUTBOX_AGGREGATE_TYPE
+                !== TelegramDeliveryOutboxContract::AGGREGATE_TYPE
             || ! hash_equals((string) $row->public_id, (string) $row->telegram_outbox_aggregate_id)
             || ! hash_equals((string) $row->correlation_id, (string) $row->telegram_outbox_correlation_id)
             || (string) $row->action !== TelegramDeliveryAction::Send->value
             || $row->target_message_id !== null
-            || ! hash_equals(
-                TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
-                (string) $row->presentation_text,
-            )
         ) {
             return false;
         }
