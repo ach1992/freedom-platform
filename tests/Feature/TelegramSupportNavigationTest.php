@@ -12,13 +12,18 @@ use App\Modules\Support\Application\SupportTicketSupportService;
 use App\Modules\Support\Domain\SupportTicketState;
 use App\Modules\Telegram\Application\ConfidentialTelegramPresentation;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
+use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
+use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionPayload;
 use App\Modules\Telegram\Application\TelegramInteractionRejected;
 use App\Modules\Telegram\Application\TelegramInteractionSessionService;
 use App\Modules\Telegram\Application\TelegramMembershipEvidence;
 use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
+use App\Modules\Telegram\Application\TelegramMutationOutcome;
+use App\Modules\Telegram\Application\TelegramMutationRequest;
+use App\Modules\Telegram\Application\TelegramMutationResult;
 use App\Modules\Telegram\Application\TelegramSupportCustomerReplyOutboxHandler;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Shared\Application\Clock;
@@ -31,6 +36,18 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
+
+final readonly class SupportAlertTelegramMutationTransport implements TelegramMutationTransport
+{
+    public function __construct(private TelegramMutationOutcome $outcome) {}
+
+    public function mutate(TelegramMutationRequest $request): TelegramMutationResult
+    {
+        unset($request);
+
+        return new TelegramMutationResult($this->outcome, 'support_alert_test_result');
+    }
+}
 
 final class TelegramSupportMembershipLookup implements TelegramMembershipLookup
 {
@@ -1004,6 +1021,118 @@ final class TelegramSupportNavigationTest extends TestCase
             '--limit' => 10,
             '--json' => true,
         ]));
+    }
+
+    public function test_material_support_delivery_failure_alerts_only_after_canonical_retry_boundary(): void
+    {
+        config([
+            'support.alerts.new_ticket.enabled' => false,
+            'support.alerts.sla_delay.enabled' => false,
+            'support.alerts.delivery_failure.enabled' => true,
+        ]);
+
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $customerTelegramId = 9848;
+        $staffTelegramId = 9849;
+        $this->accept($this->payload(8480, $customerTelegramId, 'support_delivery_customer', 'fa', '/start'));
+        $processor->process('123456789', 8480);
+        $customer = $this->account($customerTelegramId);
+        $this->accept($this->payload(8481, $staffTelegramId, 'support_delivery_staff', 'en', '/start'));
+        $processor->process('123456789', 8481);
+        $staff = $this->account($staffTelegramId);
+
+        $tickets = $this->app->make(SupportTicketService::class);
+        $ticket = $tickets->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Delivery alert',
+            'Customer ticket body',
+            'telegram-support-delivery:create',
+        ));
+        $reply = $tickets->addSupportMessage(
+            $ticket->id,
+            $staff['user_id'],
+            'CUSTOMER-DELIVERY-SECRET',
+            'telegram-support-delivery:reply',
+            false,
+        );
+
+        $supportEvent = DB::table('outbox_messages')
+            ->where('event_type', SupportCustomerReplyNotification::EVENT_TYPE)
+            ->where('aggregate_id', (string) $reply->messageId)
+            ->first();
+        self::assertNotNull($supportEvent);
+        $supportPayload = json_decode((string) $supportEvent->payload, true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($supportPayload);
+        $supportMessage = new OutboxMessage(
+            (string) $supportEvent->id,
+            (string) $supportEvent->event_key,
+            (string) $supportEvent->event_type,
+            (string) $supportEvent->aggregate_type,
+            (string) $supportEvent->aggregate_id,
+            $supportPayload,
+            (string) $supportEvent->correlation_id,
+            1,
+            (int) $supportEvent->contract_version,
+        );
+        self::assertSame(
+            OutboxDispatchOutcome::Success,
+            $this->app->make(TelegramSupportCustomerReplyOutboxHandler::class)->handle($supportMessage),
+        );
+
+        $operation = DB::table('telegram_delivery_operations')
+            ->where('correlation_id', SupportCustomerReplyNotification::correlationId($reply->messageId))
+            ->first(['public_id', 'outbox_event_id', 'state']);
+        self::assertNotNull($operation);
+        self::assertSame('prepared', (string) $operation->state);
+        $telegramEvent = DB::table('outbox_messages')->where('id', $operation->outbox_event_id)->first();
+        self::assertNotNull($telegramEvent);
+        $telegramPayload = json_decode((string) $telegramEvent->payload, true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($telegramPayload);
+        $telegramMessage = new OutboxMessage(
+            (string) $telegramEvent->id,
+            (string) $telegramEvent->event_key,
+            (string) $telegramEvent->event_type,
+            (string) $telegramEvent->aggregate_type,
+            (string) $telegramEvent->aggregate_id,
+            $telegramPayload,
+            (string) $telegramEvent->correlation_id,
+            1,
+            (int) $telegramEvent->contract_version,
+        );
+
+        $this->app->instance(
+            TelegramMutationTransport::class,
+            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::DefinitiveNoEffectRetryable),
+        );
+        $deliveryHandler = $this->app->make(TelegramConfidentialDeliveryOutboxHandler::class);
+        self::assertSame(OutboxDispatchOutcome::RetryableFailure, $deliveryHandler->handle($telegramMessage));
+        self::assertSame('retryable', DB::table('telegram_delivery_operations')
+            ->where('public_id', $operation->public_id)
+            ->value('state'));
+        self::assertSame(0, $this->app->make(SupportCustomerDeliveryAlertScanner::class)->scan(10));
+        self::assertSame(0, DB::table('alerts')
+            ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
+            ->count());
+
+        $this->app->instance(
+            TelegramMutationTransport::class,
+            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::DefinitiveFailure),
+        );
+        self::assertSame(OutboxDispatchOutcome::DefinitiveFailure, $deliveryHandler->handle($telegramMessage));
+        self::assertSame('failed_final', DB::table('telegram_delivery_operations')
+            ->where('public_id', $operation->public_id)
+            ->value('state'));
+
+        $scanner = $this->app->make(SupportCustomerDeliveryAlertScanner::class);
+        self::assertSame(1, $scanner->scan(10));
+        self::assertSame(1, $scanner->scan(10));
+        $alert = DB::table('alerts')
+            ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
+            ->first(['occurrence_count', 'safe_context']);
+        self::assertNotNull($alert);
+        self::assertSame(1, (int) $alert->occurrence_count);
+        self::assertStringNotContainsString('CUSTOMER-DELIVERY-SECRET', (string) $alert->safe_context);
     }
 
     public function test_support_session_timeout_uses_shared_expiry_authority_without_ticket_effect(): void
