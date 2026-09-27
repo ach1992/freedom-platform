@@ -1105,6 +1105,75 @@ final class TelegramSupportNavigationTest extends TestCase
             ->count());
     }
 
+    public function test_delivery_alert_scan_rotates_handoff_failures_beyond_batch(): void
+    {
+        $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 21:00:00', new \DateTimeZone('UTC')));
+        $this->app->instance(Clock::class, $clock);
+        config([
+            'support.alerts.new_ticket.enabled' => false,
+            'support.alerts.sla_delay.enabled' => false,
+            'support.alerts.delivery_failure.enabled' => true,
+        ]);
+
+        $processor = $this->app->make(TelegramUpdateProcessor::class);
+        $customerTelegramId = 9843;
+        $staffTelegramId = 9844;
+        $this->accept($this->payload(8430, $customerTelegramId, 'support_delivery_rotation_customer', 'fa', '/start'));
+        $processor->process('123456789', 8430);
+        $customer = $this->account($customerTelegramId);
+        $this->accept($this->payload(8431, $staffTelegramId, 'support_delivery_rotation_staff', 'en', '/start'));
+        $processor->process('123456789', 8431);
+        $staff = $this->account($staffTelegramId);
+
+        $tickets = $this->app->make(SupportTicketService::class);
+        $ticket = $tickets->create(new SupportTicketCreateRequest(
+            $customer['user_id'],
+            'other',
+            'Delivery scan fairness',
+            'Every terminal handoff must eventually enter the bounded scan window.',
+            'telegram-support-delivery-rotation:create',
+        ));
+
+        for ($index = 1; $index <= 3; $index++) {
+            $reply = $tickets->addSupportMessage(
+                $ticket->id,
+                $staff['user_id'],
+                'Delivery handoff '.$index,
+                'telegram-support-delivery-rotation:reply-'.$index,
+                false,
+            );
+            $updated = DB::table('outbox_messages')
+                ->where('event_type', SupportCustomerReplyNotification::EVENT_TYPE)
+                ->where('aggregate_id', (string) $reply->messageId)
+                ->update([
+                    'dispatch_state' => 'review_required',
+                    'review_reason' => 'definitive_failure',
+                    'attempts' => 1,
+                ]);
+            self::assertSame(1, $updated);
+        }
+
+        $scanner = $this->app->make(SupportCustomerDeliveryAlertScanner::class);
+        self::assertSame(1, $scanner->scan(1));
+        self::assertSame(1, $scanner->scan(1));
+        self::assertSame(1, DB::table('alerts')
+            ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
+            ->count());
+
+        $clock->advance('+60 seconds');
+        self::assertSame(1, $scanner->scan(1));
+        $clock->advance('+60 seconds');
+        self::assertSame(1, $scanner->scan(1));
+
+        self::assertSame(3, DB::table('alerts')
+            ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
+            ->count());
+        self::assertSame(3, DB::table('alerts')
+            ->where('event_name', SupportAlertService::DELIVERY_FAILURE_EVENT)
+            ->where('occurrence_count', 1)
+            ->count());
+    }
+
     public function test_material_support_delivery_failure_alerts_only_after_canonical_retry_boundary(): void
     {
         $clock = new TelegramSupportTestClock(new DateTimeImmutable('2026-09-27 19:00:00', new \DateTimeZone('UTC')));
