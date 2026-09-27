@@ -17,6 +17,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
 use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationDatabaseSurfaceV1;
+use App\Modules\Telegram\Application\TelegramDeliveryConfidentialPresentationService;
 use App\Modules\Telegram\Application\TelegramDeliveryQueueService;
 use App\Modules\Telegram\Application\TelegramInteractionCallbackService;
 use App\Modules\Telegram\Application\TelegramInteractionPayload;
@@ -27,6 +28,7 @@ use App\Modules\Telegram\Application\TelegramMembershipLookupResult;
 use App\Modules\Telegram\Application\TelegramMutationOutcome;
 use App\Modules\Telegram\Application\TelegramMutationRequest;
 use App\Modules\Telegram\Application\TelegramMutationResult;
+use App\Modules\Telegram\Application\TelegramSupportCustomerReplyDeliveryIdentity;
 use App\Modules\Telegram\Application\TelegramSupportCustomerReplyOutboxHandler;
 use App\Modules\Telegram\Application\TelegramUpdateProcessor;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
@@ -40,6 +42,7 @@ use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Tests\Support\ConfidentialTelegramPresentationTestFactory;
 use Tests\TestCase;
 
 final readonly class SupportAlertTelegramMutationTransport implements TelegramMutationTransport
@@ -1285,7 +1288,7 @@ final class TelegramSupportNavigationTest extends TestCase
         );
         self::assertSame($customerTelegramId, (int) $operation->recipient_chat_id);
         self::assertSame(
-            '[confidential-telegram-presentation:v1]',
+            TelegramDeliveryConfidentialPresentationService::DURABLE_MARKER,
             (string) $operation->presentation_text,
         );
         $telegramEvent = DB::table('outbox_messages')->where('id', $operation->outbox_event_id)->first();
