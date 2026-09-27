@@ -47,6 +47,22 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         }
     }
 
+    public function test_runtime_fence_survives_data_truncation_without_reseeding_state(): void
+    {
+        DB::table(TelegramRateRetryRetentionLifecycleFence::TABLE)->truncate();
+        self::assertSame(0, DB::table(TelegramRateRetryRetentionLifecycleFence::TABLE)->count());
+        self::assertSame(
+            TelegramRateRetryRetentionLifecycleFence::ACTIVE_COMMENT,
+            $this->lifecycleComment(),
+        );
+
+        DB::connection()->transaction(function ($connection): void {
+            app(TelegramRateRetryRetentionLifecycleFence::class)
+                ->acquireRuntimeWriteFence($connection);
+            self::assertTrue(true);
+        });
+    }
+
     public function test_rollback_cut_waits_for_entered_runtime_writer_and_blocks_later_writers(): void
     {
         $database = app(DatabaseManager::class);
@@ -57,7 +73,6 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         config(['database.connections.'.$contenderName => $connectionConfig]);
         $primary = $database->connection($default);
         $contender = $database->connection($contenderName);
-        $contender->statement('SET SESSION innodb_lock_wait_timeout = 1');
         $contender->statement('SET SESSION lock_wait_timeout = 1');
 
         $primary->beginTransaction();
@@ -86,6 +101,11 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         } finally {
             config(['database.default' => $default]);
         }
+
+        self::assertSame(
+            TelegramRateRetryRetentionLifecycleFence::ROLLBACK_COMMENT,
+            $this->lifecycleComment(),
+        );
 
         $primary->beginTransaction();
         try {
@@ -128,14 +148,10 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
             'processed_telegram_updates',
             'interaction_rate_authorized_at',
         ));
-        self::assertTrue(Schema::hasColumn(
-            'telegram_rate_retry_retention_lifecycle',
-            'runtime_write_gate',
-        ));
-        self::assertFalse(Schema::hasColumn(
-            'telegram_rate_retry_retention_lifecycle',
-            'rollback_fence',
-        ));
+        self::assertSame(
+            TelegramRateRetryRetentionLifecycleFence::ACTIVE_COMMENT,
+            $this->lifecycleComment(),
+        );
 
         DB::connection()->transaction(function ($connection): void {
             app(TelegramRateRetryRetentionLifecycleFence::class)
@@ -177,14 +193,10 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         self::assertNotNull(DB::table('processed_telegram_updates')
             ->where('update_id', 998001)
             ->value('interaction_rate_authorized_at'));
-        self::assertTrue(Schema::hasColumn(
-            'telegram_rate_retry_retention_lifecycle',
-            'runtime_write_gate',
-        ));
-        self::assertFalse(Schema::hasColumn(
-            'telegram_rate_retry_retention_lifecycle',
-            'rollback_fence',
-        ));
+        self::assertSame(
+            TelegramRateRetryRetentionLifecycleFence::ACTIVE_COMMENT,
+            $this->lifecycleComment(),
+        );
     }
 
     private function establishRollbackCut(): void
@@ -192,5 +204,17 @@ final class TelegramRateRetryRetentionMigrationSafetyTest extends TestCase
         (new ReflectionClass($this->migration))
             ->getMethod('establishLifecycleFence')
             ->invoke($this->migration);
+    }
+
+    private function lifecycleComment(): string
+    {
+        $row = DB::connection()->table('information_schema.TABLES')
+            ->where('TABLE_SCHEMA', DB::connection()->getDatabaseName())
+            ->where('TABLE_NAME', TelegramRateRetryRetentionLifecycleFence::TABLE)
+            ->first(['TABLE_COMMENT']);
+        self::assertNotNull($row);
+        self::assertIsString($row->TABLE_COMMENT);
+
+        return (string) $row->TABLE_COMMENT;
     }
 }
