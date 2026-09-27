@@ -47,6 +47,7 @@ final readonly class TelegramDeliveryOperationExecutor
         private ?TelegramSourceMessageSender $sourceMessageSender = null,
         private ?TelegramDeliveryEffectGuard $effectGuard = null,
         private ?TelegramSharedRateLimiter $rateLimiter = null,
+        private ?TelegramRateRetryRetentionLifecycleFence $rateRetryRetentionFence = null,
     ) {}
 
     /** @requirement ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
@@ -687,6 +688,9 @@ final readonly class TelegramDeliveryOperationExecutor
      */
     private function recordRetryDirective(Connection $connection, object $row, int $retryAfterSeconds): DateTimeImmutable
     {
+        ($this->rateRetryRetentionFence ?? new TelegramRateRetryRetentionLifecycleFence)
+            ->acquireRuntimeWriteFence($connection);
+
         if ($retryAfterSeconds < 1 || $retryAfterSeconds > 86_400) {
             throw new RuntimeException('Telegram provider retry directive delay is invalid.');
         }
