@@ -20,9 +20,11 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use DateTimeImmutable;
 use DomainException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Tests\TestCase;
 
 final class FixedCardToCardAdjustmentGenerator implements CardToCardAdjustmentGenerator
@@ -274,17 +276,24 @@ final class CardToCardAmountReservationTest extends TestCase
 
         $this->clock->value = $this->clock->value->modify('+6 minutes');
 
-        DB::statement('SET FOREIGN_KEY_CHECKS=0');
-        try {
-            self::assertSame(
-                1,
-                DB::table('c2c_destination_accounts')
-                    ->where('public_id', $first->destinationPublicId)
-                    ->delete(),
-            );
-        } finally {
-            DB::statement('SET FOREIGN_KEY_CHECKS=1');
-        }
+        $firstDestinationId = DB::table('c2c_destination_accounts')
+            ->where('public_id', $first->destinationPublicId)
+            ->value('id');
+        self::assertNotNull($firstDestinationId);
+        DB::connection()->beforeExecuting(
+            static function (string $query, array $bindings, Connection $connection) use ($firstDestinationId): void {
+                unset($connection);
+                if (! str_contains(strtolower($query), 'c2c_destination_accounts')) {
+                    return;
+                }
+
+                foreach ($bindings as $binding) {
+                    if ((int) $binding === (int) $firstDestinationId) {
+                        throw new RuntimeException('Injected persistent front C2C expiry failure.');
+                    }
+                }
+            },
+        );
 
         $firstRun = $service->expireAbandonedIntentsDue(1);
         self::assertSame(0, $firstRun->intentsExamined);
