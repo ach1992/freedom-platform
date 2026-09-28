@@ -17,6 +17,7 @@ final class InstallerEnvironmentWriter
      * @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011
      */
     public function __construct(
+        private readonly InstallerProductionEnvironmentPolicy $productionEnvironmentPolicy,
         private readonly RandomGenerator $random,
         private readonly string $environmentPath,
         private readonly string $snapshotPath,
@@ -46,8 +47,9 @@ final class InstallerEnvironmentWriter
                 $generatedAppKey = true;
             }
 
-            $snapshotChecksum = $this->ensureSnapshot($original);
             $contents = $this->merge($original ?? '', $validated);
+            $this->productionEnvironmentPolicy->assertSafe($contents);
+            $snapshotChecksum = $this->ensureSnapshot($original);
             $this->atomicWrite($this->environmentPath, $contents);
 
             $changedKeys = array_keys($validated);

@@ -18,7 +18,7 @@ concurrency:
 jobs:
   readiness:
     name: Read-only staging readiness
-    if: ${{ inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}
+    if: ${{ github.ref == 'refs/heads/main' && inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging-runtime]
     timeout-minutes: 10
     steps:

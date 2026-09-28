@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Modules\Installer;
 
 use App\Modules\Installer\Application\InstallerEnvironmentWriter;
+use App\Modules\Installer\Application\InstallerProductionEnvironmentPolicy;
 use App\Shared\Application\RandomGenerator;
 use RuntimeException;
 use Tests\TestCase;
@@ -64,6 +65,7 @@ final class InstallerEnvironmentWriterTest extends TestCase
         $this->assertContains('TELEGRAM_LIFECYCLE_DB_PASSWORD', $nonPersistableKeys);
 
         $writer = new InstallerEnvironmentWriter(
+            new InstallerProductionEnvironmentPolicy('testing'),
             new class implements RandomGenerator
             {
                 public function bytes(int $length): string
@@ -234,6 +236,7 @@ ENV;
     private function writer(string $environmentPath, string $snapshotPath): InstallerEnvironmentWriter
     {
         return new InstallerEnvironmentWriter(
+            new InstallerProductionEnvironmentPolicy('testing'),
             new class implements RandomGenerator
             {
                 public function bytes(int $length): string

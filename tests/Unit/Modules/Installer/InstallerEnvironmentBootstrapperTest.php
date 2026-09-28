@@ -9,6 +9,7 @@ use App\Modules\Installer\Application\InstallerBootstrapOrchestrator;
 use App\Modules\Installer\Application\InstallerEnvironmentBootstrapper;
 use App\Modules\Installer\Application\InstallerEnvironmentWriter;
 use App\Modules\Installer\Application\InstallerLock;
+use App\Modules\Installer\Application\InstallerProductionEnvironmentPolicy;
 use App\Shared\Application\RandomGenerator;
 use RuntimeException;
 use Tests\TestCase;
@@ -177,6 +178,7 @@ final class InstallerEnvironmentBootstrapperTest extends TestCase
     private function writer(array $paths): InstallerEnvironmentWriter
     {
         return new InstallerEnvironmentWriter(
+            new InstallerProductionEnvironmentPolicy('testing'),
             new class implements RandomGenerator
             {
                 public function bytes(int $length): string

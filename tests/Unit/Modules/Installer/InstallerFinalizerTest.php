@@ -11,6 +11,7 @@ use App\Modules\Installer\Application\InstallerEnvironmentBootstrapper;
 use App\Modules\Installer\Application\InstallerEnvironmentWriter;
 use App\Modules\Installer\Application\InstallerFinalizer;
 use App\Modules\Installer\Application\InstallerLock;
+use App\Modules\Installer\Application\InstallerProductionEnvironmentPolicy;
 use App\Shared\Application\RandomGenerator;
 use RuntimeException;
 use Tests\TestCase;
@@ -37,6 +38,45 @@ final class InstallerFinalizerTest extends TestCase
             $this->assertTrue($lock->exists());
             $this->assertFileExists($paths['environment']);
             $this->assertFileDoesNotExist($paths['snapshot']);
+        } finally {
+            $this->cleanup($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_unsafe_production_environment_is_rejected_before_environment_or_finalization_side_effects(): void
+    {
+        $paths = $this->paths('unsafe-production');
+        $runner = new RecordingFinalizationRunner;
+        [$finalizer, $lock] = $this->finalizer(
+            $paths,
+            $runner,
+            'production',
+            ['APP_KEY', 'APP_ENV', 'APP_DEBUG', 'APP_URL', 'SESSION_ENCRYPT', 'SESSION_SECURE_COOKIE'],
+        );
+
+        try {
+            try {
+                $finalizer->finalize([
+                    'APP_ENV' => 'production',
+                    'APP_DEBUG' => 'true',
+                    'APP_URL' => 'https://example.test',
+                    'SESSION_ENCRYPT' => 'true',
+                    'SESSION_SECURE_COOKIE' => 'true',
+                ]);
+                $this->fail('Unsafe production environment semantics must abort finalization.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame(
+                    'The installer production environment is not safe to finalize.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $this->assertSame([], $runner->actions);
+            $this->assertFalse($lock->exists());
+            $this->assertFileDoesNotExist($paths['environment']);
+            $this->assertFileDoesNotExist($paths['snapshot']);
+            $this->assertFileDoesNotExist($paths['snapshot'].'.json');
         } finally {
             $this->cleanup($paths);
         }
@@ -72,11 +112,16 @@ final class InstallerFinalizerTest extends TestCase
      * @param  array{environment: string, snapshot: string, journal: string, lock: string}  $paths
      * @return array{InstallerFinalizer, InstallerLock}
      */
-    private function finalizer(array $paths, InstallerFinalizationRunner $runner): array
-    {
+    private function finalizer(
+        array $paths,
+        InstallerFinalizationRunner $runner,
+        string $runtimeEnvironment = 'testing',
+        array $allowedKeys = ['APP_KEY', 'DB_HOST'],
+    ): array {
         $journal = new InstallerBootstrapJournal($paths['journal']);
         $lock = new InstallerLock($paths['lock']);
         $writer = new InstallerEnvironmentWriter(
+            new InstallerProductionEnvironmentPolicy($runtimeEnvironment),
             new class implements RandomGenerator
             {
                 public function bytes(int $length): string
@@ -91,7 +136,7 @@ final class InstallerFinalizerTest extends TestCase
             },
             $paths['environment'],
             $paths['snapshot'],
-            ['APP_KEY', 'DB_HOST'],
+            $allowedKeys,
             ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
         );
         $bootstrapper = new InstallerEnvironmentBootstrapper(

@@ -11,6 +11,7 @@ use App\Modules\Installer\Application\InstallerBootstrapOrchestrator;
 use App\Modules\Installer\Application\InstallerEnvironmentBootstrapper;
 use App\Modules\Installer\Application\InstallerEnvironmentWriter;
 use App\Modules\Installer\Application\InstallerLock;
+use App\Modules\Installer\Application\InstallerProductionEnvironmentPolicy;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -47,6 +48,7 @@ final class InstallerServiceProvider extends ServiceProvider
         $this->app->singleton(
             InstallerEnvironmentWriter::class,
             fn (Application $application): InstallerEnvironmentWriter => new InstallerEnvironmentWriter(
+                new InstallerProductionEnvironmentPolicy($application->environment()),
                 $application->make(RandomGenerator::class),
                 (string) config('installer.environment.file_path'),
                 (string) config('installer.environment.snapshot_path'),

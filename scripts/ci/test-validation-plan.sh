@@ -235,6 +235,11 @@ text = path.read_text()
 
 mutations = {
     'automatic_trigger': lambda s: s.replace('on:\n  workflow_dispatch:', 'on:\n  push:\n  workflow_dispatch:', 1),
+    'trusted_ref_guard': lambda s: s.replace(
+        "    if: ${{ github.ref == 'refs/heads/main' && inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}",
+        "    if: ${{ inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}",
+        1,
+    ),
     'write_permission': lambda s: s.replace('contents: read', 'contents: write', 1),
     'secret': lambda s: s.replace('set -euo pipefail', "set -euo pipefail\n          echo '${{ secrets.RUNTIME_ROOT }}'", 1),
     'environment': lambda s: s.replace('    runs-on:', '    environment: production\n    runs-on:', 1),
@@ -260,6 +265,7 @@ PY_MUTATION
 
 bash "$readonly_verifier" "$readonly_source" >/dev/null
 expect_readonly_reject automatic_trigger automatic_trigger
+expect_readonly_reject trusted_ref_guard trusted_ref_guard
 expect_readonly_reject write_permission write_permission
 expect_readonly_reject secret secret
 expect_readonly_reject environment environment

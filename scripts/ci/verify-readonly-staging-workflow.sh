@@ -38,6 +38,15 @@ grep -F 'READ_ONLY_STAGING_CHECK' "$workflow" >/dev/null \
 grep -A4 -F 'permissions:' "$workflow" | grep -F 'contents: read' >/dev/null \
     || fail 'workflow must retain explicit read-only repository permissions'
 
+trusted_ref_guard="    if: \${{ github.ref == 'refs/heads/main' && inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}"
+grep -Fx "$trusted_ref_guard" "$workflow" >/dev/null \
+    || fail 'self-hosted staging job must require the exact trusted main ref before scheduling'
+
+guard_line=$(grep -nFx "$trusted_ref_guard" "$workflow" | cut -d: -f1)
+first_runner_line=$(grep -nE '^[[:space:]]*runs-on:' "$workflow" | head -n1 | cut -d: -f1)
+[[ -n "$guard_line" && -n "$first_runner_line" && "$guard_line" -lt "$first_runner_line" ]] \
+    || fail 'trusted main-ref guard must be evaluated before the self-hosted runner selector'
+
 runner_lines=$(grep -E '^[[:space:]]*runs-on:' "$workflow" || true)
 [[ -n "$runner_lines" ]] || fail 'workflow must retain an explicit runner selector'
 while IFS= read -r runner_line; do
