@@ -8,6 +8,7 @@ use App\Modules\Payments\Application\Contracts\PurchasePromotionUsageAuthority;
 use App\Modules\Payments\Application\PurchasePromotionUsageMaintenanceResult;
 use App\Modules\Promotions\Domain\PromotionUsageReservationState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\MaintenanceScanCursor;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
@@ -22,6 +23,7 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
         private Clock $clock,
         private PromotionUsageReservationService $reservations,
         private PromotionUsageFinalizationService $finalizations,
+        private MaintenanceScanCursor $scanCursor,
     ) {}
 
     /** @requirement PRO-001 BUY-002 PAY-002 DAT-002 DAT-003 SEC-002 */
@@ -152,36 +154,38 @@ final readonly class PurchasePromotionUsageAuthorityService implements PurchaseP
         }
         $now = $this->clock->now()->format('Y-m-d H:i:s.u');
         /** @var list<object{reservation_public_id:string,user_id:int|string,quote_id:int|string}> $rows */
-        $rows = $this->database->connection()->table('promotion_usage_reservations as reservation')
-            ->join('quotes as quote', 'quote.id', '=', 'reservation.quote_id')
-            ->join('benefit_code_discount_quote_consumptions as benefit_consumption', 'benefit_consumption.discounted_quote_id', '=', 'reservation.quote_id')
-            ->leftJoin('promotion_usage_releases as release', 'release.promotion_usage_reservation_id', '=', 'reservation.id')
-            ->leftJoin('promotion_usage_redemptions as redemption', 'redemption.promotion_usage_reservation_id', '=', 'reservation.id')
-            ->where('quote.expires_at', '<=', $now)
-            ->whereNull('release.id')
-            ->whereNull('redemption.id')
-            ->whereNotExists(function ($activeIntent): void {
-                $activeIntent->selectRaw('1')
-                    ->from('payment_intents as active_intent')
-                    ->whereColumn('active_intent.source_quote_id', 'reservation.quote_id')
-                    ->where('active_intent.purpose', 'purchase')
-                    ->whereNotIn('active_intent.state', ['failed', 'expired', 'canceled']);
-            })
-            ->whereExists(function ($terminalIntent): void {
-                $terminalIntent->selectRaw('1')
-                    ->from('payment_intents as terminal_intent')
-                    ->whereColumn('terminal_intent.source_quote_id', 'reservation.quote_id')
-                    ->where('terminal_intent.purpose', 'purchase')
-                    ->whereIn('terminal_intent.state', ['failed', 'expired', 'canceled']);
-            })
-            ->orderBy('reservation.id')
-            ->limit($limit)
-            ->get([
+        $rows = $this->scanCursor->claim(
+            'payments.purchase.promotion',
+            $limit,
+            static fn (Connection $connection) => $connection->table('promotion_usage_reservations as reservation')
+                ->join('quotes as quote', 'quote.id', '=', 'reservation.quote_id')
+                ->join('benefit_code_discount_quote_consumptions as benefit_consumption', 'benefit_consumption.discounted_quote_id', '=', 'reservation.quote_id')
+                ->leftJoin('promotion_usage_releases as release', 'release.promotion_usage_reservation_id', '=', 'reservation.id')
+                ->leftJoin('promotion_usage_redemptions as redemption', 'redemption.promotion_usage_reservation_id', '=', 'reservation.id')
+                ->where('quote.expires_at', '<=', $now)
+                ->whereNull('release.id')
+                ->whereNull('redemption.id')
+                ->whereNotExists(function ($activeIntent): void {
+                    $activeIntent->selectRaw('1')
+                        ->from('payment_intents as active_intent')
+                        ->whereColumn('active_intent.source_quote_id', 'reservation.quote_id')
+                        ->where('active_intent.purpose', 'purchase')
+                        ->whereNotIn('active_intent.state', ['failed', 'expired', 'canceled']);
+                })
+                ->whereExists(function ($terminalIntent): void {
+                    $terminalIntent->selectRaw('1')
+                        ->from('payment_intents as terminal_intent')
+                        ->whereColumn('terminal_intent.source_quote_id', 'reservation.quote_id')
+                        ->where('terminal_intent.purpose', 'purchase')
+                        ->whereIn('terminal_intent.state', ['failed', 'expired', 'canceled']);
+                }),
+            'reservation.id',
+            [
                 'reservation.public_id as reservation_public_id',
                 'reservation.user_id',
                 'reservation.quote_id',
-            ])
-            ->all();
+            ],
+        );
 
         $released = 0;
         $failures = 0;

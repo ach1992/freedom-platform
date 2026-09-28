@@ -10,6 +10,7 @@ use App\Modules\Payments\Application\PurchasePaymentIntentService;
 use App\Modules\Payments\CardToCard\Application\Contracts\CardToCardAdjustmentGenerator;
 use App\Modules\Payments\Domain\PaymentIntentState;
 use App\Shared\Application\Clock;
+use App\Shared\Application\MaintenanceScanCursor;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -32,6 +33,7 @@ final readonly class CardToCardPaymentService
         private CardToCardEvidenceAssociationAuthority $evidenceAssociation,
         private CardToCardAdjustmentGenerator $adjustments,
         private Clock $clock,
+        private MaintenanceScanCursor $scanCursor,
     ) {}
 
     /** @requirement C2C-001 C2C-002 C2C-004 PAY-002 DAT-002 DAT-003 DAT-004 SEC-002 QUA-001 QUA-004 */
@@ -139,18 +141,20 @@ final readonly class CardToCardPaymentService
         $this->expireDue();
         $now = $this->databaseDateTime($this->clock->now());
         /** @var list<object{intent_public_id:string}> $rows */
-        $rows = $this->database->connection()->table('c2c_amount_reservations as reservation')
-            ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
-            ->where('reservation.late_review_until', '<=', $now)
-            ->where('intent.purpose', 'purchase')
-            ->where('intent.payment_method_code', self::PAYMENT_METHOD_CODE)
-            ->where('intent.provider_code', self::PAYMENT_METHOD_CODE)
-            ->where('intent.state', PaymentIntentState::AwaitingUserAction->value)
-            ->whereNull('intent.captured_at')
-            ->orderBy('intent.id')
-            ->limit($limit)
-            ->get(['intent.public_id as intent_public_id'])
-            ->all();
+        $rows = $this->scanCursor->claim(
+            'payments.purchase.c2c',
+            $limit,
+            static fn (Connection $connection) => $connection->table('c2c_amount_reservations as reservation')
+                ->join('payment_intents as intent', 'intent.id', '=', 'reservation.payment_intent_id')
+                ->where('reservation.late_review_until', '<=', $now)
+                ->where('intent.purpose', 'purchase')
+                ->where('intent.payment_method_code', self::PAYMENT_METHOD_CODE)
+                ->where('intent.provider_code', self::PAYMENT_METHOD_CODE)
+                ->where('intent.state', PaymentIntentState::AwaitingUserAction->value)
+                ->whereNull('intent.captured_at'),
+            'intent.id',
+            ['intent.public_id as intent_public_id'],
+        );
 
         $expired = 0;
         $failures = 0;

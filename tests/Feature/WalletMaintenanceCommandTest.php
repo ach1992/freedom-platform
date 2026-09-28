@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Application\WalletMaintenanceService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
 use App\Modules\Wallet\Domain\WalletHoldStatus;
@@ -143,6 +144,55 @@ final class WalletMaintenanceCommandTest extends TestCase
             '--json' => true,
         ])->expectsOutput('{"status":"invalid","code":"wallet_maintenance_invalid_input"}')
             ->assertExitCode(2);
+    }
+
+    public function test_bounded_wallet_batches_reconcile_every_eligible_account_before_wrapping(): void
+    {
+        $assetId = $this->account('system.wallet.maintenance.fairness.asset', 'asset');
+        $walletIds = [];
+
+        for ($index = 1; $index <= 3; $index++) {
+            $userId = $this->user();
+            $walletId = $this->account(
+                'wallet.cash.maintenance.fairness.'.$index,
+                'liability',
+                $userId,
+                'cash',
+            );
+            $this->fundWallet($assetId, $walletId, 100_000 * $index, 'fairness-'.$index);
+            $walletIds[] = $walletId;
+        }
+
+        $maintenance = $this->app->make(WalletMaintenanceService::class);
+        for ($iteration = 0; $iteration < count($walletIds); $iteration++) {
+            $result = $maintenance->run(1, 1);
+            self::assertSame(1, $result->walletsExamined);
+            self::assertSame(1, $result->walletsReconciled);
+            self::assertSame(0, $result->walletReviewCount);
+        }
+
+        self::assertSame(
+            $walletIds,
+            DB::table('wallet_balance_snapshots')
+                ->orderBy('id')
+                ->pluck('ledger_account_id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->all(),
+        );
+        self::assertSame(
+            $walletIds[2],
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'wallet.reconciliation')
+                ->value('last_scanned_id'),
+        );
+
+        $wrapped = $maintenance->run(1, 1);
+        self::assertSame(1, $wrapped->walletsExamined);
+        self::assertSame(1, $wrapped->walletsReconciled);
+        self::assertSame(
+            $walletIds[0],
+            (int) DB::table('wallet_balance_snapshots')->orderByDesc('id')->value('ledger_account_id'),
+        );
     }
 
     public function test_wallet_maintenance_is_registered_in_the_single_scheduler(): void

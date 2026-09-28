@@ -6,8 +6,9 @@ namespace App\Modules\Wallet\Application;
 
 use App\Modules\Wallet\Domain\WalletHoldStatus;
 use App\Shared\Application\Clock;
+use App\Shared\Application\MaintenanceScanCursor;
 use DomainException;
-use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Connection;
 use RuntimeException;
 use Throwable;
 
@@ -16,9 +17,9 @@ final readonly class ExpiredWalletHoldCleanupService
     private const RELEASE_REASON = 'system expired hold cleanup';
 
     public function __construct(
-        private DatabaseManager $database,
         private Clock $clock,
         private WalletHoldService $holds,
+        private MaintenanceScanCursor $scanCursor,
     ) {}
 
     /** @requirement WAL-002 DAT-003 DAT-004 QUA-001 */
@@ -28,15 +29,18 @@ final readonly class ExpiredWalletHoldCleanupService
             throw new DomainException('Expired wallet hold cleanup limit must be between 1 and 500.');
         }
 
+        $expiresAt = $this->clock->now()->format('Y-m-d H:i:s.u');
         /** @var list<object{id: int|string, hold_key: string}> $rows */
-        $rows = $this->database->connection()->table('wallet_holds')
-            ->where('status', WalletHoldStatus::Active->value)
-            ->where('source_type', '<>', 'wallet_transfer')
-            ->where('expires_at', '<=', $this->clock->now()->format('Y-m-d H:i:s.u'))
-            ->orderBy('id')
-            ->limit($limit)
-            ->get(['id', 'hold_key'])
-            ->all();
+        $rows = $this->scanCursor->claim(
+            'wallet.expired-holds',
+            $limit,
+            static fn (Connection $connection) => $connection->table('wallet_holds')
+                ->where('status', WalletHoldStatus::Active->value)
+                ->where('source_type', '<>', 'wallet_transfer')
+                ->where('expires_at', '<=', $expiresAt),
+            'wallet_holds.id',
+            ['wallet_holds.id', 'wallet_holds.hold_key'],
+        );
 
         $released = 0;
         $replayed = 0;

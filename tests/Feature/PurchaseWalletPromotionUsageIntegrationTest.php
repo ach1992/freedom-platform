@@ -145,6 +145,69 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
             ->assertExitCode(0);
     }
 
+    public function test_bounded_purchase_maintenance_advances_across_wallet_and_promotion_batches(): void
+    {
+        $source = $this->promotionSource('maintenance-fairness', 2, 2);
+        $walletPayments = $this->app->make(PurchaseWalletPaymentService::class);
+        $intentPublicIds = [];
+
+        for ($index = 0; $index < 2; $index++) {
+            $suffix = 'maintenance-fairness-'.($index + 1);
+            $checkout = $this->discountedCheckout($source, $source['codes'][$index], $suffix);
+            $walletId = $this->fundedCashWallet($checkout['user_id'], 2_000_000, $suffix);
+            $intent = $walletPayments->reserve(
+                'wallet-promo-'.$suffix.'-reserve',
+                $checkout['user_id'],
+                $walletId,
+                $checkout['quote']->quotePublicId,
+                $checkout['decision']->publicId,
+                $this->correlation($suffix),
+            );
+            $intentPublicIds[] = $intent->intentPublicId;
+        }
+
+        $intentIds = DB::table('payment_intents')
+            ->whereIn('public_id', $intentPublicIds)
+            ->orderBy('id')
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+        self::assertCount(2, $intentIds);
+
+        $this->clock->value = $this->clock->value->modify('+31 minutes');
+        $maintenance = $this->app->make(PurchasePaymentMaintenanceService::class);
+
+        $first = $maintenance->run(1);
+        self::assertSame(1, $first->walletIntentsExamined);
+        self::assertSame(1, $first->expiredWalletIntents);
+        self::assertSame(1, $first->promotionReservationsExamined);
+        self::assertSame(1, $first->releasedPromotionReservations);
+        self::assertSame(0, $first->failures);
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $intentPublicIds[0])->value('state'));
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intentPublicIds[1])->value('state'));
+        self::assertSame(
+            $intentIds[0],
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'payments.purchase.wallet')
+                ->value('last_scanned_id'),
+        );
+
+        $second = $maintenance->run(1);
+        self::assertSame(1, $second->walletIntentsExamined);
+        self::assertSame(1, $second->expiredWalletIntents);
+        self::assertSame(1, $second->promotionReservationsExamined);
+        self::assertSame(1, $second->releasedPromotionReservations);
+        self::assertSame(0, $second->failures);
+        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $intentPublicIds[1])->value('state'));
+        self::assertSame(2, DB::table('promotion_usage_releases')->count());
+        self::assertSame(
+            $intentIds[1],
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'payments.purchase.wallet')
+                ->value('last_scanned_id'),
+        );
+    }
+
     public function test_real_telegram_wallet_adapter_reauthorizes_discounted_checkout_and_exposes_only_public_identity(): void
     {
         $source = $this->promotionSource('telegram-adapter', 1);

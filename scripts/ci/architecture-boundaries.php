@@ -561,6 +561,7 @@ return [
         'ledger_transactions' => 'Wallet',
         'localization_override_versions' => 'Localization',
         'localization_overrides' => 'Localization',
+        'maintenance_scan_cursors' => 'Shared',
         'nowpayments_payment_authorities' => 'Payments',
         'nowpayments_payment_observations' => 'Payments',
         'nowpayments_reconciliation_findings' => 'Payments',

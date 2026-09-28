@@ -5,17 +5,18 @@ declare(strict_types=1);
 namespace App\Modules\Wallet\Application;
 
 use App\Modules\Wallet\Domain\WalletReconciliationStatus;
+use App\Shared\Application\MaintenanceScanCursor;
 use DomainException;
-use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Connection;
 use RuntimeException;
 use Throwable;
 
 final readonly class WalletMaintenanceService
 {
     public function __construct(
-        private DatabaseManager $database,
         private ExpiredWalletHoldCleanupService $cleanup,
         private WalletReconciliationService $reconciliation,
+        private MaintenanceScanCursor $scanCursor,
     ) {}
 
     /** @requirement WAL-002 DAT-003 DAT-004 QUA-001 */
@@ -27,15 +28,17 @@ final readonly class WalletMaintenanceService
         $cleanup = $this->cleanup->cleanup($holdLimit);
 
         /** @var list<object{id: int|string, owner_user_id: int|string}> $accounts */
-        $accounts = $this->database->connection()->table('ledger_accounts')
-            ->whereNotNull('owner_user_id')
-            ->whereIn('wallet_bucket', ['cash', 'promotional'])
-            ->where('currency', 'IRR')
-            ->where('is_active', true)
-            ->orderBy('id')
-            ->limit($walletLimit)
-            ->get(['id', 'owner_user_id'])
-            ->all();
+        $accounts = $this->scanCursor->claim(
+            'wallet.reconciliation',
+            $walletLimit,
+            static fn (Connection $connection) => $connection->table('ledger_accounts')
+                ->whereNotNull('owner_user_id')
+                ->whereIn('wallet_bucket', ['cash', 'promotional'])
+                ->where('currency', 'IRR')
+                ->where('is_active', true),
+            'ledger_accounts.id',
+            ['ledger_accounts.id', 'ledger_accounts.owner_user_id'],
+        );
 
         $reconciled = 0;
         $initial = 0;
