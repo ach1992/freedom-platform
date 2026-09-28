@@ -43,8 +43,10 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseWalletPay
 use App\Modules\Telegram\Application\TelegramCustomerPurchaseWalletUnavailable;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
+use App\Modules\Wallet\Application\WalletHoldService;
 use App\Modules\Wallet\Domain\IrrMoney;
 use App\Modules\Wallet\Domain\LedgerDirection;
+use App\Modules\Wallet\Domain\WalletSystemAccountCode;
 use App\Shared\Application\Clock;
 use DateTimeImmutable;
 use DomainException;
@@ -145,7 +147,7 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
             ->assertExitCode(0);
     }
 
-    public function test_bounded_purchase_maintenance_advances_across_wallet_and_promotion_batches(): void
+    public function test_bounded_purchase_maintenance_skips_a_persistently_failing_front_intent(): void
     {
         $source = $this->promotionSource('maintenance-fairness', 2, 2);
         $walletPayments = $this->app->make(PurchaseWalletPaymentService::class);
@@ -174,16 +176,32 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
             ->all();
         self::assertCount(2, $intentIds);
 
+        $firstHoldKey = DB::table('wallet_holds')
+            ->where('source_id', $intentPublicIds[0])
+            ->value('hold_key');
+        $clearingId = DB::table('ledger_accounts')
+            ->where('code', WalletSystemAccountCode::PURCHASE_CLEARING)
+            ->value('id');
+        self::assertIsString($firstHoldKey);
+        self::assertNotNull($clearingId);
+        $this->app->make(WalletHoldService::class)->capture(
+            $firstHoldKey,
+            (int) $clearingId,
+            $this->correlation('maintenance-fairness-front-capture'),
+        );
+        self::assertSame(
+            'captured',
+            DB::table('wallet_holds')->where('source_id', $intentPublicIds[0])->value('status'),
+        );
+
         $this->clock->value = $this->clock->value->modify('+31 minutes');
         $maintenance = $this->app->make(PurchasePaymentMaintenanceService::class);
 
         $first = $maintenance->run(1);
         self::assertSame(1, $first->walletIntentsExamined);
-        self::assertSame(1, $first->expiredWalletIntents);
-        self::assertSame(1, $first->promotionReservationsExamined);
-        self::assertSame(1, $first->releasedPromotionReservations);
-        self::assertSame(0, $first->failures);
-        self::assertSame('expired', DB::table('payment_intents')->where('public_id', $intentPublicIds[0])->value('state'));
+        self::assertSame(0, $first->expiredWalletIntents);
+        self::assertSame(1, $first->failures);
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intentPublicIds[0])->value('state'));
         self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intentPublicIds[1])->value('state'));
         self::assertSame(
             $intentIds[0],
@@ -195,13 +213,24 @@ final class PurchaseWalletPromotionUsageIntegrationTest extends TestCase
         $second = $maintenance->run(1);
         self::assertSame(1, $second->walletIntentsExamined);
         self::assertSame(1, $second->expiredWalletIntents);
-        self::assertSame(1, $second->promotionReservationsExamined);
-        self::assertSame(1, $second->releasedPromotionReservations);
         self::assertSame(0, $second->failures);
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intentPublicIds[0])->value('state'));
         self::assertSame('expired', DB::table('payment_intents')->where('public_id', $intentPublicIds[1])->value('state'));
-        self::assertSame(2, DB::table('promotion_usage_releases')->count());
+        self::assertSame(1, DB::table('promotion_usage_releases')->count());
         self::assertSame(
             $intentIds[1],
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'payments.purchase.wallet')
+                ->value('last_scanned_id'),
+        );
+
+        $wrapped = $maintenance->run(1);
+        self::assertSame(1, $wrapped->walletIntentsExamined);
+        self::assertSame(0, $wrapped->expiredWalletIntents);
+        self::assertSame(1, $wrapped->failures);
+        self::assertSame('awaiting_user_action', DB::table('payment_intents')->where('public_id', $intentPublicIds[0])->value('state'));
+        self::assertSame(
+            $intentIds[0],
             (int) DB::table('maintenance_scan_cursors')
                 ->where('cursor_name', 'payments.purchase.wallet')
                 ->value('last_scanned_id'),
