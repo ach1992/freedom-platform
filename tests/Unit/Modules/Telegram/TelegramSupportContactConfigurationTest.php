@@ -45,21 +45,26 @@ final class TelegramSupportContactConfigurationTest extends TestCase
 
     public function test_invalid_mode_or_required_external_username_fails_closed(): void
     {
-        foreach ([
+        $contacts = [
             ['display_mode' => 'unknown', 'external_username' => 'FreedomSupport'],
             ['display_mode' => 'external', 'external_username' => null],
             ['display_mode' => 'external', 'external_username' => 'abcd'],
             ['display_mode' => 'both', 'external_username' => '@FreedomSupport'],
             ['display_mode' => 'both', 'external_username' => 'Freedom-Support'],
-        ] as $contact) {
+        ];
+        $rejected = 0;
+
+        foreach ($contacts as $contact) {
             try {
                 new TelegramSupportContactConfiguration(new Repository([
                     'support' => ['contact' => $contact],
                 ]));
                 self::fail('Invalid Telegram Support contact configuration must fail closed.');
             } catch (RuntimeException) {
-                // Expected.
+                $rejected++;
             }
         }
+
+        self::assertSame(count($contacts), $rejected);
     }
 }
