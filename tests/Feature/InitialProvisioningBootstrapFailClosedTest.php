@@ -135,6 +135,8 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
         $supportAttachmentMigration = require database_path('migrations/2026_09_16_000200_create_support_ticket_attachment_authority.php');
         /** @var Migration $privateMediaGeneralizationMigration */
         $privateMediaGeneralizationMigration = require database_path('migrations/2026_09_16_000300_generalize_telegram_private_media_authority.php');
+        /** @var Migration $paymentPrivateEvidenceMigration */
+        $paymentPrivateEvidenceMigration = require database_path('migrations/2026_09_24_000200_enable_telegram_payment_private_evidence.php');
         /** @var Migration $supportRatingMigration */
         $supportRatingMigration = require database_path('migrations/2026_09_17_000100_create_support_ticket_rating_authority.php');
 
@@ -384,6 +386,7 @@ final class InitialProvisioningBootstrapFailClosedTest extends TestCase
             $supportTicketMigration->up();
             $supportAttachmentMigration->up();
             $privateMediaGeneralizationMigration->up();
+            $paymentPrivateEvidenceMigration->up();
             $supportRatingMigration->up();
 
             // Restore #400 successor authorities in forward migration order after the historical chain.

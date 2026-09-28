@@ -31,6 +31,8 @@ final class SupportTicketMigrationSafetyTest extends TestCase
 
     private ?Migration $privateMediaGeneralizationMigration = null;
 
+    private ?Migration $paymentPrivateEvidenceMigration = null;
+
     private ?Migration $supportRatingMigration = null;
 
     protected function setUp(): void
@@ -39,6 +41,7 @@ final class SupportTicketMigrationSafetyTest extends TestCase
 
         $this->supportAttachmentMigration = $this->supportAttachmentMigration();
         $this->privateMediaGeneralizationMigration = $this->privateMediaGeneralizationMigration();
+        $this->paymentPrivateEvidenceMigration = $this->paymentPrivateEvidenceMigration();
         $this->supportRatingMigration = $this->supportRatingMigration();
         $this->supportRatingMigration->down();
         $this->privateMediaGeneralizationMigration->down();
@@ -80,6 +83,7 @@ final class SupportTicketMigrationSafetyTest extends TestCase
                 $this->migration()->up();
                 $this->supportAttachmentMigration?->up();
                 $this->privateMediaGeneralizationMigration?->up();
+                $this->paymentPrivateEvidenceMigration?->up();
                 $this->supportRatingMigration?->up();
             } finally {
                 parent::tearDown();
@@ -714,6 +718,14 @@ SQL, $databaseName));
     {
         /** @var Migration $migration */
         $migration = require database_path('migrations/2026_09_16_000300_generalize_telegram_private_media_authority.php');
+
+        return $migration;
+    }
+
+    private function paymentPrivateEvidenceMigration(): Migration
+    {
+        /** @var Migration $migration */
+        $migration = require database_path('migrations/2026_09_24_000200_enable_telegram_payment_private_evidence.php');
 
         return $migration;
     }
