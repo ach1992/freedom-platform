@@ -243,7 +243,7 @@ final class CardToCardAmountReservationTest extends TestCase
         );
         $this->destinationService()->register(
             'secondary',
-            '5252525252525252',
+            '5555555555554444',
             'Backup Account Holder',
             true,
             1000,
