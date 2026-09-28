@@ -10,6 +10,19 @@ return [
         'external_username' => env('SUPPORT_EXTERNAL_USERNAME'),
     ],
 
+    'alerts' => [
+        'new_ticket' => [
+            'enabled' => env('SUPPORT_ALERT_NEW_TICKET_ENABLED', true),
+        ],
+        'sla_delay' => [
+            'enabled' => env('SUPPORT_ALERT_SLA_DELAY_ENABLED', false),
+            'threshold_seconds' => env('SUPPORT_ALERT_SLA_DELAY_SECONDS'),
+        ],
+        'delivery_failure' => [
+            'enabled' => env('SUPPORT_ALERT_DELIVERY_FAILURE_ENABLED', true),
+        ],
+    ],
+
     'rate_limits' => [
         'prefix' => 'freedom:telegram-support-rate-limit:',
         'ticket_creation' => [

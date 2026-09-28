@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Modules\Customers\Application\PurchaseSettlementTierOutboxHandler;
+use App\Modules\Operations\Application\DatabaseOperationalAlertRecorder;
 use App\Modules\Promotions\Application\PurchaseRefundReferralOutboxHandler;
 use App\Modules\Promotions\Application\PurchaseSettlementReferralOutboxHandler;
 use App\Modules\Provisioning\Application\InitialProvisioningOutboxHandler;
@@ -14,6 +15,7 @@ use App\Modules\Provisioning\Application\ServiceDeliveryOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceEntitlementGrantNotificationOutboxHandler;
 use App\Modules\Provisioning\Application\ServiceMutationOutboxHandler;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OperationalAlertRecorder;
 use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxEventHandler;
 use App\Shared\Application\OutboxMessageRouter;
@@ -36,6 +38,7 @@ final class FoundationServiceProvider extends ServiceProvider
     {
         $this->app->singleton(Clock::class, SystemClock::class);
         $this->app->singleton(RandomGenerator::class, SecureRandomGenerator::class);
+        $this->app->singleton(OperationalAlertRecorder::class, DatabaseOperationalAlertRecorder::class);
         $this->app->singleton(
             OutboxPublisher::class,
             fn (Application $application): OutboxPublisher => new DatabaseOutboxPublisher(

@@ -157,6 +157,7 @@ return [
         'category' => 'Choose a ticket category.',
         'assignment' => 'Ticket assigned to :assignee.',
         'reply' => 'Add a reply to this ticket.',
+        'customer_reply_notification' => "New support reply for ticket :tracking:\n\n:body",
         'close' => 'Close this ticket with the selected reason.',
         'reopen' => 'Reopen this ticket while the reopen window is active.',
         'rating' => 'Rate the support you received for this ticket.',

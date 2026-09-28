@@ -9,8 +9,11 @@ require_once __DIR__.'/PurchaseOrderTestSupport.php';
 
 use App\Modules\Orders\Application\PurchaseOrderService;
 use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
+use App\Modules\Support\Application\SupportAlertService;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
 use App\Modules\Support\Application\SupportTicketService;
+use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxPublisher;
 use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
@@ -42,7 +45,7 @@ final class SupportTicketBusinessReferenceIntegrityTest extends TestCase
     public function test_owned_order_payment_and_service_references_are_accepted_together(): void
     {
         $references = $this->referenceBundle('support-owned');
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $this->purchaseOrderClock);
+        $service = $this->supportTicketService($this->purchaseOrderClock);
 
         $ticket = $service->create(new SupportTicketCreateRequest(
             $references['user_id'],
@@ -69,7 +72,7 @@ final class SupportTicketBusinessReferenceIntegrityTest extends TestCase
     {
         $references = $this->referenceBundle('support-cross-owner');
         $otherCustomer = $this->unrelatedCustomer();
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $this->purchaseOrderClock);
+        $service = $this->supportTicketService($this->purchaseOrderClock);
 
         foreach ([
             'order' => ['orderId' => $references['order_id']],
@@ -97,7 +100,7 @@ final class SupportTicketBusinessReferenceIntegrityTest extends TestCase
     public function test_nonexistent_business_references_are_rejected_for_every_reference_type(): void
     {
         $customer = $this->unrelatedCustomer();
-        $service = new SupportTicketService($this->app->make(DatabaseManager::class), $this->purchaseOrderClock);
+        $service = $this->supportTicketService($this->purchaseOrderClock);
         $missing = 9_000_000_000;
 
         foreach ([
@@ -162,5 +165,15 @@ final class SupportTicketBusinessReferenceIntegrityTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ]);
+    }
+
+    private function supportTicketService(Clock $clock): SupportTicketService
+    {
+        return new SupportTicketService(
+            $this->app->make(DatabaseManager::class),
+            $clock,
+            $this->app->make(OutboxPublisher::class),
+            $this->app->make(SupportAlertService::class),
+        );
     }
 }

@@ -6,7 +6,10 @@ namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\AccessControl\Application\AdministratorPermissionAuthorizer;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Support\Application\SupportCustomerDeliveryAlertScanner;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
+use App\Modules\Support\Application\SupportTicketService;
+use App\Modules\Telegram\Application\ConfidentialTelegramPresentationFactory;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
@@ -48,6 +51,7 @@ use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleService;
 use App\Modules\Telegram\Application\TelegramClientGuideNavigationHandler;
 use App\Modules\Telegram\Application\TelegramConfidentialDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramConfidentialDeliveryQueue;
 use App\Modules\Telegram\Application\TelegramConfidentialPresentationHasher;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationAudit;
 use App\Modules\Telegram\Application\TelegramConfigurationMutationExecutor;
@@ -84,6 +88,8 @@ use App\Modules\Telegram\Application\TelegramServiceNotificationPreferenceNaviga
 use App\Modules\Telegram\Application\TelegramServiceReconfigurationNavigationHandler;
 use App\Modules\Telegram\Application\TelegramSourceMessageInteractionGateway;
 use App\Modules\Telegram\Application\TelegramSourceMessageReferenceDeliveryOutboxHandler;
+use App\Modules\Telegram\Application\TelegramSupportCustomerDeliveryAlertScanner;
+use App\Modules\Telegram\Application\TelegramSupportCustomerReplyOutboxHandler;
 use App\Modules\Telegram\Application\TelegramSupportMembershipFreshnessGuard;
 use App\Modules\Telegram\Application\TelegramSupportNavigationHandler;
 use App\Modules\Telegram\Application\TelegramTrialNavigationHandler;
@@ -206,6 +212,18 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(TelegramAgentNavigationHandler::class);
         $this->app->singleton(TelegramTrialNavigationHandler::class);
         $this->app->singleton(TelegramSupportNavigationHandler::class);
+        $this->app->singleton(
+            TelegramSupportCustomerReplyOutboxHandler::class,
+            fn (Application $application): TelegramSupportCustomerReplyOutboxHandler => new TelegramSupportCustomerReplyOutboxHandler(
+                $application->make(DatabaseManager::class),
+                $application->make(SupportTicketService::class),
+                $application->make(LocalizationResolver::class),
+                $application->make(ConfidentialTelegramPresentationFactory::class),
+                fn (): TelegramConfidentialDeliveryQueue => $application->make(TelegramConfidentialDeliveryQueue::class),
+                fn (): TelegramDeliveryRuntime => $application->make(TelegramDeliveryRuntime::class),
+            ),
+        );
+        $this->app->singleton(SupportCustomerDeliveryAlertScanner::class, TelegramSupportCustomerDeliveryAlertScanner::class);
         $this->app->singleton(TelegramGiftCardNavigationHandler::class);
         $this->app->singleton(TelegramUsdtNavigationHandler::class);
         $this->app->singleton(TelegramWalletTransferNavigationHandler::class);
@@ -441,6 +459,7 @@ final class TelegramServiceProvider extends ServiceProvider
             TelegramProtectedReferenceDeliveryOutboxHandler::class,
             TelegramPrivateMediaReferenceDeliveryOutboxHandler::class,
             TelegramSourceMessageReferenceDeliveryOutboxHandler::class,
+            TelegramSupportCustomerReplyOutboxHandler::class,
         ], OutboxEventHandler::class);
     }
 }
