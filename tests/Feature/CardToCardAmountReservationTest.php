@@ -216,6 +216,121 @@ final class CardToCardAmountReservationTest extends TestCase
             ->count());
     }
 
+    public function test_bounded_reservation_expiry_progresses_past_a_persistently_broken_front_destination(): void
+    {
+        $this->registerDestination(reservationMinutes: 5, lateReviewMinutes: 60);
+        [$firstUser, $firstQuote] = $this->quote('expiry-fairness-front');
+        $eligibility = $this->app->make(PaymentMethodEligibilityService::class);
+        $firstDecision = $eligibility->evaluate(
+            'c2c.eligibility.expiry.fairness.front',
+            $firstUser,
+            $firstQuote,
+        );
+        $service = $this->app->make(CardToCardPaymentService::class);
+        $first = $service->create(
+            'c2c.intent.expiry.fairness.front',
+            $firstUser,
+            $firstQuote,
+            $firstDecision->publicId,
+            $this->correlation('expiry-fairness-front'),
+        );
+
+        $this->destinationService()->setState(
+            $first->destinationPublicId,
+            false,
+            'Force later reservation onto the backup destination.',
+            $this->correlation('expiry-fairness-disable-primary'),
+        );
+        $this->destinationService()->register(
+            'secondary',
+            '5252525252525252',
+            'Backup Account Holder',
+            true,
+            1000,
+            9990,
+            5,
+            60,
+            null,
+            20,
+            'manual',
+            'Backup destination for maintenance fairness.',
+            $this->correlation('expiry-fairness-secondary'),
+        );
+
+        [$secondUser, $secondQuote] = $this->quote('expiry-fairness-tail');
+        $secondDecision = $eligibility->evaluate(
+            'c2c.eligibility.expiry.fairness.tail',
+            $secondUser,
+            $secondQuote,
+        );
+        $second = $service->create(
+            'c2c.intent.expiry.fairness.tail',
+            $secondUser,
+            $secondQuote,
+            $secondDecision->publicId,
+            $this->correlation('expiry-fairness-tail'),
+        );
+        self::assertNotSame($first->destinationPublicId, $second->destinationPublicId);
+
+        $this->clock->value = $this->clock->value->modify('+6 minutes');
+
+        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        try {
+            self::assertSame(
+                1,
+                DB::table('c2c_destination_accounts')
+                    ->where('public_id', $first->destinationPublicId)
+                    ->delete(),
+            );
+        } finally {
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        }
+
+        $firstRun = $service->expireAbandonedIntentsDue(1);
+        self::assertSame(0, $firstRun->intentsExamined);
+        self::assertSame(0, $firstRun->expiredIntents);
+        self::assertSame(1, $firstRun->failures);
+        self::assertSame(
+            1,
+            (int) DB::table('c2c_amount_reservations')
+                ->where('id', $first->reservationId)
+                ->value('active_lock'),
+        );
+        self::assertSame(
+            1,
+            (int) DB::table('c2c_amount_reservations')
+                ->where('id', $second->reservationId)
+                ->value('active_lock'),
+        );
+
+        $secondRun = $service->expireAbandonedIntentsDue(1);
+        self::assertSame(0, $secondRun->intentsExamined);
+        self::assertSame(0, $secondRun->expiredIntents);
+        self::assertSame(0, $secondRun->failures);
+        self::assertNull(
+            DB::table('c2c_amount_reservations')
+                ->where('id', $second->reservationId)
+                ->value('active_lock'),
+        );
+        self::assertSame(
+            'expired',
+            DB::table('c2c_amount_reservations')
+                ->where('id', $second->reservationId)
+                ->value('release_reason'),
+        );
+
+        $wrapped = $service->expireAbandonedIntentsDue(1);
+        self::assertSame(0, $wrapped->intentsExamined);
+        self::assertSame(0, $wrapped->expiredIntents);
+        self::assertSame(1, $wrapped->failures);
+        self::assertSame(
+            $first->reservationId,
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'payments.purchase.c2c-reservations')
+                ->value('last_scanned_id'),
+        );
+    }
+
     public function test_late_review_maintenance_preserves_intent_when_matching_bank_evidence_exists(): void
     {
         $this->registerDestination(reservationMinutes: 5, lateReviewMinutes: 60);
