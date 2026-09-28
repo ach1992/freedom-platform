@@ -10,7 +10,9 @@ Schedule::call(function (): void {
 })
     ->name('operations.scheduler-heartbeat')
     ->everyMinute()
-    ->withoutOverlapping()
+    // A heartbeat is a small DB upsert. Five minutes tolerates transient slowness while
+    // preventing a crashed scheduler process from suppressing liveness evidence for a day.
+    ->withoutOverlapping(5)
     ->onOneServer();
 
 Schedule::command('operations:check-worker-heartbeats', [
@@ -19,7 +21,9 @@ Schedule::command('operations:check-worker-heartbeats', [
 ])
     ->name('operations.check-worker-heartbeats')
     ->everyMinute()
-    ->withoutOverlapping()
+    // Heartbeat inspection and alert recording are bounded database work; stale locks should
+    // recover quickly enough that worker failures remain observable.
+    ->withoutOverlapping(5)
     ->onOneServer();
 
 Schedule::command('operations:dispatch-outbox', [
@@ -28,7 +32,9 @@ Schedule::command('operations:dispatch-outbox', [
 ])
     ->name('operations.dispatch-outbox')
     ->everyMinute()
-    ->withoutOverlapping()
+    // The command examines at most 100 due messages and individual effects have their own
+    // leases/idempotency. Ten minutes bounds crash suppression without weakening those fences.
+    ->withoutOverlapping(10)
     ->onOneServer();
 
 Schedule::command('wallet:maintenance', [
@@ -38,7 +44,9 @@ Schedule::command('wallet:maintenance', [
 ])
     ->name('wallet.maintenance')
     ->everyFiveMinutes()
-    ->withoutOverlapping()
+    // The run is bounded to 100 holds and 200 wallet accounts. A 15-minute stale lock gives
+    // normal DB reconciliation headroom while avoiding Laravel's 24-hour crash suppression.
+    ->withoutOverlapping(15)
     ->onOneServer();
 
 Schedule::command('referrals:process-rewards', [
@@ -65,7 +73,9 @@ Schedule::command('payments:purchase-maintenance', [
 ])
     ->name('payments.purchase-maintenance')
     ->everyFiveMinutes()
-    ->withoutOverlapping()
+    // Purchase maintenance operates on bounded idempotent expiration/release batches. Recover
+    // its scheduler lock after 15 minutes instead of suppressing financial cleanup for a day.
+    ->withoutOverlapping(15)
     ->onOneServer();
 
 Schedule::command('payments:alternative-maintenance', [
