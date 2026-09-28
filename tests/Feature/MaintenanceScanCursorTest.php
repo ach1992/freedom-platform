@@ -58,6 +58,99 @@ final class MaintenanceScanCursorTest extends TestCase
         );
     }
 
+    public function test_cycle_high_water_forces_wrap_under_continuous_equal_capacity_arrivals(): void
+    {
+        $firstId = $this->account('wallet.cash.cursor.arrival.1', $this->user());
+        $secondId = $this->account('wallet.cash.cursor.arrival.2', $this->user());
+
+        /** @var \Closure(): list<object{id:int|string}> $claim */
+        $claim = function (): array {
+            return $this->app->make(MaintenanceScanCursor::class)->claim(
+                'test.wallet.continuous-arrival',
+                1,
+                static fn (Connection $connection) => $connection->table('ledger_accounts')
+                    ->whereNotNull('owner_user_id')
+                    ->where('wallet_bucket', 'cash')
+                    ->where('currency', 'IRR')
+                    ->where('is_active', true),
+                'ledger_accounts.id',
+                ['ledger_accounts.id'],
+            );
+        };
+
+        $first = $claim();
+        self::assertSame($firstId, (int) $first[0]->id);
+
+        $thirdId = $this->account('wallet.cash.cursor.arrival.3', $this->user());
+        $second = $claim();
+        self::assertSame($secondId, (int) $second[0]->id);
+        self::assertSame(
+            $secondId,
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'test.wallet.continuous-arrival')
+                ->value('cycle_max_id'),
+        );
+
+        $fourthId = $this->account('wallet.cash.cursor.arrival.4', $this->user());
+        $wrapped = $claim();
+
+        self::assertSame($firstId, (int) $wrapped[0]->id);
+        self::assertSame(
+            $fourthId,
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'test.wallet.continuous-arrival')
+                ->value('cycle_max_id'),
+        );
+        self::assertGreaterThan($secondId, $thirdId);
+        self::assertGreaterThan($thirdId, $fourthId);
+    }
+
+    public function test_older_row_becoming_eligible_after_cursor_passes_is_reclaimed_under_new_arrivals(): void
+    {
+        $olderId = $this->account('wallet.cash.cursor.late.1', $this->user());
+        DB::table('ledger_accounts')->where('id', $olderId)->update([
+            'is_active' => false,
+            'updated_at' => now('UTC'),
+        ]);
+        $secondId = $this->account('wallet.cash.cursor.late.2', $this->user());
+        $thirdId = $this->account('wallet.cash.cursor.late.3', $this->user());
+
+        /** @var \Closure(): list<object{id:int|string}> $claim */
+        $claim = function (): array {
+            return $this->app->make(MaintenanceScanCursor::class)->claim(
+                'test.wallet.late-eligibility',
+                1,
+                static fn (Connection $connection) => $connection->table('ledger_accounts')
+                    ->whereNotNull('owner_user_id')
+                    ->where('wallet_bucket', 'cash')
+                    ->where('currency', 'IRR')
+                    ->where('is_active', true),
+                'ledger_accounts.id',
+                ['ledger_accounts.id'],
+            );
+        };
+
+        self::assertSame($secondId, (int) $claim()[0]->id);
+
+        DB::table('ledger_accounts')->where('id', $olderId)->update([
+            'is_active' => true,
+            'updated_at' => now('UTC'),
+        ]);
+        $fourthId = $this->account('wallet.cash.cursor.late.4', $this->user());
+        self::assertSame($thirdId, (int) $claim()[0]->id);
+
+        $fifthId = $this->account('wallet.cash.cursor.late.5', $this->user());
+        self::assertSame($olderId, (int) $claim()[0]->id);
+        self::assertSame(
+            $fifthId,
+            (int) DB::table('maintenance_scan_cursors')
+                ->where('cursor_name', 'test.wallet.late-eligibility')
+                ->value('cycle_max_id'),
+        );
+        self::assertGreaterThan($thirdId, $fourthId);
+        self::assertGreaterThan($fourthId, $fifthId);
+    }
+
     public function test_cursor_persists_across_service_resolution_and_skips_ineligible_ids(): void
     {
         $firstUser = $this->user();

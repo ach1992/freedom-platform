@@ -18,9 +18,10 @@ final readonly class MaintenanceScanCursor
     /**
      * Claim the next bounded round-robin batch before processing it.
      *
-     * Advancing the durable cursor before callers process the returned rows prevents a
-     * permanently failing front row from starving the remaining eligible population.
-     * Existing per-effect idempotency remains responsible for safe retries after wrap.
+     * Each scan cycle is bounded by a persisted high-water ID captured before selection.
+     * Newer IDs cannot extend an active cycle indefinitely, so a claimed/unprocessed row
+     * or an older row that becomes eligible after the cursor passed it is revisited after
+     * a finite wrap. Existing per-effect idempotency remains responsible for safe retries.
      *
      * @param  Closure(Connection): Builder  $eligibleQuery
      * @param  list<string>  $columns
@@ -56,14 +57,15 @@ final readonly class MaintenanceScanCursor
             $connection->table('maintenance_scan_cursors')->insertOrIgnore([
                 'cursor_name' => $cursorName,
                 'last_scanned_id' => null,
+                'cycle_max_id' => null,
                 'updated_at' => now('UTC'),
             ]);
 
-            /** @var object{last_scanned_id:int|string|null}|null $cursor */
+            /** @var object{last_scanned_id:int|string|null,cycle_max_id:int|string|null}|null $cursor */
             $cursor = $connection->table('maintenance_scan_cursors')
                 ->where('cursor_name', $cursorName)
                 ->lockForUpdate()
-                ->first(['last_scanned_id']);
+                ->first(['last_scanned_id', 'cycle_max_id']);
             if ($cursor === null) {
                 throw new RuntimeException('Maintenance scan cursor is unavailable.');
             }
@@ -71,37 +73,59 @@ final readonly class MaintenanceScanCursor
             $lastScannedId = $cursor->last_scanned_id === null
                 ? null
                 : $this->positiveDatabaseInt($cursor->last_scanned_id, 'Maintenance cursor ID');
+            $cycleMaxId = $cursor->cycle_max_id === null
+                ? null
+                : $this->positiveDatabaseInt($cursor->cycle_max_id, 'Maintenance cycle maximum ID');
+            if (($lastScannedId === null) !== ($cycleMaxId === null)) {
+                throw new RuntimeException('Maintenance scan cursor cycle state is inconsistent.');
+            }
+            if ($lastScannedId !== null && $cycleMaxId !== null && $lastScannedId > $cycleMaxId) {
+                throw new RuntimeException('Maintenance scan cursor exceeds its cycle boundary.');
+            }
+
             $select = [...$columns, $cursorColumn.' as maintenance_cursor_id'];
-
-            $firstQuery = $eligibleQuery($connection);
-            if (! $firstQuery instanceof Builder) {
-                throw new RuntimeException('Maintenance eligible query is invalid.');
-            }
-            if ($lastScannedId !== null) {
-                $firstQuery->where($cursorColumn, '>', $lastScannedId);
-            }
-
-            /** @var list<object{maintenance_cursor_id:int|string}> $rows */
-            $rows = $firstQuery
-                ->orderBy($cursorColumn)
-                ->limit($limit)
-                ->get($select)
-                ->all();
-
-            if ($lastScannedId !== null && count($rows) < $limit) {
-                $remaining = $limit - count($rows);
-                $wrappedQuery = $eligibleQuery($connection);
-                if (! $wrappedQuery instanceof Builder) {
-                    throw new RuntimeException('Maintenance wrapped eligible query is invalid.');
+            if ($cycleMaxId === null) {
+                $cycleMaxId = $this->eligibleMaximum(
+                    $connection,
+                    $eligibleQuery,
+                    $cursorColumn,
+                );
+                if ($cycleMaxId === null) {
+                    return [];
                 }
-                /** @var list<object{maintenance_cursor_id:int|string}> $wrapped */
-                $wrapped = $wrappedQuery
-                    ->where($cursorColumn, '<=', $lastScannedId)
-                    ->orderBy($cursorColumn)
-                    ->limit($remaining)
-                    ->get($select)
-                    ->all();
-                $rows = [...$rows, ...$wrapped];
+            }
+
+            $rows = $this->cycleRows(
+                $connection,
+                $eligibleQuery,
+                $cursorColumn,
+                $select,
+                $limit,
+                $cycleMaxId,
+                $lastScannedId,
+            );
+
+            if ($rows === [] && $lastScannedId !== null) {
+                $cycleMaxId = $this->eligibleMaximum(
+                    $connection,
+                    $eligibleQuery,
+                    $cursorColumn,
+                );
+                if ($cycleMaxId === null) {
+                    $this->persistCursorState($connection, $cursorName, null, null);
+
+                    return [];
+                }
+
+                $rows = $this->cycleRows(
+                    $connection,
+                    $eligibleQuery,
+                    $cursorColumn,
+                    $select,
+                    $limit,
+                    $cycleMaxId,
+                    null,
+                );
             }
 
             if ($rows === []) {
@@ -112,33 +136,16 @@ final readonly class MaintenanceScanCursor
                 $rows[array_key_last($rows)]->maintenance_cursor_id,
                 'Maintenance next cursor ID',
             );
-            $cursorUpdate = [
-                'last_scanned_id' => $nextScannedId,
-                'updated_at' => now('UTC'),
-            ];
-            if ($lastScannedId === null) {
-                $updated = $connection->table('maintenance_scan_cursors')
-                    ->where('cursor_name', $cursorName)
-                    ->whereNull('last_scanned_id')
-                    ->update($cursorUpdate);
-            } else {
-                $updated = $connection->table('maintenance_scan_cursors')
-                    ->where('cursor_name', $cursorName)
-                    ->where('last_scanned_id', $lastScannedId)
-                    ->update($cursorUpdate);
+            if ($nextScannedId > $cycleMaxId) {
+                throw new RuntimeException('Maintenance scan cursor selected beyond its cycle boundary.');
             }
 
-            if ($updated !== 1) {
-                $current = $connection->table('maintenance_scan_cursors')
-                    ->where('cursor_name', $cursorName)
-                    ->value('last_scanned_id');
-                if ($updated !== 0
-                    || $current === null
-                    || $this->positiveDatabaseInt($current, 'Maintenance persisted cursor ID') !== $nextScannedId
-                ) {
-                    throw new RuntimeException('Maintenance scan cursor lost its current authority.');
-                }
-            }
+            $this->persistCursorState(
+                $connection,
+                $cursorName,
+                $nextScannedId,
+                $cycleMaxId,
+            );
 
             foreach ($rows as $row) {
                 unset($row->maintenance_cursor_id);
@@ -146,6 +153,103 @@ final readonly class MaintenanceScanCursor
 
             return $rows;
         }, 3);
+    }
+
+    /**
+     * @param  Closure(Connection): Builder  $eligibleQuery
+     */
+    private function eligibleMaximum(
+        Connection $connection,
+        Closure $eligibleQuery,
+        string $cursorColumn,
+    ): ?int {
+        $query = $eligibleQuery($connection);
+        if (! $query instanceof Builder) {
+            throw new RuntimeException('Maintenance eligible query is invalid.');
+        }
+
+        $maximum = $query->max($cursorColumn);
+        if ($maximum === null) {
+            return null;
+        }
+
+        return $this->positiveDatabaseInt($maximum, 'Maintenance cycle maximum ID');
+    }
+
+    /**
+     * @param  Closure(Connection): Builder  $eligibleQuery
+     * @param  list<string>  $select
+     * @return list<object{maintenance_cursor_id:int|string}>
+     */
+    private function cycleRows(
+        Connection $connection,
+        Closure $eligibleQuery,
+        string $cursorColumn,
+        array $select,
+        int $limit,
+        int $cycleMaxId,
+        ?int $lastScannedId,
+    ): array {
+        $query = $eligibleQuery($connection);
+        if (! $query instanceof Builder) {
+            throw new RuntimeException('Maintenance eligible query is invalid.');
+        }
+
+        $query->where($cursorColumn, '<=', $cycleMaxId);
+        if ($lastScannedId !== null) {
+            $query->where($cursorColumn, '>', $lastScannedId);
+        }
+
+        /** @var list<object{maintenance_cursor_id:int|string}> $rows */
+        $rows = $query
+            ->orderBy($cursorColumn)
+            ->limit($limit)
+            ->get($select)
+            ->all();
+
+        return $rows;
+    }
+
+    private function persistCursorState(
+        Connection $connection,
+        string $cursorName,
+        ?int $lastScannedId,
+        ?int $cycleMaxId,
+    ): void {
+        $updated = $connection->table('maintenance_scan_cursors')
+            ->where('cursor_name', $cursorName)
+            ->update([
+                'last_scanned_id' => $lastScannedId,
+                'cycle_max_id' => $cycleMaxId,
+                'updated_at' => now('UTC'),
+            ]);
+        if ($updated === 1) {
+            return;
+        }
+
+        /** @var object{last_scanned_id:int|string|null,cycle_max_id:int|string|null}|null $current */
+        $current = $connection->table('maintenance_scan_cursors')
+            ->where('cursor_name', $cursorName)
+            ->first(['last_scanned_id', 'cycle_max_id']);
+        if ($updated !== 0
+            || $current === null
+            || ! $this->databaseIntMatches($current->last_scanned_id, $lastScannedId, 'Maintenance persisted cursor ID')
+            || ! $this->databaseIntMatches($current->cycle_max_id, $cycleMaxId, 'Maintenance persisted cycle maximum ID')
+        ) {
+            throw new RuntimeException('Maintenance scan cursor lost its current authority.');
+        }
+    }
+
+    private function databaseIntMatches(mixed $persisted, ?int $expected, string $label): bool
+    {
+        if ($expected === null) {
+            return $persisted === null;
+        }
+        if ($persisted === null) {
+            return false;
+        }
+
+        return $this->positiveDatabaseInt($persisted, $label) === $expected;
     }
 
     private function positiveDatabaseInt(mixed $value, string $label): int

@@ -14,6 +14,7 @@ return new class extends Migration
         Schema::create('maintenance_scan_cursors', function (Blueprint $table): void {
             $table->string('cursor_name', 128)->primary();
             $table->unsignedBigInteger('last_scanned_id')->nullable();
+            $table->unsignedBigInteger('cycle_max_id')->nullable();
             $table->dateTime('updated_at', 6);
         });
     }
