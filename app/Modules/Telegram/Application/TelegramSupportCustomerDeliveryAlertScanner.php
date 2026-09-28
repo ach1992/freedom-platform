@@ -220,6 +220,10 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         foreach ($rows as $row) {
             /** @var SupportDeliveryRow $row */
             $messageId = $this->messageIdFromCorrelation((string) $row->correlation_id);
+            if ($messageId === null) {
+                continue;
+            }
+
             $handoff = $this->supportNotificationHandoff($messageId);
             if ($handoff === null) {
                 continue;
@@ -388,13 +392,15 @@ final readonly class TelegramSupportCustomerDeliveryAlertScanner implements Supp
         return ($minute * $windowSize) % $total;
     }
 
-    private function messageIdFromCorrelation(string $correlationId): int
+    private function messageIdFromCorrelation(string $correlationId): ?int
     {
         if (preg_match('/\Asupport\.reply\.([1-9][0-9]*)\z/', $correlationId, $matches) !== 1) {
-            throw new RuntimeException('Support Telegram delivery correlation identity is invalid.');
+            return null;
         }
 
-        return $this->positiveInt($matches[1], 'Support delivery message ID');
+        $validated = filter_var($matches[1], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+
+        return $validated === false ? null : $validated;
     }
 
     private function positiveInt(mixed $value, string $label): int

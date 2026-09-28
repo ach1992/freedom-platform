@@ -1253,6 +1253,54 @@ final class TelegramSupportNavigationTest extends TestCase
         self::assertNotNull($supportEvent);
         $supportPayload = json_decode((string) $supportEvent->payload, true, 32, JSON_THROW_ON_ERROR);
         self::assertIsArray($supportPayload);
+
+        $unrelated = ConfidentialTelegramPresentationTestFactory::queue(
+            $this->app->make(TelegramDeliveryQueueService::class),
+            TelegramDeliveryAction::Send,
+            $staffTelegramId,
+            null,
+            ConfidentialTelegramPresentationTestFactory::plainText('Unrelated support-prefixed delivery'),
+            'support-delivery-malformed-correlation-'.$reply->messageId,
+            'support.reply.invalid',
+        );
+        $unrelatedTelegramEvent = DB::table('outbox_messages')
+            ->where('id', $unrelated->outboxEventId)
+            ->first();
+        self::assertNotNull($unrelatedTelegramEvent);
+        $unrelatedTelegramPayload = json_decode(
+            (string) $unrelatedTelegramEvent->payload,
+            true,
+            32,
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertIsArray($unrelatedTelegramPayload);
+        $unrelatedTelegramMessage = new OutboxMessage(
+            (string) $unrelatedTelegramEvent->id,
+            (string) $unrelatedTelegramEvent->event_key,
+            (string) $unrelatedTelegramEvent->event_type,
+            (string) $unrelatedTelegramEvent->aggregate_type,
+            (string) $unrelatedTelegramEvent->aggregate_id,
+            $unrelatedTelegramPayload,
+            (string) $unrelatedTelegramEvent->correlation_id,
+            1,
+            (int) $unrelatedTelegramEvent->contract_version,
+        );
+
+        $this->app->instance(
+            TelegramMutationTransport::class,
+            new SupportAlertTelegramMutationTransport(TelegramMutationOutcome::UncertainResult),
+        );
+        self::assertSame(
+            OutboxDispatchOutcome::UncertainResult,
+            $this->app->make(TelegramConfidentialDeliveryOutboxHandler::class)->handle($unrelatedTelegramMessage),
+        );
+        self::assertSame(
+            'uncertain',
+            DB::table('telegram_delivery_operations')
+                ->where('public_id', $unrelated->publicId)
+                ->value('state'),
+        );
+
         DB::table('outbox_messages')
             ->whereNull('processed_at')
             ->where('id', '<>', (string) $supportEvent->id)
@@ -1364,6 +1412,9 @@ final class TelegramSupportNavigationTest extends TestCase
             ->first(['occurrence_count', 'safe_context']);
         self::assertNotNull($alert);
         self::assertSame(1, (int) $alert->occurrence_count);
+        $safeContext = json_decode((string) $alert->safe_context, true, 32, JSON_THROW_ON_ERROR);
+        self::assertIsArray($safeContext);
+        self::assertSame('telegram_delivery', $safeContext['stage'] ?? null);
         self::assertStringNotContainsString('CUSTOMER-DELIVERY-SECRET', (string) $alert->safe_context);
     }
 
