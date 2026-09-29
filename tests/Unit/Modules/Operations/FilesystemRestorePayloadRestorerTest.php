@@ -79,7 +79,7 @@ final class FilesystemRestorePayloadRestorerTest extends TestCase
                 $restorer->restore($entries, '20260929T040001Z-2222222222222222');
                 self::fail('Symlink restore destination must be rejected.');
             } catch (RuntimeException $exception) {
-                self::assertSame('A restore configuration target is unsafe.', $exception->getMessage());
+                self::assertSame('Restore critical environment authority is unavailable.', $exception->getMessage());
             }
         } finally {
             $this->removeTree($base);
