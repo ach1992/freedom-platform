@@ -27,6 +27,8 @@ final class OperationsSchedulerPolicyTest extends TestCase
             'services.notifications' => 30,
             'telegram.process-broadcasts' => 10,
             'support.alerts.scan' => 10,
+            'operations.backup.frequent-database' => 30,
+            'operations.backup.daily-full' => 180,
         ];
 
         $events = collect($this->app->make(Schedule::class)->events())
