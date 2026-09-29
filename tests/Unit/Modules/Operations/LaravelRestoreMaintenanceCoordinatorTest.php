@@ -243,7 +243,7 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
     }
 
     /** @requirement BAK-002 OPS-003 QUA-001 */
-    public function test_leave_releases_scheduler_fence_before_maintenance(): void
+    public function test_leave_releases_maintenance_before_scheduler_fence(): void
     {
         $runId = '20260929T040014Z-9999999999999999';
         $maintenance = $this->createMock(MaintenanceMode::class);
@@ -270,7 +270,69 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
 
         $this->coordinator($maintenance, $console, $scheduler)->leave($runId);
 
-        self::assertSame(['scheduler_released', 'maintenance_released'], $events);
+        self::assertSame(['maintenance_released', 'scheduler_released'], $events);
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_deactivation_side_effect_then_exception_keeps_scheduler_fence_for_recontainment(): void
+    {
+        $runId = '20260929T040015Z-aaaaaaaaaaaaaaaa';
+        $maintenance = new FaultInjectingRestoreMaintenanceMode($runId);
+        $maintenance->throwAfterDeactivate = true;
+        $scheduler = new StatefulRestoreSchedulerMutationLock(true);
+        $coordinator = $this->coordinator(
+            $maintenance,
+            $this->createStub(Kernel::class),
+            $scheduler,
+        );
+
+        try {
+            $coordinator->leave($runId);
+            self::fail('A deactivation failure must not be treated as a successful reopen.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('test-only maintenance deactivation failure', $exception->getMessage());
+        }
+
+        self::assertTrue($scheduler->held());
+        self::assertFalse($maintenance->active);
+
+        $state = $coordinator->retain($runId);
+
+        self::assertTrue($state['maintenance_owned']);
+        self::assertTrue($state['scheduler_fence_held']);
+        self::assertTrue($maintenance->active);
+        self::assertTrue($scheduler->held());
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_post_deactivation_verification_failure_occurs_before_scheduler_release_and_is_recontained(): void
+    {
+        $runId = '20260929T040016Z-bbbbbbbbbbbbbbbb';
+        $maintenance = new FaultInjectingRestoreMaintenanceMode($runId);
+        $maintenance->throwOnActiveCall = 2;
+        $scheduler = new StatefulRestoreSchedulerMutationLock(true);
+        $coordinator = $this->coordinator(
+            $maintenance,
+            $this->createStub(Kernel::class),
+            $scheduler,
+        );
+
+        try {
+            $coordinator->leave($runId);
+            self::fail('An uncertain maintenance-release verification must fail closed.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('test-only maintenance active verification failure', $exception->getMessage());
+        }
+
+        self::assertTrue($scheduler->held());
+        self::assertFalse($maintenance->active);
+
+        $state = $coordinator->retain($runId);
+
+        self::assertTrue($state['maintenance_owned']);
+        self::assertTrue($state['scheduler_fence_held']);
+        self::assertTrue($maintenance->active);
+        self::assertTrue($scheduler->held());
     }
 
     private function coordinator(
@@ -289,3 +351,79 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
         );
     }
 }
+
+final class FaultInjectingRestoreMaintenanceMode implements MaintenanceMode
+{
+    public bool $active = true;
+
+    public bool $throwAfterDeactivate = false;
+
+    public ?int $throwOnActiveCall = null;
+
+    private int $activeCalls = 0;
+
+    /** @var array<string, mixed> */
+    private array $payload;
+
+    public function __construct(string $restoreRunId)
+    {
+        $this->payload = ['restore_run_id' => $restoreRunId];
+    }
+
+    public function activate(array $payload): void
+    {
+        $this->active = true;
+        $this->payload = $payload;
+    }
+
+    public function deactivate(): void
+    {
+        $this->active = false;
+        $this->payload = [];
+
+        if ($this->throwAfterDeactivate) {
+            $this->throwAfterDeactivate = false;
+
+            throw new RuntimeException('test-only maintenance deactivation failure');
+        }
+    }
+
+    public function active(): bool
+    {
+        $this->activeCalls++;
+
+        if ($this->throwOnActiveCall === $this->activeCalls) {
+            $this->throwOnActiveCall = null;
+
+            throw new RuntimeException('test-only maintenance active verification failure');
+        }
+
+        return $this->active;
+    }
+
+    public function data(): array
+    {
+        return $this->payload;
+    }
+}
+
+final class StatefulRestoreSchedulerMutationLock implements RestoreSchedulerMutationLock
+{
+    public function __construct(private bool $held) {}
+
+    public function acquire(int $timeoutSeconds): void
+    {
+        $this->held = true;
+    }
+
+    public function release(): void
+    {
+        $this->held = false;
+    }
+
+    public function held(): bool
+    {
+        return $this->held;
+    }
+}
+
