@@ -39,12 +39,20 @@ final readonly class InstallerProductionEnvironmentPolicy
         }
 
         $counts = [];
+        $interpolated = [];
 
         foreach ($entries as $entry) {
             $name = $entry->getName();
 
-            if (in_array($name, self::REQUIRED_PRODUCTION_KEYS, true)) {
-                $counts[$name] = ($counts[$name] ?? 0) + 1;
+            if (! in_array($name, self::REQUIRED_PRODUCTION_KEYS, true)) {
+                continue;
+            }
+
+            $counts[$name] = ($counts[$name] ?? 0) + 1;
+            $entryValue = $entry->getValue();
+
+            if ($entryValue->isDefined() && $entryValue->get()->getVars() !== []) {
+                $interpolated[$name] = true;
             }
         }
 
@@ -65,6 +73,12 @@ final readonly class InstallerProductionEnvironmentPolicy
             if (($counts[$key] ?? 0) !== 1 || ! array_key_exists($key, $values) || $values[$key] === null) {
                 throw new RuntimeException(
                     'The installer production environment must define each security-critical setting exactly once.',
+                );
+            }
+
+            if ($interpolated[$key] ?? false) {
+                throw new RuntimeException(
+                    'The installer production environment must use literal security-critical values.',
                 );
             }
         }

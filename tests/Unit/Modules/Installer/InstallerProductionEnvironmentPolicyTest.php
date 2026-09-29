@@ -114,6 +114,51 @@ final class InstallerProductionEnvironmentPolicyTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_production_requires_literal_security_critical_values(): void
+    {
+        $policy = new InstallerProductionEnvironmentPolicy('production');
+        $cases = [
+            ['key' => 'APP_ENV', 'helper' => 'TARGET_ENV', 'value' => 'production'],
+            ['key' => 'APP_DEBUG', 'helper' => 'TARGET_DEBUG', 'value' => 'false'],
+            ['key' => 'APP_URL', 'helper' => 'INSTALLER_ORIGIN', 'value' => 'https://safe.example'],
+            ['key' => 'SESSION_ENCRYPT', 'helper' => 'TARGET_SESSION_ENCRYPT', 'value' => 'true'],
+            ['key' => 'SESSION_SECURE_COOKIE', 'helper' => 'TARGET_SECURE_COOKIE', 'value' => 'true'],
+        ];
+
+        foreach ($cases as $case) {
+            $contents = $case['helper'].'="'.$case['value']."\"\n".$this->environment([
+                $case['key'] => '${'.$case['helper'].'}',
+            ]);
+
+            try {
+                $policy->assertSafe($contents);
+                $this->fail('Production-sensitive interpolation must be rejected: '.$case['key']);
+            } catch (RuntimeException $exception) {
+                $this->assertSame(
+                    'The installer production environment must use literal security-critical values.',
+                    $exception->getMessage(),
+                    $case['key'],
+                );
+            }
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_interpolated_production_target_is_rejected_even_when_runtime_booted_non_production(): void
+    {
+        $contents = "TARGET_ENV=\"production\"\n".$this->environment([
+            'APP_ENV' => '${TARGET_ENV}',
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(
+            'The installer production environment must use literal security-critical values.',
+        );
+
+        (new InstallerProductionEnvironmentPolicy('testing'))->assertSafe($contents);
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_production_target_is_enforced_even_when_runtime_booted_non_production(): void
     {
         $this->expectException(RuntimeException::class);

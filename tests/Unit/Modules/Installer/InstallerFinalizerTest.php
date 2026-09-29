@@ -83,6 +83,58 @@ final class InstallerFinalizerTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_interpolated_production_value_is_rejected_before_environment_or_finalization_side_effects(): void
+    {
+        $paths = $this->paths('interpolated-production');
+        $runner = new RecordingFinalizationRunner;
+        $original = implode("\n", [
+            'APP_KEY="base64:existing-test-key"',
+            'INSTALLER_ORIGIN="https://safe.example"',
+            'APP_ENV="production"',
+            'APP_DEBUG="false"',
+            'APP_URL="${INSTALLER_ORIGIN}"',
+            'SESSION_ENCRYPT="true"',
+            'SESSION_SECURE_COOKIE="true"',
+            '',
+        ]);
+        $this->writeFixture($paths['environment'], $original);
+        [$finalizer, $lock] = $this->finalizer(
+            $paths,
+            $runner,
+            'production',
+            ['APP_KEY', 'APP_ENV', 'APP_DEBUG', 'APP_URL', 'SESSION_ENCRYPT', 'SESSION_SECURE_COOKIE'],
+        );
+        $previousOrigin = getenv('INSTALLER_ORIGIN');
+        putenv('INSTALLER_ORIGIN=http://unsafe.example');
+
+        try {
+            try {
+                $finalizer->finalize([]);
+                $this->fail('Interpolated production security values must abort finalization.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame(
+                    'The installer production environment must use literal security-critical values.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $this->assertSame([], $runner->actions);
+            $this->assertFalse($lock->exists());
+            $this->assertSame($original, file_get_contents($paths['environment']));
+            $this->assertFileDoesNotExist($paths['snapshot']);
+            $this->assertFileDoesNotExist($paths['snapshot'].'.json');
+        } finally {
+            if ($previousOrigin === false) {
+                putenv('INSTALLER_ORIGIN');
+            } else {
+                putenv('INSTALLER_ORIGIN='.$previousOrigin);
+            }
+
+            $this->cleanup($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_migration_failure_restores_environment_and_prevents_lock_activation(): void
     {
         $paths = $this->paths('migration-failure');
