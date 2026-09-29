@@ -49,7 +49,7 @@ Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-st
 
 ### Staging Readiness
 
-`.github/workflows/staging-readiness.yml` defines a manual read-only runtime readiness path where/when it is registered. It must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
+`.github/workflows/staging-readiness-runtime.yml` defines the read-only runtime readiness path where/when a trusted staging runner is registered. It is triggered only through the `staging_readiness` repository-dispatch event, so GitHub sources the workflow and ref from the default branch instead of a caller-selected branch/tag. The dispatch payload must include `confirmation=READ_ONLY_STAGING_CHECK`; do not add `workflow_dispatch` or another branch-selectable trigger. The workflow must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
 
 ### Provider Readiness - Read Only
 

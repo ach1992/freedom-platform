@@ -59,7 +59,7 @@ assert_plan() {
 # Required representative classes. These assertions are deliberately independent of the workflow conditions that consume the plan.
 assert_plan docs_only CONTROL true true false false false false false false false false docs/06-test-strategy.md
 assert_plan governance_only CONTROL true false false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
-assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness.yml
+assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness-runtime.yml
 assert_plan provider_mutation_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/provider-live-acceptance.yml
 assert_plan application_source APPLICATION false false false true true true false true false false app/Modules/Orders/Application/OrderService.php
 assert_plan localization_catalog APPLICATION false false false true true false false false false false resources/lang/fa/telegram.php
@@ -218,7 +218,7 @@ PY_CI_GATE
 printf '%s\n' 'Required CI gate contract tests passed.'
 
 readonly_verifier="$root/scripts/ci/verify-readonly-staging-workflow.sh"
-readonly_source="$root/.github/workflows/staging-readiness.yml"
+readonly_source="$root/.github/workflows/staging-readiness-runtime.yml"
 
 expect_readonly_reject() {
     local name=$1
@@ -234,7 +234,17 @@ mutation = sys.argv[2]
 text = path.read_text()
 
 mutations = {
-    'automatic_trigger': lambda s: s.replace('on:\n  workflow_dispatch:', 'on:\n  push:\n  workflow_dispatch:', 1),
+    'automatic_trigger': lambda s: s.replace('on:\n  repository_dispatch:', 'on:\n  push:\n  repository_dispatch:', 1),
+    'selectable_ref_trigger': lambda s: s.replace(
+        '  repository_dispatch:\n    types: [staging_readiness]',
+        '  workflow_dispatch:',
+        1,
+    ),
+    'trusted_ref_guard': lambda s: s.replace(
+        "    if: ${{ github.ref == 'refs/heads/main' && github.event.client_payload.confirmation == 'READ_ONLY_STAGING_CHECK' }}",
+        "    if: ${{ github.event.client_payload.confirmation == 'READ_ONLY_STAGING_CHECK' }}",
+        1,
+    ),
     'write_permission': lambda s: s.replace('contents: read', 'contents: write', 1),
     'secret': lambda s: s.replace('set -euo pipefail', "set -euo pipefail\n          echo '${{ secrets.RUNTIME_ROOT }}'", 1),
     'environment': lambda s: s.replace('    runs-on:', '    environment: production\n    runs-on:', 1),
@@ -260,6 +270,8 @@ PY_MUTATION
 
 bash "$readonly_verifier" "$readonly_source" >/dev/null
 expect_readonly_reject automatic_trigger automatic_trigger
+expect_readonly_reject selectable_ref_trigger selectable_ref_trigger
+expect_readonly_reject trusted_ref_guard trusted_ref_guard
 expect_readonly_reject write_permission write_permission
 expect_readonly_reject secret secret
 expect_readonly_reject environment environment

@@ -215,8 +215,13 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Generic CI is intentionally GitHub-hosted. Manual staging/provider workflows remain self-hosted
-# operational contracts and are dormant unless an explicitly trusted runner is connected.
+# Generic CI is intentionally GitHub-hosted. Staging readiness is default-branch repository-dispatch only;
+# provider workflows remain manual self-hosted operational contracts. All remain dormant unless an explicitly trusted runner is connected.
+test ! -e .github/workflows/staging-readiness.yml \
+    || fail 'retired branch-selectable staging-readiness workflow path must remain absent'
+test -s .github/workflows/staging-readiness-runtime.yml \
+    || fail 'default-branch staging-readiness runtime workflow is missing'
+
 shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
 shopt -u nullglob
@@ -241,7 +246,7 @@ for workflow in "${workflow_files[@]}"; do
                 fail 'generic CI must not retain a self-hosted runner route while the repository is public-ready'
             fi
             ;;
-        .github/workflows/staging-readiness.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
+        .github/workflows/staging-readiness-runtime.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
             while IFS= read -r runner_line; do
                 trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
                 [[ "$trimmed" == runs-on:\ \[*\] ]] \
@@ -350,8 +355,18 @@ if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KA
 fi
 
 # Superseded read-only checks may be cancelled; a guarded provider mutation must not be interrupted mid-effect.
-grep -A3 -F 'concurrency:' .github/workflows/staging-readiness.yml | grep -F 'cancel-in-progress: true' >/dev/null \
-    || fail 'staging-readiness must cancel superseded manual runs'
+staging_readonly=.github/workflows/staging-readiness-runtime.yml
+grep -F 'repository_dispatch:' "$staging_readonly" >/dev/null \
+    || fail 'staging-readiness must be sourced from default-branch repository_dispatch'
+grep -F 'types: [staging_readiness]' "$staging_readonly" >/dev/null \
+    || fail 'staging-readiness must retain its exact repository-dispatch event type'
+if grep -F 'workflow_dispatch:' "$staging_readonly" >/dev/null; then
+    fail 'staging-readiness must not regain a branch-selectable workflow_dispatch trigger'
+fi
+bash scripts/ci/verify-readonly-staging-workflow.sh "$staging_readonly" >/dev/null \
+    || fail 'staging-readiness read-only/default-branch verifier failed'
+grep -A3 -F 'concurrency:' "$staging_readonly" | grep -F 'cancel-in-progress: true' >/dev/null \
+    || fail 'staging-readiness must cancel superseded repository-dispatch runs'
 grep -A3 -F 'concurrency:' .github/workflows/provider-readiness.yml | grep -F 'cancel-in-progress: true' >/dev/null \
     || fail 'provider-readiness must cancel superseded read-only runs'
 grep -A3 -F 'concurrency:' .github/workflows/provider-live-acceptance.yml | grep -F 'cancel-in-progress: false' >/dev/null \

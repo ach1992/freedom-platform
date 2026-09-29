@@ -1,12 +1,8 @@
 name: Staging Readiness
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirmation:
-        description: Type READ_ONLY_STAGING_CHECK
-        required: true
-        type: string
+  repository_dispatch:
+    types: [staging_readiness]
 
 permissions:
   contents: read
@@ -18,7 +14,7 @@ concurrency:
 jobs:
   readiness:
     name: Read-only staging readiness
-    if: ${{ inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event.client_payload.confirmation == 'READ_ONLY_STAGING_CHECK' }}
     runs-on: [self-hosted, Linux, X64, freedom-staging-runtime]
     timeout-minutes: 10
     steps:
@@ -26,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test '${{ inputs.confirmation }}' = 'READ_ONLY_STAGING_CHECK'
+          test '${{ github.event.client_payload.confirmation }}' = 'READ_ONLY_STAGING_CHECK'
           test "$RUNNER_OS" = 'Linux'
           test "$RUNNER_ARCH" = 'X64'
 
