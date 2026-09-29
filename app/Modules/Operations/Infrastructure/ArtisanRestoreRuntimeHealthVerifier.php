@@ -19,18 +19,20 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
     ) {}
 
     /** @requirement BAK-002 OPS-001 SEC-001 QUA-001 */
-    public function verify(): void
+    public function verify(string $expectedAuthorityFingerprint): void
     {
         $this->assertRuntime();
+        if (preg_match('/\\A[0-9a-f]{64}\\z/', $expectedAuthorityFingerprint) !== 1) {
+            throw new RuntimeException('The expected Restore authority fingerprint is invalid.');
+        }
 
         $process = new Process(
             [
                 $this->phpBinary,
                 $this->artisanPath,
-                'health:check',
-                '--critical',
+                'operations:restore-runtime-attest',
+                '--expected-authority-fingerprint='.$expectedAuthorityFingerprint,
                 '--json',
-                '--redact',
                 '--no-ansi',
                 '--no-interaction',
             ],
