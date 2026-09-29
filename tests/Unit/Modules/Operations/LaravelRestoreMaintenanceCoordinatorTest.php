@@ -426,4 +426,3 @@ final class StatefulRestoreSchedulerMutationLock implements RestoreSchedulerMuta
         return $this->held;
     }
 }
-
