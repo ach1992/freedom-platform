@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\Operations\Application\Contracts\RestorePayloadFilesystem;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use RuntimeException;
 use Throwable;
@@ -11,12 +12,54 @@ use Throwable;
 final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadRestorer
 {
     /**
+     * These values define runtime authority/containment location rather than
+     * application data. Controlled full restore may rotate secrets and other
+     * non-authority configuration, but it must not silently redirect critical
+     * database/Redis/queue/cache/maintenance authority.
+     *
+     * @var list<string>
+     */
+    private const CRITICAL_ENVIRONMENT_KEYS = [
+        'APP_NAME',
+        'APP_MAINTENANCE_DRIVER',
+        'APP_MAINTENANCE_STORE',
+        'DB_CONNECTION',
+        'DB_URL',
+        'DB_HOST',
+        'DB_PORT',
+        'DB_DATABASE',
+        'DB_USERNAME',
+        'DB_SOCKET',
+        'DB_CACHE_CONNECTION',
+        'DB_CACHE_TABLE',
+        'DB_CACHE_LOCK_CONNECTION',
+        'DB_CACHE_LOCK_TABLE',
+        'QUEUE_CONNECTION',
+        'REDIS_QUEUE_CONNECTION',
+        'REDIS_QUEUE',
+        'CACHE_STORE',
+        'CACHE_PREFIX',
+        'REDIS_CACHE_CONNECTION',
+        'REDIS_CACHE_LOCK_CONNECTION',
+        'REDIS_CLIENT',
+        'REDIS_CLUSTER',
+        'REDIS_PREFIX',
+        'REDIS_URL',
+        'REDIS_HOST',
+        'REDIS_PORT',
+        'REDIS_USERNAME',
+        'REDIS_DB',
+        'REDIS_CACHE_DB',
+    ];
+
+    /**
      * @param  array<string, string>  $configFiles
      * @param  array<string, string>  $privateDirectories
      */
     public function __construct(
         private array $configFiles,
         private array $privateDirectories,
+        private RestorePayloadFilesystem $filesystem,
     ) {}
 
     /** @param array<string, string> $entries */
@@ -30,33 +73,16 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             foreach ($this->configFiles as $name => $configuredTarget) {
                 $source = $entries['config/'.$name];
                 $target = $this->safeFileTarget($configuredTarget);
-                $suffix = hash('sha256', $target);
-                $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
-                $previous = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.previous';
-
-                $this->assertSwapPathsAvailable($stage, $previous);
-                $operations[] = [
-                    'target' => $target,
-                    'stage' => $stage,
-                    'previous' => $previous,
-                    'had_original' => file_exists($target),
-                ];
-                $this->copyRegularFile($source, $stage);
+                $operations[] = $this->fileOperation($source, $target, $restoreRunId);
+                $this->copyRegularFile($source, $operations[array_key_last($operations)]['stage']);
             }
 
             foreach ($this->privateDirectories as $name => $configuredTarget) {
                 $target = $this->safeDirectoryTarget($configuredTarget);
-                $suffix = hash('sha256', $target);
-                $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
-                $previous = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.previous';
+                $operations[] = $this->directoryOperation($target, $restoreRunId);
+                $operationIndex = array_key_last($operations);
+                $stage = $operations[$operationIndex]['stage'];
 
-                $this->assertSwapPathsAvailable($stage, $previous);
-                $operations[] = [
-                    'target' => $target,
-                    'stage' => $stage,
-                    'previous' => $previous,
-                    'had_original' => file_exists($target),
-                ];
                 if (! mkdir($stage, 0700) || ! chmod($stage, 0700)) {
                     throw new RuntimeException('A private restore staging directory could not be secured.');
                 }
@@ -78,62 +104,44 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 }
             }
         } catch (Throwable $throwable) {
-            foreach ($operations as $operation) {
-                if (file_exists($operation['stage']) || is_link($operation['stage'])) {
-                    $this->removeTree($operation['stage']);
-                }
+            if (! $this->cleanupStages($operations)) {
+                throw new RuntimeException('Restore payload staging cleanup was incomplete.', 0, $throwable);
             }
 
             throw $throwable;
         }
 
-        $committed = [];
-
         try {
-            foreach ($operations as $operation) {
-                if ($operation['had_original'] && ! rename($operation['target'], $operation['previous'])) {
-                    throw new RuntimeException('A restore target could not be staged for replacement.');
-                }
-
-                if (! rename($operation['stage'], $operation['target'])) {
-                    if ($operation['had_original'] && file_exists($operation['previous'])) {
-                        @rename($operation['previous'], $operation['target']);
+            foreach ($operations as $index => $operation) {
+                if ($operation['had_original']) {
+                    $this->ensureRecoveryDirectory($operation['recovery_directory']);
+                    if (! $this->filesystem->move($operation['target'], $operation['recovery'])) {
+                        throw new RuntimeException('A restore target could not enter protected recovery state.');
                     }
 
+                    $operations[$index]['original_moved'] = true;
+                }
+
+                if (! $this->filesystem->move($operation['stage'], $operation['target'])) {
                     throw new RuntimeException('A staged restore target could not be activated.');
                 }
 
-                $committed[] = $operation;
+                $operations[$index]['activated'] = true;
             }
         } catch (Throwable $throwable) {
-            for ($index = count($committed) - 1; $index >= 0; $index--) {
-                $operation = $committed[$index];
+            $rollbackComplete = $this->rollbackOperations($operations);
+            $stagingClean = $this->cleanupStages($operations);
+            $recoveryClean = $this->cleanupEmptyRecoveryDirectories($operations);
 
-                if (file_exists($operation['target']) || is_link($operation['target'])) {
-                    $this->removeTree($operation['target']);
-                }
-
-                if ($operation['had_original']
-                    && file_exists($operation['previous'])
-                    && ! rename($operation['previous'], $operation['target'])
-                ) {
-                    throw new RuntimeException('Restore payload rollback could not restore the previous target.', 0, $throwable);
-                }
+            if (! $rollbackComplete || ! $stagingClean || ! $recoveryClean) {
+                throw new RuntimeException('Restore payload rollback or cleanup was incomplete.', 0, $throwable);
             }
 
             throw $throwable;
-        } finally {
-            foreach ($operations as $operation) {
-                if (file_exists($operation['stage']) || is_link($operation['stage'])) {
-                    $this->removeTree($operation['stage']);
-                }
-            }
         }
 
-        foreach ($operations as $operation) {
-            if (file_exists($operation['previous']) || is_link($operation['previous'])) {
-                $this->removeTree($operation['previous']);
-            }
+        if (! $this->cleanupStages($operations) || ! $this->discardProtectedRecovery($operations)) {
+            throw new RuntimeException('Restore payload recovery cleanup was incomplete after activation.');
         }
     }
 
@@ -178,6 +186,262 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
 
             throw new RuntimeException('The restore bundle contains an unsupported payload target.');
         }
+
+        $this->assertCriticalEnvironmentAuthority($entries);
+    }
+
+    /**
+     * @return array{
+     *   target:string,
+     *   stage:string,
+     *   recovery_directory:string,
+     *   recovery:string,
+     *   had_original:bool,
+     *   original_moved:bool,
+     *   activated:bool
+     * }
+     */
+    private function fileOperation(string $source, string $target, string $restoreRunId): array
+    {
+        if (! is_file($source) || is_link($source) || ! is_readable($source)) {
+            throw new RuntimeException('A restore configuration payload source is unsafe.');
+        }
+
+        return $this->operation($target, $restoreRunId);
+    }
+
+    /**
+     * @return array{
+     *   target:string,
+     *   stage:string,
+     *   recovery_directory:string,
+     *   recovery:string,
+     *   had_original:bool,
+     *   original_moved:bool,
+     *   activated:bool
+     * }
+     */
+    private function directoryOperation(string $target, string $restoreRunId): array
+    {
+        return $this->operation($target, $restoreRunId);
+    }
+
+    /**
+     * @return array{
+     *   target:string,
+     *   stage:string,
+     *   recovery_directory:string,
+     *   recovery:string,
+     *   had_original:bool,
+     *   original_moved:bool,
+     *   activated:bool
+     * }
+     */
+    private function operation(string $target, string $restoreRunId): array
+    {
+        $suffix = hash('sha256', $target);
+        $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
+        $recoveryDirectory = dirname($target).'/.restore-recovery-'.$restoreRunId;
+        $recovery = $recoveryDirectory.'/'.$suffix;
+
+        $this->assertSwapPathsAvailable($stage, $recovery);
+
+        return [
+            'target' => $target,
+            'stage' => $stage,
+            'recovery_directory' => $recoveryDirectory,
+            'recovery' => $recovery,
+            'had_original' => file_exists($target),
+            'original_moved' => false,
+            'activated' => false,
+        ];
+    }
+
+    /** @param array<int, array<string, mixed>> $operations */
+    private function rollbackOperations(array $operations): bool
+    {
+        $complete = true;
+
+        for ($index = count($operations) - 1; $index >= 0; $index--) {
+            $operation = $operations[$index];
+
+            if (($operation['activated'] ?? false) === true
+                && (file_exists($operation['target']) || is_link($operation['target']))
+            ) {
+                try {
+                    $this->filesystem->remove($operation['target']);
+                } catch (Throwable) {
+                    $complete = false;
+                }
+            }
+
+            if (($operation['original_moved'] ?? false) === true
+                && (file_exists($operation['recovery']) || is_link($operation['recovery']))
+            ) {
+                if (! $this->filesystem->move($operation['recovery'], $operation['target'])) {
+                    $complete = false;
+                }
+            }
+        }
+
+        return $complete;
+    }
+
+    /** @param array<int, array<string, mixed>> $operations */
+    private function cleanupStages(array $operations): bool
+    {
+        $complete = true;
+
+        foreach ($operations as $operation) {
+            if (! isset($operation['stage'])
+                || (! file_exists($operation['stage']) && ! is_link($operation['stage']))
+            ) {
+                continue;
+            }
+
+            try {
+                $this->filesystem->remove($operation['stage']);
+            } catch (Throwable) {
+                $complete = false;
+            }
+        }
+
+        return $complete;
+    }
+
+    /** @param array<int, array<string, mixed>> $operations */
+    private function discardProtectedRecovery(array $operations): bool
+    {
+        $complete = true;
+
+        foreach ($operations as $operation) {
+            if (($operation['original_moved'] ?? false) !== true
+                || (! file_exists($operation['recovery']) && ! is_link($operation['recovery']))
+            ) {
+                continue;
+            }
+
+            try {
+                $this->filesystem->remove($operation['recovery']);
+            } catch (Throwable) {
+                $complete = false;
+            }
+        }
+
+        return $this->cleanupEmptyRecoveryDirectories($operations) && $complete;
+    }
+
+    /** @param array<int, array<string, mixed>> $operations */
+    private function cleanupEmptyRecoveryDirectories(array $operations): bool
+    {
+        $complete = true;
+        $directories = [];
+
+        foreach ($operations as $operation) {
+            $directory = $operation['recovery_directory'] ?? null;
+            if (is_string($directory) && $directory !== '') {
+                $directories[$directory] = true;
+            }
+        }
+
+        foreach (array_keys($directories) as $directory) {
+            if (! is_dir($directory) || is_link($directory)) {
+                continue;
+            }
+
+            $entries = array_values(array_diff(scandir($directory) ?: [], ['.', '..']));
+            if ($entries !== []) {
+                continue;
+            }
+
+            if (! rmdir($directory)) {
+                $complete = false;
+            }
+        }
+
+        return $complete;
+    }
+
+    private function ensureRecoveryDirectory(string $directory): void
+    {
+        if (is_link($directory) || (file_exists($directory) && ! is_dir($directory))) {
+            throw new RuntimeException('A restore protected recovery directory is unsafe.');
+        }
+
+        if (! is_dir($directory) && ! mkdir($directory, 0700)) {
+            throw new RuntimeException('A restore protected recovery directory could not be created.');
+        }
+
+        if (! chmod($directory, 0700)) {
+            throw new RuntimeException('A restore protected recovery directory could not be secured.');
+        }
+    }
+
+    /** @param array<string, string> $entries */
+    private function assertCriticalEnvironmentAuthority(array $entries): void
+    {
+        $configured = $this->configFiles['environment'] ?? null;
+        $candidate = $entries['config/environment'] ?? null;
+
+        if ($configured === null && $candidate === null) {
+            return;
+        }
+
+        if (! is_string($configured) || ! is_string($candidate)) {
+            throw new RuntimeException('Restore critical environment authority is unavailable.');
+        }
+
+        $currentIdentity = $this->criticalEnvironmentIdentity($configured);
+        $candidateIdentity = $this->criticalEnvironmentIdentity($candidate);
+
+        if ($currentIdentity !== $candidateIdentity) {
+            throw new RuntimeException('Restore critical runtime authority configuration does not match the current deployment.');
+        }
+    }
+
+    /** @return array<string, string> */
+    private function criticalEnvironmentIdentity(string $path): array
+    {
+        if (! is_file($path) || is_link($path) || ! is_readable($path)) {
+            throw new RuntimeException('Restore critical environment authority is unavailable.');
+        }
+
+        $lines = file($path, FILE_IGNORE_NEW_LINES);
+        if ($lines === false) {
+            throw new RuntimeException('Restore critical environment authority could not be read.');
+        }
+
+        $identity = [];
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            if (str_starts_with($line, 'export ')) {
+                $line = trim(substr($line, 7));
+            }
+
+            if (preg_match('/\A([A-Z][A-Z0-9_]*)\s*=(.*)\z/', $line, $matches) !== 1) {
+                continue;
+            }
+
+            $key = $matches[1];
+            if (! in_array($key, self::CRITICAL_ENVIRONMENT_KEYS, true)) {
+                continue;
+            }
+
+            if (array_key_exists($key, $identity)) {
+                throw new RuntimeException('Restore critical environment authority contains duplicate keys.');
+            }
+
+            $identity[$key] = hash('sha256', trim($matches[2]));
+        }
+
+        ksort($identity, SORT_STRING);
+
+        return $identity;
     }
 
     private function safeFileTarget(string $configuredPath): string
@@ -224,11 +488,11 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
         return $target;
     }
 
-    private function assertSwapPathsAvailable(string $stage, string $previous): void
+    private function assertSwapPathsAvailable(string $stage, string $recovery): void
     {
-        foreach ([$stage, $previous] as $path) {
+        foreach ([$stage, $recovery] as $path) {
             if (file_exists($path) || is_link($path)) {
-                throw new RuntimeException('A restore swap path already exists.');
+                throw new RuntimeException('A restore swap or recovery path already exists.');
             }
         }
     }
@@ -265,35 +529,6 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             || ! chmod($directory, 0700)
         ) {
             throw new RuntimeException('A private restore staging path could not be secured.');
-        }
-    }
-
-    private function removeTree(string $path): void
-    {
-        if (is_link($path)) {
-            throw new RuntimeException('A restore swap path contains an unsafe symbolic link.');
-        }
-
-        if (is_file($path)) {
-            if (! unlink($path)) {
-                throw new RuntimeException('A restore swap file could not be removed.');
-            }
-
-            return;
-        }
-
-        if (! is_dir($path)) {
-            return;
-        }
-
-        foreach (scandir($path) ?: [] as $name) {
-            if ($name !== '.' && $name !== '..') {
-                $this->removeTree($path.'/'.$name);
-            }
-        }
-
-        if (! rmdir($path)) {
-            throw new RuntimeException('A restore swap directory could not be removed.');
         }
     }
 
