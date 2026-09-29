@@ -18,12 +18,12 @@ use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
+use App\Modules\Operations\Application\Contracts\RestoreRuntimeHealthVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\QueueWorkerHeartbeatReporter;
 use App\Modules\Operations\Application\RestoreManager;
 use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
 use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
-use App\Modules\Operations\Application\RuntimeHealthProbe;
 use App\Modules\Operations\Application\WorkerHeartbeatService;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
@@ -238,10 +238,24 @@ final class OperationsServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            RestoreRuntimeHealthVerifier::class,
+            function (Application $application): RestoreRuntimeHealthVerifier {
+                $restore = $application->make(RestoreRuntimeConfiguration::class);
+
+                return new ArtisanRestoreRuntimeHealthVerifier(
+                    PHP_BINARY,
+                    base_path('artisan'),
+                    base_path(),
+                    $restore->processTimeoutSeconds,
+                );
+            },
+        );
+
+        $this->app->singleton(
             RestorePostRestoreVerifier::class,
             fn (Application $application): RestorePostRestoreVerifier => new DatabaseRestorePostVerifier(
                 $application->make(DatabaseManager::class),
-                $application->make(RuntimeHealthProbe::class),
+                $application->make(RestoreRuntimeHealthVerifier::class),
                 database_path('migrations'),
             ),
         );
