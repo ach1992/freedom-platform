@@ -71,6 +71,22 @@ final readonly class RuntimeDeploymentInvariants
             && ($configuration['after_commit'] ?? null) === true;
     }
 
+    public function restoreQuiescenceCompatible(int $quiesceSeconds, string $supervisorTemplate): bool
+    {
+        if ($quiesceSeconds < 1
+            || preg_match_all('/--timeout(?:=|\s+)(\d+)/', $supervisorTemplate, $matches) < 1
+        ) {
+            return false;
+        }
+
+        $workerTimeouts = array_map('intval', $matches[1]);
+        if ($workerTimeouts === [] || min($workerTimeouts) < 1) {
+            return false;
+        }
+
+        return $quiesceSeconds >= max($workerTimeouts) + 60;
+    }
+
     public function redisQueueRetryCompatible(mixed $configuration, string $supervisorTemplate): bool
     {
         if (! is_array($configuration) || ($configuration['driver'] ?? null) !== 'redis') {

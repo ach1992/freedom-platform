@@ -12,4 +12,6 @@ interface BackupArtifactCipher
 
     /** @return array{bytes:int,sha256:string} */
     public function encryptFile(string $sourcePath, string $destinationPath): array;
+
+    public function decryptFile(string $sourcePath, string $destinationPath): void;
 }

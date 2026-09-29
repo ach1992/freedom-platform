@@ -36,4 +36,11 @@ return [
             'application' => storage_path('app/private'),
         ],
     ],
+
+    'restore' => [
+        'enabled' => filter_var(env('RESTORE_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'mariadb_binary' => env('RESTORE_MARIADB_BINARY', '/usr/bin/mariadb'),
+        'process_timeout_seconds' => (int) env('RESTORE_PROCESS_TIMEOUT_SECONDS', 1800),
+        'quiesce_seconds' => (int) env('RESTORE_QUIESCE_SECONDS', 360),
+    ],
 ];
