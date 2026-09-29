@@ -146,6 +146,38 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
         return $resolved;
     }
 
+    /** @requirement UPD-001 RUN-002 SEC-008 QUA-001 */
+    public function sealPublishedRelease(string $releaseId): void
+    {
+        $this->assertReleaseId($releaseId);
+
+        if ($this->currentReleaseId() === $releaseId) {
+            throw new RuntimeException('The active release cannot be sealed by the staging authority.');
+        }
+
+        $releases = $this->releasesDirectory($this->root());
+        $path = $releases.'/'.$releaseId;
+        $resolved = realpath($path);
+
+        if ($resolved === false
+            || ! is_dir($resolved)
+            || is_link($path)
+            || dirname($resolved) !== $releases
+            || basename($resolved) !== $releaseId
+        ) {
+            throw new RuntimeException('The published release is unavailable or outside authority.');
+        }
+
+        $manifest = $this->readJson($resolved.'/release-manifest.json', 'The published release manifest is invalid.');
+        if (($manifest['authority'] ?? null) !== 'freedom_platform_release_v1'
+            || ($manifest['release_id'] ?? null) !== $releaseId
+        ) {
+            throw new RuntimeException('The published release is not owned by the controlled updater.');
+        }
+
+        $this->sealTree($resolved, $resolved, $resolved.'/bootstrap/cache');
+    }
+
     public function discardStaging(string $stagingPath): void
     {
         $root = $this->root();
@@ -508,6 +540,49 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
             && ! str_contains($releaseId, '..');
     }
 
+    private function sealTree(string $path, string $releaseRoot, string $mutableCacheRoot): void
+    {
+        if (is_link($path)) {
+            $relative = ltrim(substr($path, strlen($releaseRoot)), DIRECTORY_SEPARATOR);
+            if (! in_array($relative, ['.env', 'storage'], true)) {
+                throw new RuntimeException('The published release contains an unapproved symbolic link.');
+            }
+
+            return;
+        }
+
+        $mutable = $path === $mutableCacheRoot
+            || str_starts_with($path, $mutableCacheRoot.DIRECTORY_SEPARATOR);
+
+        if (is_file($path)) {
+            if (! chmod($path, $mutable ? 0640 : 0440)) {
+                throw new RuntimeException('A published release file could not be sealed.');
+            }
+
+            return;
+        }
+
+        if (! is_dir($path)) {
+            throw new RuntimeException('A published release path could not be sealed safely.');
+        }
+
+        $entries = scandir($path);
+        if (! is_array($entries)) {
+            throw new RuntimeException('A published release directory could not be inspected for sealing.');
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $this->sealTree($path.'/'.$entry, $releaseRoot, $mutableCacheRoot);
+        }
+
+        if (! chmod($path, $mutable ? 0750 : 0550)) {
+            throw new RuntimeException('A published release directory could not be sealed.');
+        }
+    }
+
     private function removeTree(string $path): void
     {
         if (is_link($path)) {
@@ -526,6 +601,10 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
         }
         if (! is_dir($path)) {
             return;
+        }
+
+        if (! chmod($path, 0750)) {
+            throw new RuntimeException('A release directory could not be reopened for controlled removal.');
         }
 
         $entries = scandir($path);
