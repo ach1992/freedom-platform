@@ -189,6 +189,11 @@ final readonly class RestoreManager
                     $this->payloadRestorer->restore($entries, $restoreRunId);
                     $this->markPhase($report, 'private_config_restore_completed');
 
+                    $phase = 'runtime_refresh';
+                    $this->workspace->storeReport($restoreRunId, $report);
+                    $this->maintenance->refreshRuntime($restoreRunId);
+                    $this->markPhase($report, 'restored_runtime_refreshed');
+
                     $phase = 'post_restore_verification';
                     $this->workspace->storeReport($restoreRunId, $report);
                     $report['verification'] = $this->postRestoreVerifier->verify();
