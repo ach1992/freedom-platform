@@ -6,6 +6,7 @@ namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\RestorePayloadFilesystem;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
+use Dotenv\Dotenv;
 use RuntimeException;
 use Throwable;
 
@@ -409,14 +410,14 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             throw new RuntimeException('Restore critical environment authority is unavailable.');
         }
 
-        $lines = file($path, FILE_IGNORE_NEW_LINES);
-        if ($lines === false) {
+        $contents = file_get_contents($path);
+        if (! is_string($contents)) {
             throw new RuntimeException('Restore critical environment authority could not be read.');
         }
 
-        $identity = [];
+        $seenCriticalKeys = [];
 
-        foreach ($lines as $line) {
+        foreach (preg_split('/\\R/', $contents) ?: [] as $line) {
             $line = trim($line);
             if ($line === '' || str_starts_with($line, '#')) {
                 continue;
@@ -426,7 +427,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 $line = trim(substr($line, 7));
             }
 
-            if (preg_match('/\A([A-Z][A-Z0-9_]*)\s*=(.*)\z/', $line, $matches) !== 1) {
+            if (preg_match('/\\A([A-Z][A-Z0-9_]*)\\s*=(.*)\\z/', $line, $matches) !== 1) {
                 continue;
             }
 
@@ -435,11 +436,44 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 continue;
             }
 
-            if (array_key_exists($key, $identity)) {
+            if (array_key_exists($key, $seenCriticalKeys)) {
                 throw new RuntimeException('Restore critical environment authority contains duplicate keys.');
             }
 
-            $identity[$key] = hash('sha256', trim($matches[2]));
+            if (preg_match_all('/\\$\\{([A-Z][A-Z0-9_]*)\\}/', $matches[2], $references) > 0) {
+                foreach ($references[1] as $reference) {
+                    if (! in_array($reference, self::CRITICAL_ENVIRONMENT_KEYS, true)
+                        || ! array_key_exists($reference, $seenCriticalKeys)
+                    ) {
+                        throw new RuntimeException(
+                            'Restore critical environment authority uses unresolved or unapproved variable interpolation.',
+                        );
+                    }
+                }
+            }
+
+            $seenCriticalKeys[$key] = true;
+        }
+
+        try {
+            $parsed = Dotenv::parse($contents);
+        } catch (Throwable) {
+            throw new RuntimeException('Restore critical environment authority could not be parsed.');
+        }
+
+        $identity = [];
+
+        foreach (self::CRITICAL_ENVIRONMENT_KEYS as $key) {
+            if (! array_key_exists($key, $parsed)) {
+                continue;
+            }
+
+            $value = $parsed[$key];
+            if (! is_string($value)) {
+                throw new RuntimeException('Restore critical environment authority contains an invalid critical value.');
+            }
+
+            $identity[$key] = hash('sha256', $value);
         }
 
         ksort($identity, SORT_STRING);
