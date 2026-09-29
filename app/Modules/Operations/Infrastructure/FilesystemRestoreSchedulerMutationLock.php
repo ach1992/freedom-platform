@@ -64,7 +64,18 @@ final class FilesystemRestoreSchedulerMutationLock implements RestoreSchedulerMu
 
     public function held(): bool
     {
-        return is_resource($this->handle);
+        if (! is_resource($this->handle)) {
+            return false;
+        }
+
+        if (flock($this->handle, LOCK_EX | LOCK_NB)) {
+            return true;
+        }
+
+        fclose($this->handle);
+        $this->handle = null;
+
+        return false;
     }
 
     /** @requirement BAK-002 OPS-003 QUA-001 */
