@@ -14,11 +14,14 @@ use App\Modules\Operations\Application\Contracts\BackupBundleWriter as BackupBun
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
 use App\Modules\Operations\Application\Contracts\BackupPayloadCollector as BackupPayloadCollectorContract;
 use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\RestoreCriticalAuthorityIdentity;
 use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
+use App\Modules\Operations\Application\Contracts\RestorePayloadFilesystem;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreRuntimeHealthVerifier;
+use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\QueueWorkerHeartbeatReporter;
 use App\Modules\Operations\Application\RestoreManager;
@@ -176,6 +179,22 @@ final class OperationsServiceProvider extends ServiceProvider
 
         $this->app->singleton(BackupBundleReaderContract::class, BackupBundleReader::class);
 
+        $this->app->singleton(RestorePayloadFilesystem::class, NativeRestorePayloadFilesystem::class);
+
+        $this->app->singleton(
+            RestoreSchedulerMutationLock::class,
+            static fn (): RestoreSchedulerMutationLock => new FilesystemRestoreSchedulerMutationLock(
+                storage_path('framework/operations-scheduler-mutation.lock'),
+            ),
+        );
+
+        $this->app->singleton(
+            RestoreCriticalAuthorityIdentity::class,
+            fn (Application $application): RestoreCriticalAuthorityIdentity => new LaravelRestoreCriticalAuthorityIdentity(
+                $application->make(DatabaseManager::class),
+            ),
+        );
+
         $this->app->singleton(
             RestoreWorkspace::class,
             fn (Application $application): RestoreWorkspace => new FilesystemRestoreWorkspace(
@@ -191,6 +210,7 @@ final class OperationsServiceProvider extends ServiceProvider
                 return new FilesystemRestorePayloadRestorer(
                     $backup->configFiles,
                     $backup->privateDirectories,
+                    $application->make(RestorePayloadFilesystem::class),
                 );
             },
         );
@@ -204,6 +224,7 @@ final class OperationsServiceProvider extends ServiceProvider
                     $application->make(MaintenanceMode::class),
                     $application->make(Kernel::class),
                     $application->make(RuntimeDeploymentInvariants::class),
+                    $application->make(RestoreSchedulerMutationLock::class),
                     base_path('deploy/supervisor/freedom-platform.conf'),
                     $restore->quiesceSeconds,
                 );
@@ -255,6 +276,7 @@ final class OperationsServiceProvider extends ServiceProvider
             RestorePostRestoreVerifier::class,
             fn (Application $application): RestorePostRestoreVerifier => new DatabaseRestorePostVerifier(
                 $application->make(DatabaseManager::class),
+                $application->make(RestoreCriticalAuthorityIdentity::class),
                 $application->make(RestoreRuntimeHealthVerifier::class),
                 database_path('migrations'),
             ),
