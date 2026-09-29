@@ -51,6 +51,9 @@ final class FilesystemUpdateWorkspaceTest extends TestCase
                 'release_id' => '1.1.0',
             ], JSON_THROW_ON_ERROR));
             file_put_contents($staging.'/code.php', "<?php\n");
+            mkdir($staging.'/deploy/bin', 0750, true);
+            file_put_contents($staging.'/deploy/bin/worker.sh', "#!/usr/bin/env bash\nexit 0\n");
+            chmod($staging.'/deploy/bin/worker.sh', 0750);
             mkdir($staging.'/bootstrap/cache', 0750, true);
             file_put_contents($staging.'/bootstrap/cache/packages.php', "<?php\nreturn [];\n");
 
@@ -59,6 +62,7 @@ final class FilesystemUpdateWorkspaceTest extends TestCase
 
             self::assertSame(0550, fileperms($published) & 0777);
             self::assertSame(0440, fileperms($published.'/code.php') & 0777);
+            self::assertSame(0550, fileperms($published.'/deploy/bin/worker.sh') & 0777);
             self::assertSame(0550, fileperms($published.'/bootstrap') & 0777);
             self::assertSame(0750, fileperms($published.'/bootstrap/cache') & 0777);
             self::assertSame(0640, fileperms($published.'/bootstrap/cache/packages.php') & 0777);
