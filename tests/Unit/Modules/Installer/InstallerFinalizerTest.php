@@ -135,6 +135,58 @@ final class InstallerFinalizerTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_interpolated_app_env_is_rejected_before_non_production_classification_or_side_effects(): void
+    {
+        $paths = $this->paths('interpolated-app-env-classification');
+        $runner = new RecordingFinalizationRunner;
+        $original = implode("\n", [
+            'APP_KEY="base64:existing-test-key"',
+            'TARGET_ENV="local"',
+            'APP_ENV="${TARGET_ENV}"',
+            'APP_DEBUG="true"',
+            'APP_URL="http://localhost:8000"',
+            'SESSION_ENCRYPT="false"',
+            'SESSION_SECURE_COOKIE="false"',
+            '',
+        ]);
+        $this->writeFixture($paths['environment'], $original);
+        [$finalizer, $lock] = $this->finalizer(
+            $paths,
+            $runner,
+            'testing',
+            ['APP_KEY', 'APP_ENV', 'APP_DEBUG', 'APP_URL', 'SESSION_ENCRYPT', 'SESSION_SECURE_COOKIE'],
+        );
+        $previousTarget = getenv('TARGET_ENV');
+        putenv('TARGET_ENV=production');
+
+        try {
+            try {
+                $finalizer->finalize([]);
+                $this->fail('Interpolated APP_ENV must be rejected before target classification.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame(
+                    'The installer production environment must use literal security-critical values.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $this->assertSame([], $runner->actions);
+            $this->assertFalse($lock->exists());
+            $this->assertSame($original, file_get_contents($paths['environment']));
+            $this->assertFileDoesNotExist($paths['snapshot']);
+            $this->assertFileDoesNotExist($paths['snapshot'].'.json');
+        } finally {
+            if ($previousTarget === false) {
+                putenv('TARGET_ENV');
+            } else {
+                putenv('TARGET_ENV='.$previousTarget);
+            }
+
+            $this->cleanup($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_migration_failure_restores_environment_and_prevents_lock_activation(): void
     {
         $paths = $this->paths('migration-failure');

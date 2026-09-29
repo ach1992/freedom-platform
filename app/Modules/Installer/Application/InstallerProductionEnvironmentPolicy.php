@@ -62,6 +62,12 @@ final readonly class InstallerProductionEnvironmentPolicy
             );
         }
 
+        if ($interpolated['APP_ENV'] ?? false) {
+            throw new RuntimeException(
+                'The installer production environment must use literal security-critical values.',
+            );
+        }
+
         $productionBoot = $this->runtimeEnvironment === 'production';
         $productionTarget = ($values['APP_ENV'] ?? null) === 'production';
 
