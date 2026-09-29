@@ -26,7 +26,6 @@ final readonly class BackupBundleReader implements BackupBundleReaderContract
         }
 
         if (! mkdir($destinationDirectory, 0700, true)
-            || is_link($destinationDirectory)
             || ! chmod($destinationDirectory, 0700)
         ) {
             throw new RuntimeException('The restore extraction destination could not be secured.');
@@ -149,7 +148,7 @@ final readonly class BackupBundleReader implements BackupBundleReaderContract
         $buffer = '';
 
         while (strlen($buffer) < $length) {
-            $chunk = fread($handle, $length - strlen($buffer));
+            $chunk = fread($handle, max(1, $length - strlen($buffer)));
             if ($chunk === false || $chunk === '') {
                 throw new RuntimeException('The backup bundle is truncated.');
             }

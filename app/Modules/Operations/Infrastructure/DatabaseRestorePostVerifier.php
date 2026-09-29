@@ -175,7 +175,7 @@ SQL);
     private function violationCount(Connection $connection, string $sql): int
     {
         $row = $connection->selectOne($sql);
-        $violations = $row?->violations ?? null;
+        $violations = $row->violations ?? null;
 
         if (! is_int($violations) && ! is_string($violations)) {
             throw new RuntimeException('A restore reconciliation query returned an invalid result.');

@@ -23,7 +23,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
     public function restore(array $entries, string $restoreRunId): void
     {
         $this->assertRunId($restoreRunId);
-        $this->validateEntries($entries);
+        $this->preflight($entries);
         $operations = [];
 
         foreach ($this->configFiles as $name => $configuredTarget) {
@@ -151,7 +151,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             }
 
             $segments = explode('/', $logicalPath);
-            if (($segments[0] ?? null) === 'config') {
+            if ($segments[0] === 'config') {
                 if (count($segments) !== 2 || ! array_key_exists($segments[1], $this->configFiles)) {
                     throw new RuntimeException('The restore bundle contains an unknown configuration target.');
                 }
@@ -159,7 +159,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 continue;
             }
 
-            if (($segments[0] ?? null) === 'private') {
+            if ($segments[0] === 'private') {
                 if (count($segments) < 3 || ! array_key_exists($segments[1], $this->privateDirectories)) {
                     throw new RuntimeException('The restore bundle contains an unknown private target.');
                 }
