@@ -189,6 +189,36 @@ ENV);
         }
     }
 
+    /** @requirement BAK-002 OPS-003 SEC-001 QUA-001 */
+    public function test_preflight_rejects_unknown_critical_interpolation_syntax(): void
+    {
+        $base = $this->directory('unknown-interpolation');
+        $targetConfig = $base.'/.env';
+        $entries = $this->entries($base);
+        unset($entries['private/application/nested/new.txt']);
+
+        file_put_contents($targetConfig, <<<'ENV'
+DB_HOST=${DB_FALLBACK:-db-a.internal}
+ENV);
+        file_put_contents($entries['config/environment'], <<<'ENV'
+DB_HOST=${DB_FALLBACK:-db-a.internal}
+ENV);
+
+        try {
+            try {
+                $this->restorer(['environment' => $targetConfig], [])->preflight($entries);
+                self::fail('Unknown critical interpolation syntax must fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Restore critical environment authority uses unresolved or unapproved variable interpolation.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
     /** @requirement BAK-002 SEC-001 QUA-001 */
     public function test_staging_failure_removes_plaintext_swap_files_before_rethrow(): void
     {
