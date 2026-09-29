@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
-use App\Modules\Operations\Application\RuntimeHealthProbe;
+use App\Modules\Operations\Application\Contracts\RestoreRuntimeHealthVerifier;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use RuntimeException;
@@ -14,7 +14,7 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
 {
     public function __construct(
         private DatabaseManager $database,
-        private RuntimeHealthProbe $health,
+        private RestoreRuntimeHealthVerifier $runtimeHealth,
         private string $migrationsDirectory,
     ) {}
 
@@ -43,10 +43,7 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
             throw new RuntimeException('The restored domain reconciliation checks failed.');
         }
 
-        $healthChecks = $this->health->checks();
-        if (! $this->health->isHealthy($healthChecks)) {
-            throw new RuntimeException('The restored runtime health checks failed.');
-        }
+        $this->runtimeHealth->verify();
 
         return [
             'schema_migrations' => count($restoredMigrations),
