@@ -86,6 +86,58 @@ final class UpdateManagerTest extends TestCase
         self::assertNotContains('executor.migrate', $fixture->events->events);
     }
 
+    /** @requirement UPD-001 RUN-001 QUA-001 */
+    public function test_prerequisite_failure_stops_before_backup_or_staging(): void
+    {
+        $fixture = $this->fixture();
+        $fixture->executor->failPrerequisites = true;
+        $manager = $this->manager($fixture);
+
+        try {
+            $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+            self::fail('Failed runtime prerequisites must stop before update preparation.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('test-only-prerequisite-failure', $exception->getMessage());
+        }
+
+        self::assertNotContains('backup.create_verified', $fixture->events->events);
+        self::assertNotContains('workspace.stage', $fixture->events->events);
+        self::assertNotContains('maintenance.enter', $fixture->events->events);
+    }
+
+    /** @requirement UPD-001 RUN-006 QUA-001 */
+    public function test_dependency_preparation_failure_discards_staging_without_active_release_mutation(): void
+    {
+        $fixture = $this->fixture();
+        $fixture->executor->failPrepare = true;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('failed_pre_mutation', $result->status);
+        self::assertSame('1.0.0', $fixture->workspace->current);
+        self::assertContains('workspace.discard_staging', $fixture->events->events);
+        self::assertNotContains('workspace.publish', $fixture->events->events);
+        self::assertNotContains('maintenance.enter', $fixture->events->events);
+        self::assertNotContains('executor.migrate', $fixture->events->events);
+    }
+
+    /** @requirement UPD-001 RUN-002 QUA-001 */
+    public function test_shared_release_preparation_failure_removes_inactive_candidate_without_switching_current(): void
+    {
+        $fixture = $this->fixture();
+        $fixture->releases->failPrepare = true;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('failed_pre_mutation', $result->status);
+        self::assertSame('1.0.0', $fixture->workspace->current);
+        self::assertContains('workspace.publish', $fixture->events->events);
+        self::assertContains('workspace.discard_release', $fixture->events->events);
+        self::assertNotContains('maintenance.enter', $fixture->events->events);
+    }
+
     /** @requirement UPD-001 PAY-003 PRV-003 QUA-001 */
     public function test_unsafe_active_work_refusal_occurs_before_backup_or_mutation(): void
     {
@@ -124,6 +176,40 @@ final class UpdateManagerTest extends TestCase
         self::assertSame('restore_required', $report['status'] ?? null);
         self::assertSame('migration_failed', $report['failure_code'] ?? null);
         self::assertTrue($report['containment_retained'] ?? false);
+    }
+
+    /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
+    public function test_pre_activation_health_failure_recovers_previous_code_when_target_schema_is_compatible(): void
+    {
+        $fixture = $this->fixture(rollbackCompatible: true);
+        $fixture->executor->failVerifyAt = 1;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('failed_safely_rolled_back', $result->status);
+        self::assertSame('1.0.0', $fixture->workspace->current);
+        self::assertNotContains('release.activate', $fixture->events->events);
+        self::assertNotContains('release.rollback', $fixture->events->events);
+        self::assertSame('1.0.0', $fixture->workspace->identity['release_id'] ?? null);
+        self::assertFalse($fixture->maintenance->retained);
+    }
+
+    /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
+    public function test_activation_failure_after_pointer_switch_is_recovered_through_release_authority(): void
+    {
+        $fixture = $this->fixture(rollbackCompatible: true);
+        $fixture->releases->failActivateAfterSwitch = true;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('failed_safely_rolled_back', $result->status);
+        self::assertSame('1.0.0', $fixture->workspace->current);
+        self::assertContains('release.activate', $fixture->events->events);
+        self::assertContains('release.rollback', $fixture->events->events);
+        self::assertSame('1.0.0', $fixture->workspace->identity['release_id'] ?? null);
+        self::assertFalse($fixture->maintenance->retained);
     }
 
     /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
@@ -200,6 +286,39 @@ final class UpdateManagerTest extends TestCase
         self::assertContains('safety.workers', $fixture->events->events);
         self::assertContains('release.rollback', $fixture->events->events);
         self::assertTrue($fixture->maintenance->retained);
+    }
+
+    /** @requirement UPD-001 OPS-003 QUA-001 */
+    public function test_worker_reload_request_failure_is_recontained_and_recovered_before_resume(): void
+    {
+        $fixture = $this->fixture(rollbackCompatible: true);
+        $fixture->maintenance->failRefreshOnce = true;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('failed_safely_rolled_back', $result->status);
+        self::assertSame('1.0.0', $fixture->workspace->current);
+        self::assertContains('maintenance.retain', $fixture->events->events);
+        self::assertContains('release.rollback', $fixture->events->events);
+        self::assertFalse($fixture->maintenance->retained);
+    }
+
+    /** @requirement UPD-001 QUA-001 */
+    public function test_final_report_failure_after_successful_resume_does_not_reclassify_release_as_failed(): void
+    {
+        $fixture = $this->fixture(rollbackCompatible: true);
+        $fixture->workspace->failCompletedReport = true;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('completed_reporting_failed', $result->status);
+        self::assertSame('1.1.0', $fixture->workspace->current);
+        self::assertSame('1.1.0', $fixture->workspace->identity['release_id'] ?? null);
+        self::assertFalse($fixture->maintenance->retained);
+        self::assertNotContains('release.rollback', $fixture->events->events);
+        self::assertNotContains('maintenance.retain', $fixture->events->events);
     }
 
     /** @requirement UPD-001 BAK-002 QUA-001 */
@@ -407,6 +526,8 @@ final class FakeUpdateWorkspace implements UpdateWorkspace
 {
     public string $current = '1.0.0';
 
+    public bool $failCompletedReport = false;
+
     /** @var array<string,mixed>|null */
     public ?array $identity = null;
 
@@ -422,6 +543,13 @@ final class FakeUpdateWorkspace implements UpdateWorkspace
 
     public function storeReport(string $updateRunId, array $report): void
     {
+        if ($this->failCompletedReport
+            && ($report['status'] ?? null) === 'completed'
+            && ($report['report_finalized'] ?? false) === true
+        ) {
+            throw new RuntimeException('test-only-final-report-failure');
+        }
+
         $this->reports[] = $report;
     }
 
@@ -540,6 +668,10 @@ final class FakeVerifiedPreUpdateBackupProvider implements VerifiedPreUpdateBack
 
 final class FakeUpdateReleaseExecutor implements UpdateReleaseExecutor
 {
+    public bool $failPrerequisites = false;
+
+    public bool $failPrepare = false;
+
     public bool $failMigrate = false;
 
     public ?int $failVerifyAt = null;
@@ -554,11 +686,17 @@ final class FakeUpdateReleaseExecutor implements UpdateReleaseExecutor
     public function assertPrerequisites(VerifiedUpdatePackage $package): void
     {
         $this->events->add('executor.prerequisites');
+        if ($this->failPrerequisites) {
+            throw new RuntimeException('test-only-prerequisite-failure');
+        }
     }
 
     public function prepare(string $releasePath, VerifiedUpdatePackage $package): void
     {
         $this->events->add('executor.prepare');
+        if ($this->failPrepare) {
+            throw new RuntimeException('test-only-dependency-failure');
+        }
     }
 
     public function migrate(string $releasePath): void
@@ -582,6 +720,10 @@ final class FakeUpdateReleaseExecutor implements UpdateReleaseExecutor
 
 final class FakeReleaseActivator implements ReleaseActivator
 {
+    public bool $failPrepare = false;
+
+    public bool $failActivateAfterSwitch = false;
+
     public function __construct(
         private readonly UpdateEventLog $events,
         private readonly FakeUpdateWorkspace $workspace,
@@ -590,6 +732,9 @@ final class FakeReleaseActivator implements ReleaseActivator
     public function prepare(string $releaseId): string
     {
         $this->events->add('release.prepare');
+        if ($this->failPrepare) {
+            throw new RuntimeException('test-only-shared-link-failure');
+        }
 
         return '/tmp/fake-deployment/releases/'.$releaseId;
     }
@@ -599,6 +744,12 @@ final class FakeReleaseActivator implements ReleaseActivator
         $this->events->add('release.activate');
         $previous = $this->workspace->current;
         $this->workspace->current = $releaseId;
+
+        if ($this->failActivateAfterSwitch) {
+            $this->failActivateAfterSwitch = false;
+
+            throw new RuntimeException('test-only-activation-failure');
+        }
 
         return ['status' => 'activated', 'release' => $releaseId, 'previous_release' => $previous];
     }
@@ -619,6 +770,8 @@ final class FakeUpdateMaintenanceCoordinator implements RestoreMaintenanceCoordi
 
     public bool $failLeaveOnce = false;
 
+    public bool $failRefreshOnce = false;
+
     public function __construct(private readonly UpdateEventLog $events) {}
 
     public function enter(string $restoreRunId): void
@@ -630,6 +783,12 @@ final class FakeUpdateMaintenanceCoordinator implements RestoreMaintenanceCoordi
     public function refreshRuntime(string $restoreRunId): void
     {
         $this->events->add('maintenance.refresh');
+
+        if ($this->failRefreshOnce) {
+            $this->failRefreshOnce = false;
+
+            throw new RuntimeException('test-only-worker-reload-failure');
+        }
     }
 
     public function leave(string $restoreRunId): void
