@@ -132,9 +132,10 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
 
     /**
      * Re-establish and prove the post-mutation containment state after an
-     * uncertain failure. Each returned true value is a verified postcondition.
+     * uncertain failure. Full containment additionally requires queue-worker
+     * quiescence after maintenance and the Scheduler fence are re-established.
      *
-     * @return array{maintenance_owned:bool,scheduler_fence_held:bool}
+     * @return array{maintenance_owned:bool,scheduler_fence_held:bool,workers_quiesced:bool}
      *
      * @requirement BAK-002 OPS-003 QUA-001
      */
@@ -142,6 +143,8 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
     {
         $this->assertRunId($restoreRunId);
         $maintenanceOwned = false;
+        $schedulerFenceHeld = false;
+        $workersQuiesced = false;
 
         try {
             if (! $this->maintenance->active()) {
@@ -158,21 +161,45 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
             if (! $this->schedulerMutationLock->held()) {
                 $this->schedulerMutationLock->acquire($this->quiesceSeconds);
             }
+
+            $schedulerFenceHeld = $this->schedulerMutationLock->held();
         } catch (Throwable) {
-            // A partial recovery is reported truthfully by the returned state.
+            $schedulerFenceHeld = false;
         }
 
-        if ($maintenanceOwned) {
+        if ($maintenanceOwned && $schedulerFenceHeld) {
             try {
+                if ($this->console->call('queue:restart', ['--no-interaction' => true]) !== 0) {
+                    throw new RuntimeException('Queue worker recontainment could not be requested.');
+                }
+
+                $this->waitForWorkers();
                 $this->assertOwned($restoreRunId);
+                $maintenanceOwned = true;
+                $schedulerFenceHeld = $this->schedulerMutationLock->held();
+                $workersQuiesced = $schedulerFenceHeld;
             } catch (Throwable) {
-                $maintenanceOwned = false;
+                try {
+                    $this->assertOwned($restoreRunId);
+                    $maintenanceOwned = true;
+                } catch (Throwable) {
+                    $maintenanceOwned = false;
+                }
+
+                try {
+                    $schedulerFenceHeld = $this->schedulerMutationLock->held();
+                } catch (Throwable) {
+                    $schedulerFenceHeld = false;
+                }
+
+                $workersQuiesced = false;
             }
         }
 
         return [
             'maintenance_owned' => $maintenanceOwned,
-            'scheduler_fence_held' => $this->schedulerMutationLock->held(),
+            'scheduler_fence_held' => $schedulerFenceHeld,
+            'workers_quiesced' => $workersQuiesced,
         ];
     }
 
