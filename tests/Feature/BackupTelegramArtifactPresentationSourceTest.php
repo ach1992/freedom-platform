@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Modules\Operations\Infrastructure\BackupTelegramArtifactPresentationSource;
+use App\Modules\Operations\Application\BackupTelegramArtifactPresentationSource;
 use App\Modules\Operations\Infrastructure\FilesystemBackupRepository;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\DatabaseBackupTelegramOwnerDestinationResolver;
