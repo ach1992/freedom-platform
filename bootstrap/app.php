@@ -15,6 +15,7 @@ use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\QueueBackupTelegramExportCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Modules\Operations\Presentation\Console\RestoreBackupCommand;
+use App\Modules\Operations\Presentation\Console\RestoreRuntimeAttestCommand;
 use App\Modules\Payments\Presentation\Console\AlternativePaymentMaintenanceCommand;
 use App\Modules\Payments\Presentation\Console\PurchasePaymentMaintenanceCommand;
 use App\Modules\Promotions\Presentation\Console\ProcessReferralRewardsCommand;
@@ -69,6 +70,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ProcessReferralRewardsCommand::class,
         RecordWorkerHeartbeatCommand::class,
         RestoreBackupCommand::class,
+        RestoreRuntimeAttestCommand::class,
         AlternativePaymentMaintenanceCommand::class,
         PurchasePaymentMaintenanceCommand::class,
         ProcessTelegramBroadcastsCommand::class,
