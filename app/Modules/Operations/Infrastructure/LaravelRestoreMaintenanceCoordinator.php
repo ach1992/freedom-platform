@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
+use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
 use Closure;
 use Illuminate\Contracts\Console\Kernel;
@@ -18,6 +19,7 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
         private MaintenanceMode $maintenance,
         private Kernel $console,
         private RuntimeDeploymentInvariants $deploymentInvariants,
+        private RestoreSchedulerMutationLock $schedulerMutationLock,
         private string $supervisorTemplatePath,
         private int $quiesceSeconds,
         private ?Closure $waiter = null,
@@ -70,6 +72,8 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
             ]);
             $activated = true;
 
+            $this->schedulerMutationLock->acquire($this->quiesceSeconds);
+
             if ($this->console->call('queue:restart', ['--no-interaction' => true]) !== 0) {
                 throw new RuntimeException('Queue worker quiescence could not be requested.');
             }
@@ -77,6 +81,12 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
             $this->waitForWorkers();
             $this->assertOwned($restoreRunId);
         } catch (Throwable $throwable) {
+            try {
+                $this->schedulerMutationLock->release();
+            } catch (Throwable) {
+                // The process still owns any unreleased file lock until it terminates.
+            }
+
             if ($activated) {
                 try {
                     $data = $this->maintenance->active() ? $this->maintenance->data() : [];
@@ -117,6 +127,7 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
 
         $this->assertOwned($restoreRunId);
 
+        $this->schedulerMutationLock->release();
         $this->maintenance->deactivate();
 
         if ($this->maintenance->active()) {
