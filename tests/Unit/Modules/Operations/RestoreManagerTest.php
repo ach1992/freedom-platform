@@ -13,6 +13,7 @@ use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
+use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\RestoreManager;
 use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
 use App\Modules\Operations\Infrastructure\BackupBundleReader;
@@ -92,7 +93,11 @@ final class RestoreManagerTest extends TestCase
             self::assertSame($result->safetyBackupId, $report['safety_backup_id']);
             self::assertMatchesRegularExpression('/\A[0-9a-f]{64}\z/', (string) $report['safety_artifact_sha256']);
             self::assertTrue($report['mutation_started']);
+            self::assertTrue($report['report_finalized']);
             self::assertFalse($report['maintenance_retained']);
+            self::assertFalse($report['scheduler_mutation_fence_retained']);
+            self::assertFalse($report['worker_quiescence_retained']);
+            self::assertFalse($report['containment_retained']);
             self::assertSame(0, $report['verification']['ledger_violations']);
             self::assertSame(0, $report['verification']['order_payment_violations']);
             self::assertSame(0, $report['verification']['service_violations']);
@@ -305,7 +310,79 @@ final class RestoreManagerTest extends TestCase
             self::assertTrue($report['mutation_started']);
             self::assertTrue($report['maintenance_retained']);
             self::assertTrue($report['scheduler_mutation_fence_retained']);
+            self::assertTrue($report['worker_quiescence_retained']);
             self::assertTrue($report['containment_retained']);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_resume_failure_does_not_claim_full_containment_without_worker_quiescence(): void
+    {
+        $fixture = $this->fixture('resume-worker-unproven');
+
+        try {
+            $source = $this->sourceBackup($fixture);
+            $events = new RestoreEventLog;
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                resumeFailure: true,
+                retainWorkersQuiesced: false,
+            );
+
+            $this->expectRestoreFailure(fn () => $manager->run($source, true));
+
+            $report = $this->singleReport($fixture['root']);
+            self::assertSame('resume_failed', $report['failure_code']);
+            self::assertTrue($report['mutation_started']);
+            self::assertTrue($report['maintenance_retained']);
+            self::assertTrue($report['scheduler_mutation_fence_retained']);
+            self::assertFalse($report['worker_quiescence_retained']);
+            self::assertFalse($report['containment_retained']);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_final_report_failure_after_reopen_is_reported_without_reclassifying_restore_as_contained_failure(): void
+    {
+        $fixture = $this->fixture('final-report-failure');
+
+        try {
+            $source = $this->sourceBackup($fixture);
+            $events = new RestoreEventLog;
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                finalReportFailure: true,
+            );
+
+            $result = $manager->run($source, true);
+
+            self::assertSame('completed_reporting_failed', $result->status);
+            self::assertSame([
+                'payload_preflight',
+                'maintenance_enter',
+                'safety_backup_capture',
+                'payload_preflight',
+                'database_restore',
+                'payload_restore',
+                'runtime_refresh',
+                'post_restore_verify',
+                'maintenance_leave',
+            ], $events->events);
+
+            $report = $this->singleReport($fixture['root']);
+            self::assertSame('resume_pending', $report['status']);
+            self::assertFalse($report['report_finalized']);
+            self::assertTrue($report['maintenance_retained']);
+            self::assertTrue($report['scheduler_mutation_fence_retained']);
+            self::assertTrue($report['worker_quiescence_retained']);
+            self::assertTrue($report['containment_retained']);
+            self::assertNull($report['completed_at']);
         } finally {
             $this->removeTree($fixture['base']);
         }
@@ -395,6 +472,8 @@ final class RestoreManagerTest extends TestCase
         bool $postRestoreFailure = false,
         bool $maintenanceFailure = false,
         bool $resumeFailure = false,
+        bool $retainWorkersQuiesced = true,
+        bool $finalReportFailure = false,
     ): RestoreManager {
         $backup = $this->backupConfiguration($fixture);
         $repository = new FilesystemBackupRepository($backup->root);
@@ -429,10 +508,13 @@ final class RestoreManagerTest extends TestCase
                 $maintenanceFailure,
                 $runtimeRefreshFailure,
                 $resumeFailure,
+                $retainWorkersQuiesced,
             ),
             new RestoreTestPayloadRestorer($events, $payloadFailure),
             new RestoreTestPostVerifier($events, $postRestoreFailure),
-            new FilesystemRestoreWorkspace($backup->root),
+            $finalReportFailure
+                ? new RestoreFailingFinalReportWorkspace(new FilesystemRestoreWorkspace($backup->root))
+                : new FilesystemRestoreWorkspace($backup->root),
             new RestoreFixedClock('2026-09-29T03:00:00+00:00'),
             new RestoreFixedRandom("\x33"),
         );
@@ -630,6 +712,7 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
         private readonly bool $failEnter = false,
         private readonly bool $failRefresh = false,
         private readonly bool $failLeaveAfterDeactivate = false,
+        private readonly bool $retainWorkersQuiesced = true,
     ) {}
 
     public function enter(string $restoreRunId): void
@@ -669,7 +752,34 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
         return [
             'maintenance_owned' => true,
             'scheduler_fence_held' => true,
+            'workers_quiesced' => $this->retainWorkersQuiesced,
         ];
+    }
+}
+
+final readonly class RestoreFailingFinalReportWorkspace implements RestoreWorkspace
+{
+    public function __construct(private RestoreWorkspace $inner) {}
+
+    public function create(string $restoreRunId): string
+    {
+        return $this->inner->create($restoreRunId);
+    }
+
+    public function discard(string $workspacePath): void
+    {
+        $this->inner->discard($workspacePath);
+    }
+
+    public function storeReport(string $restoreRunId, array $report): void
+    {
+        if (($report['status'] ?? null) === 'completed'
+            && ($report['report_finalized'] ?? false) === true
+        ) {
+            throw new RuntimeException('test-only final report failure after reopen');
+        }
+
+        $this->inner->storeReport($restoreRunId, $report);
     }
 }
 
