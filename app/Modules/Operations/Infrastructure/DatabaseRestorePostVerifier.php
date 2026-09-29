@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\Operations\Application\Contracts\RestoreCriticalAuthorityIdentity;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreRuntimeHealthVerifier;
 use Illuminate\Database\Connection;
@@ -14,6 +15,7 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
 {
     public function __construct(
         private DatabaseManager $database,
+        private RestoreCriticalAuthorityIdentity $criticalAuthority,
         private RestoreRuntimeHealthVerifier $runtimeHealth,
         private string $migrationsDirectory,
     ) {}
@@ -43,7 +45,8 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
             throw new RuntimeException('The restored domain reconciliation checks failed.');
         }
 
-        $this->runtimeHealth->verify();
+        $expectedAuthorityFingerprint = $this->criticalAuthority->fingerprint();
+        $this->runtimeHealth->verify($expectedAuthorityFingerprint);
 
         return [
             'schema_migrations' => count($restoredMigrations),
@@ -112,33 +115,71 @@ SQL);
         $row = $connection->selectOne(<<<'SQL'
 SELECT COUNT(*) AS violations
 FROM orders order_row
+LEFT JOIN quotes quote_row ON quote_row.id = order_row.source_quote_id
 LEFT JOIN purchase_settlements settlement_row ON settlement_row.id = order_row.purchase_settlement_id
 LEFT JOIN payment_intents intent_row ON intent_row.id = order_row.payment_intent_id
 LEFT JOIN payment_provider_transactions provider_row ON provider_row.id = settlement_row.provider_transaction_row_id
 WHERE order_row.source_type = 'purchase'
   AND (
-       settlement_row.id IS NULL
-       OR intent_row.id IS NULL
-       OR provider_row.id IS NULL
-       OR settlement_row.payment_intent_id <> order_row.payment_intent_id
-       OR settlement_row.user_id <> order_row.user_id
-       OR settlement_row.source_quote_id <> order_row.source_quote_id
-       OR settlement_row.public_id <> order_row.purchase_settlement_public_id
-       OR intent_row.public_id <> order_row.payment_intent_public_id
-       OR intent_row.purpose <> 'purchase'
-       OR intent_row.state NOT IN ('captured','refund_pending','refunded','partially_refunded')
-       OR intent_row.captured_at IS NULL
-       OR intent_row.amount_irr <> order_row.total_amount_irr
-       OR settlement_row.amount_irr <> order_row.settled_amount_irr
-       OR settlement_row.currency <> order_row.currency
-       OR intent_row.currency <> order_row.currency
-       OR provider_row.payment_intent_id <> settlement_row.payment_intent_id
-       OR provider_row.provider_code <> settlement_row.provider_code
-       OR provider_row.provider_transaction_id <> settlement_row.provider_transaction_id
-       OR provider_row.evidence_payload_hash <> settlement_row.evidence_payload_hash
-       OR provider_row.transaction_status <> 'settled'
-       OR provider_row.amount_irr <> settlement_row.amount_irr
-       OR provider_row.currency <> settlement_row.currency
+      (
+          order_row.state = 'awaiting_payment'
+          AND (
+              order_row.state_version <> 0
+              OR quote_row.id IS NULL
+              OR quote_row.public_id <> order_row.source_quote_public_id
+              OR quote_row.user_id <> order_row.user_id
+              OR quote_row.configuration_snapshot_hash <> order_row.source_quote_configuration_hash
+              OR quote_row.final_price_irr <> order_row.total_amount_irr
+              OR quote_row.currency <> order_row.currency
+              OR order_row.purchase_settlement_id IS NOT NULL
+              OR order_row.purchase_settlement_public_id IS NOT NULL
+              OR order_row.payment_intent_id IS NOT NULL
+              OR order_row.payment_intent_public_id IS NOT NULL
+              OR order_row.settled_amount_irr IS NOT NULL
+              OR order_row.paid_at IS NOT NULL
+          )
+      )
+      OR
+      (
+          order_row.state <> 'awaiting_payment'
+          AND (
+              quote_row.id IS NULL
+              OR settlement_row.id IS NULL
+              OR intent_row.id IS NULL
+              OR provider_row.id IS NULL
+              OR quote_row.public_id <> order_row.source_quote_public_id
+              OR quote_row.user_id <> order_row.user_id
+              OR quote_row.configuration_snapshot_hash <> order_row.source_quote_configuration_hash
+              OR quote_row.final_price_irr <> order_row.total_amount_irr
+              OR quote_row.currency <> order_row.currency
+              OR settlement_row.payment_intent_id <> order_row.payment_intent_id
+              OR settlement_row.user_id <> order_row.user_id
+              OR settlement_row.source_quote_id <> order_row.source_quote_id
+              OR settlement_row.source_quote_public_id <> order_row.source_quote_public_id
+              OR settlement_row.public_id <> order_row.purchase_settlement_public_id
+              OR settlement_row.settled_at <> order_row.paid_at
+              OR intent_row.public_id <> order_row.payment_intent_public_id
+              OR intent_row.purpose <> 'purchase'
+              OR intent_row.user_id <> order_row.user_id
+              OR intent_row.source_quote_id <> order_row.source_quote_id
+              OR intent_row.source_quote_public_id <> order_row.source_quote_public_id
+              OR intent_row.source_quote_configuration_hash <> order_row.source_quote_configuration_hash
+              OR intent_row.state NOT IN ('captured','refund_pending','refunded','partially_refunded')
+              OR intent_row.captured_at IS NULL
+              OR intent_row.amount_irr <> order_row.total_amount_irr
+              OR settlement_row.amount_irr <> order_row.settled_amount_irr
+              OR settlement_row.currency <> order_row.currency
+              OR intent_row.currency <> order_row.currency
+              OR provider_row.payment_intent_id <> settlement_row.payment_intent_id
+              OR provider_row.provider_code <> settlement_row.provider_code
+              OR provider_row.provider_transaction_id <> settlement_row.provider_transaction_id
+              OR provider_row.evidence_payload_hash <> settlement_row.evidence_payload_hash
+              OR provider_row.transaction_status <> 'settled'
+              OR provider_row.amount_irr <> settlement_row.amount_irr
+              OR provider_row.currency <> settlement_row.currency
+              OR provider_row.settled_at <> settlement_row.settled_at
+          )
+      )
   )
 SQL);
 
