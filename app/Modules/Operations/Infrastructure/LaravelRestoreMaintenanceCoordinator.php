@@ -60,16 +60,7 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
         $activated = false;
 
         try {
-            $this->maintenance->activate([
-                'except' => [],
-                'redirect' => null,
-                'retry' => null,
-                'refresh' => null,
-                'secret' => null,
-                'status' => 503,
-                'template' => null,
-                'restore_run_id' => $restoreRunId,
-            ]);
+            $this->maintenance->activate($this->maintenancePayload($restoreRunId));
             $activated = true;
 
             $this->schedulerMutationLock->acquire($this->quiesceSeconds);
@@ -127,12 +118,77 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
 
         $this->assertOwned($restoreRunId);
 
-        $this->schedulerMutationLock->release();
         $this->maintenance->deactivate();
 
         if ($this->maintenance->active()) {
             throw new RuntimeException('Restore maintenance mode could not be released.');
         }
+
+        $this->schedulerMutationLock->release();
+        if ($this->schedulerMutationLock->held()) {
+            throw new RuntimeException('Restore Scheduler mutation fence could not be released.');
+        }
+    }
+
+    /**
+     * Re-establish and prove the post-mutation containment state after an
+     * uncertain failure. Each returned true value is a verified postcondition.
+     *
+     * @return array{maintenance_owned:bool,scheduler_fence_held:bool}
+     *
+     * @requirement BAK-002 OPS-003 QUA-001
+     */
+    public function retain(string $restoreRunId): array
+    {
+        $this->assertRunId($restoreRunId);
+        $maintenanceOwned = false;
+
+        try {
+            if (! $this->maintenance->active()) {
+                $this->maintenance->activate($this->maintenancePayload($restoreRunId));
+            }
+
+            $this->assertOwned($restoreRunId);
+            $maintenanceOwned = true;
+        } catch (Throwable) {
+            // Keep collecting independent containment evidence below.
+        }
+
+        try {
+            if (! $this->schedulerMutationLock->held()) {
+                $this->schedulerMutationLock->acquire($this->quiesceSeconds);
+            }
+        } catch (Throwable) {
+            // A partial recovery is reported truthfully by the returned state.
+        }
+
+        if ($maintenanceOwned) {
+            try {
+                $this->assertOwned($restoreRunId);
+            } catch (Throwable) {
+                $maintenanceOwned = false;
+            }
+        }
+
+        return [
+            'maintenance_owned' => $maintenanceOwned,
+            'scheduler_fence_held' => $this->schedulerMutationLock->held(),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function maintenancePayload(string $restoreRunId): array
+    {
+        return [
+            'except' => [],
+            'redirect' => null,
+            'retry' => null,
+            'refresh' => null,
+            'secret' => null,
+            'status' => 503,
+            'template' => null,
+            'restore_run_id' => $restoreRunId,
+        ];
     }
 
     private function assertOwned(string $restoreRunId): void
