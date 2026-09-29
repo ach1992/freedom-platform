@@ -555,7 +555,13 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
             || str_starts_with($path, $mutableCacheRoot.DIRECTORY_SEPARATOR);
 
         if (is_file($path)) {
-            if (! chmod($path, $mutable ? 0640 : 0440)) {
+            $permissions = fileperms($path);
+            if ($permissions === false) {
+                throw new RuntimeException('A published release file permission could not be inspected.');
+            }
+
+            $sealedMode = ($permissions & 0111) !== 0 ? 0550 : 0440;
+            if (! chmod($path, $mutable ? 0640 : $sealedMode)) {
                 throw new RuntimeException('A published release file could not be sealed.');
             }
 
