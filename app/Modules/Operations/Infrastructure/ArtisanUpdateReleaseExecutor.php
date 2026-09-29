@@ -117,6 +117,11 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
     {
         $release = $this->releasePath($releasePath);
 
+        $workerWrapper = $release.'/deploy/bin/queue-worker-with-heartbeat.sh';
+        if (! is_file($workerWrapper) || is_link($workerWrapper) || ! is_executable($workerWrapper)) {
+            throw new RuntimeException('The exact-release worker entrypoint is unavailable or not executable.');
+        }
+
         $healthOutput = $this->process([
             $this->configuration->phpBinary,
             $release.'/artisan',
