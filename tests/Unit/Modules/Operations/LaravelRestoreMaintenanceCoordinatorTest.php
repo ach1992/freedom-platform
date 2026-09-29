@@ -333,6 +333,35 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
 
         self::assertTrue($state['maintenance_owned']);
         self::assertTrue($state['scheduler_fence_held']);
+        self::assertTrue($state['workers_quiesced']);
+        self::assertTrue($maintenance->active);
+        self::assertTrue($scheduler->held());
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_recontainment_does_not_claim_worker_quiescence_when_restart_request_fails(): void
+    {
+        $runId = '20260929T040018Z-dddddddddddddddd';
+        $maintenance = new FaultInjectingRestoreMaintenanceMode($runId);
+        $scheduler = new StatefulRestoreSchedulerMutationLock(true);
+        $console = $this->createMock(Kernel::class);
+        $console->expects(self::once())
+            ->method('call')
+            ->with('queue:restart', ['--no-interaction' => true])
+            ->willReturn(1);
+
+        $state = $this->coordinator(
+            $maintenance,
+            $console,
+            $scheduler,
+            static function (int $_seconds): void {
+                self::fail('Worker wait must not run when restart request fails.');
+            },
+        )->retain($runId);
+
+        self::assertTrue($state['maintenance_owned']);
+        self::assertTrue($state['scheduler_fence_held']);
+        self::assertFalse($state['workers_quiesced']);
         self::assertTrue($maintenance->active);
         self::assertTrue($scheduler->held());
     }
