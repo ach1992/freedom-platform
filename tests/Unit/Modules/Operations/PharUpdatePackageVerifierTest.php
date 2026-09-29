@@ -156,6 +156,40 @@ final class PharUpdatePackageVerifierTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 RUN-006 SEC-001 QUA-001 */
+    public function test_it_rejects_unsupported_manifest_authority_and_ambiguous_rollback_metadata(): void
+    {
+        foreach (['authority', 'rollback'] as $case) {
+            $fixture = $this->fixture('manifest-'.$case);
+
+            try {
+                [$packagePath, $sha256] = $this->package(
+                    $fixture,
+                    mutateManifest: static function (array $manifest) use ($case): array {
+                        if ($case === 'authority') {
+                            $manifest['authority'] = 'untrusted_release_authority';
+                        } else {
+                            $compatible = $manifest['rollback']['previous_code_compatible_schema_sha256'][0];
+                            $manifest['rollback']['previous_code_compatible_schema_sha256'] = [$compatible, $compatible];
+                        }
+
+                        return $manifest;
+                    },
+                );
+                $verifier = new PharUpdatePackageVerifier($fixture.'/packages');
+
+                try {
+                    $verifier->verify($packagePath, $sha256);
+                    self::fail('Unsupported manifest or rollback metadata must fail closed.');
+                } catch (RuntimeException $exception) {
+                    self::assertNotSame('', $exception->getMessage());
+                }
+            } finally {
+                $this->removeTree($fixture);
+            }
+        }
+    }
+
     /** @requirement UPD-001 SEC-008 QUA-001 */
     public function test_it_rejects_reserved_secret_and_mutable_runtime_payload_paths(): void
     {
