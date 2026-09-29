@@ -143,6 +143,9 @@ final readonly class UpdateManager
             $this->executor->prepareRuntime($releasePath);
             $this->markPhase($report, 'runtime_bootstrap_completed');
 
+            $this->packages->verifyExtracted($package, $releasePath);
+            $this->markPhase($report, 'reviewed_payload_reverified');
+
             $this->workspace->sealPublishedRelease($package->releaseId);
             $this->markPhase($report, 'immutable_release_sealed');
             $this->workspace->storeReport($updateRunId, $report);
