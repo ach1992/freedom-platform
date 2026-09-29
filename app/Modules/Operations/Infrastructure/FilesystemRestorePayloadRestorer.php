@@ -21,6 +21,8 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
      */
     private const CRITICAL_ENVIRONMENT_KEYS = [
         'APP_NAME',
+        'APP_ENV',
+        'APP_DEBUG',
         'APP_MAINTENANCE_DRIVER',
         'APP_MAINTENANCE_STORE',
         'DB_CONNECTION',
