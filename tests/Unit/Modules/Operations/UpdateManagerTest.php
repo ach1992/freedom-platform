@@ -49,6 +49,7 @@ final class UpdateManagerTest extends TestCase
             'executor.prepare',
             'workspace.publish',
             'release.prepare',
+            'workspace.seal',
             'fence.enter',
             'safety.no_unsafe_work',
             'maintenance.enter',
@@ -565,6 +566,11 @@ final class FakeUpdateWorkspace implements UpdateWorkspace
         $this->events->add('workspace.publish');
 
         return '/tmp/fake-deployment/releases/'.$releaseId;
+    }
+
+    public function sealPublishedRelease(string $releaseId): void
+    {
+        $this->events->add('workspace.seal');
     }
 
     public function discardStaging(string $stagingPath): void
