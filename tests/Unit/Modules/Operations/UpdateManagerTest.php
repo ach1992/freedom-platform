@@ -50,6 +50,7 @@ final class UpdateManagerTest extends TestCase
             'workspace.publish',
             'release.prepare',
             'executor.prepare_runtime',
+            'package.verify_extracted',
             'workspace.seal',
             'fence.enter',
             'safety.no_unsafe_work',
@@ -522,6 +523,11 @@ final class FakeUpdatePackageVerifier implements UpdatePackageVerifier
         if ($this->extractFailure) {
             throw new RuntimeException('test-only-extract-secret');
         }
+    }
+
+    public function verifyExtracted(VerifiedUpdatePackage $package, string $releasePath): void
+    {
+        $this->events->add('package.verify_extracted');
     }
 }
 
