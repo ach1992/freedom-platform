@@ -74,17 +74,8 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
                 throw new RuntimeException('Queue worker quiescence could not be requested.');
             }
 
-            ($this->waiter ?? static function (int $seconds): void {
-                sleep($seconds);
-            })($this->quiesceSeconds);
-
-            $data = $this->maintenance->data();
-            if (! $this->maintenance->active()
-                || ! is_string($data['restore_run_id'] ?? null)
-                || ! hash_equals($restoreRunId, $data['restore_run_id'])
-            ) {
-                throw new RuntimeException('Restore maintenance ownership could not be verified.');
-            }
+            $this->waitForWorkers();
+            $this->assertOwned($restoreRunId);
         } catch (Throwable $throwable) {
             if ($activated) {
                 try {
@@ -102,10 +93,39 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
     }
 
     /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function refreshRuntime(string $restoreRunId): void
+    {
+        $this->assertRunId($restoreRunId);
+        $this->assertOwned($restoreRunId);
+
+        if ($this->console->call('config:clear', ['--no-ansi' => true, '--no-interaction' => true]) !== 0) {
+            throw new RuntimeException('Restored configuration cache could not be cleared.');
+        }
+
+        if ($this->console->call('queue:restart', ['--no-interaction' => true]) !== 0) {
+            throw new RuntimeException('Restored queue workers could not be restarted.');
+        }
+
+        $this->waitForWorkers();
+        $this->assertOwned($restoreRunId);
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
     public function leave(string $restoreRunId): void
     {
         $this->assertRunId($restoreRunId);
 
+        $this->assertOwned($restoreRunId);
+
+        $this->maintenance->deactivate();
+
+        if ($this->maintenance->active()) {
+            throw new RuntimeException('Restore maintenance mode could not be released.');
+        }
+    }
+
+    private function assertOwned(string $restoreRunId): void
+    {
         if (! $this->maintenance->active()) {
             throw new RuntimeException('Restore maintenance mode is no longer active.');
         }
@@ -116,12 +136,13 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
         ) {
             throw new RuntimeException('Restore maintenance ownership changed unexpectedly.');
         }
+    }
 
-        $this->maintenance->deactivate();
-
-        if ($this->maintenance->active()) {
-            throw new RuntimeException('Restore maintenance mode could not be released.');
-        }
+    private function waitForWorkers(): void
+    {
+        ($this->waiter ?? static function (int $seconds): void {
+            sleep($seconds);
+        })($this->quiesceSeconds);
     }
 
     private function assertRunId(string $restoreRunId): void
