@@ -24,29 +24,27 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
      */
     public function currentSchemaSha256(): string
     {
-        $connection = $this->database->connection();
-        if (! $connection->getSchemaBuilder()->hasTable('migrations')) {
-            throw new RuntimeException('The current schema migration authority is unavailable.');
+        return $this->installedSchemaSha256(
+            $this->currentMigrationsDirectory,
+            'The current schema migration authority does not match the active release files.',
+        );
+    }
+
+    /**
+     * @requirement UPD-001 RUN-002 RUN-006 QUA-001
+     *
+     * @phpstan-impure
+     */
+    public function installedSchemaSha256ForRelease(string $releasePath): string
+    {
+        if (! str_starts_with($releasePath, DIRECTORY_SEPARATOR)) {
+            throw new RuntimeException('The installed release schema path must be absolute.');
         }
 
-        $migrations = $connection->table('migrations')->pluck('migration')->all();
-        if (! is_array($migrations) || $migrations === []) {
-            throw new RuntimeException('The current schema migration identity is unavailable.');
-        }
-
-        $names = [];
-        foreach ($migrations as $migration) {
-            if (! is_string($migration)) {
-                throw new RuntimeException('The current schema migration identity is malformed.');
-            }
-            $names[] = $migration;
-        }
-        sort($names, SORT_STRING);
-        if ($names !== UpdateMigrationIdentity::namesFromDirectory($this->currentMigrationsDirectory)) {
-            throw new RuntimeException('The current schema migration authority does not match the active release files.');
-        }
-
-        return UpdateMigrationIdentity::fromDirectory($this->currentMigrationsDirectory);
+        return $this->installedSchemaSha256(
+            $releasePath.'/database/migrations',
+            'The installed schema migration authority does not match the specified release files.',
+        );
     }
 
     /** @requirement UPD-001 RUN-006 QUA-001 */
@@ -120,6 +118,34 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         if ($actual !== $expectedWorkers) {
             throw new RuntimeException('The activated release worker boot verification failed.');
         }
+    }
+
+    private function installedSchemaSha256(string $migrationsDirectory, string $mismatchMessage): string
+    {
+        $connection = $this->database->connection();
+        if (! $connection->getSchemaBuilder()->hasTable('migrations')) {
+            throw new RuntimeException('The current schema migration authority is unavailable.');
+        }
+
+        $migrations = $connection->table('migrations')->pluck('migration')->all();
+        if (! is_array($migrations) || $migrations === []) {
+            throw new RuntimeException('The current schema migration identity is unavailable.');
+        }
+
+        $names = [];
+        foreach ($migrations as $migration) {
+            if (! is_string($migration)) {
+                throw new RuntimeException('The current schema migration identity is malformed.');
+            }
+            $names[] = $migration;
+        }
+        sort($names, SORT_STRING);
+
+        if ($names !== UpdateMigrationIdentity::namesFromDirectory($migrationsDirectory)) {
+            throw new RuntimeException($mismatchMessage);
+        }
+
+        return UpdateMigrationIdentity::fromDirectory($migrationsDirectory);
     }
 
     /** @return list<string> */
