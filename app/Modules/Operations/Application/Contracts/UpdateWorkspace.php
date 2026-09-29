@@ -15,6 +15,8 @@ interface UpdateWorkspace
 
     public function publishRelease(string $stagingPath, string $releaseId): string;
 
+    public function sealPublishedRelease(string $releaseId): void;
+
     public function discardStaging(string $stagingPath): void;
 
     public function discardInactiveRelease(string $releaseId): void;
