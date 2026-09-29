@@ -9,6 +9,9 @@ interface UpdateSafetyInspector
     /** @phpstan-impure */
     public function currentSchemaSha256(): string;
 
+    /** @phpstan-impure */
+    public function installedSchemaSha256ForRelease(string $releasePath): string;
+
     public function releaseSchemaSha256(string $releasePath): string;
 
     public function assertNoUnsafeWork(): void;
