@@ -84,6 +84,45 @@ final class FilesystemRestorePayloadRestorerTest extends TestCase
         }
     }
 
+    /** @requirement BAK-002 SEC-001 QUA-001 */
+    public function test_staging_failure_removes_plaintext_swap_files_before_rethrow(): void
+    {
+        $base = $this->directory('staging-failure');
+        $targetConfig = $base.'/.env';
+        $entries = $this->entries($base);
+
+        unset($entries['private/application/nested/new.txt']);
+        $secondary = $base.'/extracted/config/secondary';
+        file_put_contents($secondary, 'secondary-config');
+        $entries['config/secondary'] = $secondary;
+        file_put_contents($targetConfig, 'old-config');
+
+        try {
+            $restorer = new FilesystemRestorePayloadRestorer(
+                [
+                    'environment' => $targetConfig,
+                    'secondary' => $base.'/missing-parent/.secondary',
+                ],
+                [],
+            );
+
+            try {
+                $restorer->restore($entries, '20260929T040002Z-3333333333333333');
+                self::fail('A later staging failure must abort before payload swap.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'A restore configuration target parent is unavailable.',
+                    $exception->getMessage(),
+                );
+            }
+
+            self::assertSame('old-config', file_get_contents($targetConfig));
+            self::assertSame([], glob($base.'/.restore-*') ?: []);
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
     /**
      * @return array<string, string>
      */
