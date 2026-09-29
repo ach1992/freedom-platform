@@ -82,6 +82,7 @@ final class RestoreManagerTest extends TestCase
                 'payload_preflight',
                 'database_restore',
                 'payload_restore',
+                'runtime_refresh',
                 'post_restore_verify',
                 'maintenance_leave',
             ], $events->events);
@@ -201,6 +202,41 @@ final class RestoreManagerTest extends TestCase
     }
 
     /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_runtime_refresh_failure_retains_maintenance_and_skips_post_restore_verification(): void
+    {
+        $fixture = $this->fixture('runtime-refresh-failure');
+
+        try {
+            $source = $this->sourceBackup($fixture);
+            $events = new RestoreEventLog;
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                runtimeRefreshFailure: true,
+            );
+
+            $this->expectRestoreFailure(fn () => $manager->run($source, true));
+
+            self::assertSame([
+                'payload_preflight',
+                'maintenance_enter',
+                'safety_backup_capture',
+                'payload_preflight',
+                'database_restore',
+                'payload_restore',
+                'runtime_refresh',
+            ], $events->events);
+
+            $report = $this->singleReport($fixture['root']);
+            self::assertSame('runtime_refresh_failed', $report['failure_code']);
+            self::assertTrue($report['mutation_started']);
+            self::assertTrue($report['maintenance_retained']);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
     public function test_post_restore_verification_failure_retains_maintenance_and_never_reports_success(): void
     {
         $fixture = $this->fixture('post-failure');
@@ -223,6 +259,7 @@ final class RestoreManagerTest extends TestCase
                 'payload_preflight',
                 'database_restore',
                 'payload_restore',
+                'runtime_refresh',
                 'post_restore_verify',
             ], $events->events);
 
@@ -315,6 +352,7 @@ final class RestoreManagerTest extends TestCase
         bool $safetyBackupFailure = false,
         bool $databaseFailure = false,
         bool $payloadFailure = false,
+        bool $runtimeRefreshFailure = false,
         bool $postRestoreFailure = false,
         bool $maintenanceFailure = false,
     ): RestoreManager {
@@ -346,7 +384,7 @@ final class RestoreManagerTest extends TestCase
             new SodiumBackupCipherFactory,
             new BackupBundleReader,
             new RestoreTestDatabaseRestorer($events, $databaseFailure),
-            new RestoreTestMaintenance($events, $maintenanceFailure),
+            new RestoreTestMaintenance($events, $maintenanceFailure, $runtimeRefreshFailure),
             new RestoreTestPayloadRestorer($events, $payloadFailure),
             new RestoreTestPostVerifier($events, $postRestoreFailure),
             new FilesystemRestoreWorkspace($backup->root),
@@ -545,6 +583,7 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
     public function __construct(
         private readonly RestoreEventLog $events,
         private readonly bool $failEnter = false,
+        private readonly bool $failRefresh = false,
     ) {}
 
     public function enter(string $restoreRunId): void
@@ -556,6 +595,15 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
         }
 
         $this->active = true;
+    }
+
+    public function refreshRuntime(string $restoreRunId): void
+    {
+        $this->events->events[] = 'runtime_refresh';
+
+        if ($this->failRefresh) {
+            throw new RuntimeException('test-only runtime refresh failure');
+        }
     }
 
     public function leave(string $restoreRunId): void
