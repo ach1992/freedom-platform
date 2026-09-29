@@ -88,6 +88,58 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 RUN-002 RUN-006 QUA-001 */
+    public function test_installed_schema_can_be_proven_against_candidate_before_current_switches(): void
+    {
+        $schema = $this->createStub(SchemaBuilder::class);
+        $schema->method('hasTable')->willReturn(true);
+        $query = $this->createStub(QueryBuilder::class);
+        $query->method('pluck')->willReturn(new Collection([
+            '2026_01_01_000000_first',
+            '2026_01_02_000000_second',
+        ]));
+        $connection = $this->createStub(Connection::class);
+        $connection->method('getSchemaBuilder')->willReturn($schema);
+        $connection->method('table')->willReturn($query);
+        $database = $this->createStub(DatabaseManager::class);
+        $database->method('connection')->willReturn($connection);
+
+        $base = storage_path('framework/testing/update-installed-schema-'.bin2hex(random_bytes(4)));
+        $current = $base.'/current/database/migrations';
+        $candidate = $base.'/releases/1.1.0/database/migrations';
+        mkdir($current, 0700, true);
+        mkdir($candidate, 0700, true);
+
+        try {
+            file_put_contents($current.'/2026_01_01_000000_first.php', "<?php\n");
+            file_put_contents($candidate.'/2026_01_01_000000_first.php', "<?php\n");
+            file_put_contents($candidate.'/2026_01_02_000000_second.php', "<?php\n");
+
+            $inspector = new DatabaseUpdateSafetyInspector(
+                $database,
+                $current,
+                base_path('deploy/supervisor/freedom-platform.conf'),
+            );
+
+            try {
+                $inspector->currentSchemaSha256();
+                self::fail('The active predecessor release must not claim the candidate schema.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'The current schema migration authority does not match the active release files.',
+                    $exception->getMessage(),
+                );
+            }
+
+            self::assertSame(
+                UpdateMigrationIdentity::fromDirectory($candidate),
+                $inspector->installedSchemaSha256ForRelease($base.'/releases/1.1.0'),
+            );
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
     /** @requirement UPD-001 RUN-006 SEC-008 QUA-001 */
     public function test_release_schema_identity_rejects_symlinked_migration_and_hashes_regular_migrations(): void
     {
