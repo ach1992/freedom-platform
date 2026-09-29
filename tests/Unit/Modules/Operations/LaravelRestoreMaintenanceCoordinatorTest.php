@@ -281,9 +281,11 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
         $maintenance = new FaultInjectingRestoreMaintenanceMode($runId);
         $maintenance->throwAfterDeactivate = true;
         $scheduler = new StatefulRestoreSchedulerMutationLock(true);
+        $console = $this->createStub(Kernel::class);
+        $console->method('call')->willReturn(0);
         $coordinator = $this->coordinator(
             $maintenance,
-            $this->createStub(Kernel::class),
+            $console,
             $scheduler,
         );
 
@@ -313,9 +315,11 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
         $maintenance = new FaultInjectingRestoreMaintenanceMode($runId);
         $maintenance->throwOnActiveCall = 2;
         $scheduler = new StatefulRestoreSchedulerMutationLock(true);
+        $console = $this->createStub(Kernel::class);
+        $console->method('call')->willReturn(0);
         $coordinator = $this->coordinator(
             $maintenance,
-            $this->createStub(Kernel::class),
+            $console,
             $scheduler,
         );
 
