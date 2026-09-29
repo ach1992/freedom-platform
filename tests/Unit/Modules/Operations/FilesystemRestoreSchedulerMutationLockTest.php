@@ -21,6 +21,8 @@ final class FilesystemRestoreSchedulerMutationLockTest extends TestCase
             $second = new FilesystemRestoreSchedulerMutationLock($path);
 
             $first->acquire(1);
+            self::assertTrue($first->held());
+            self::assertFalse($second->held());
 
             try {
                 $second->acquire(1);
@@ -35,8 +37,12 @@ final class FilesystemRestoreSchedulerMutationLockTest extends TestCase
             self::assertSame(0600, fileperms($path) & 0777);
 
             $first->release();
+            self::assertFalse($first->held());
+
             $second->acquire(1);
+            self::assertTrue($second->held());
             $second->release();
+            self::assertFalse($second->held());
         } finally {
             @unlink($path);
             @rmdir($directory);
