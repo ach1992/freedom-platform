@@ -26,56 +26,65 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
         $this->preflight($entries);
         $operations = [];
 
-        foreach ($this->configFiles as $name => $configuredTarget) {
-            $source = $entries['config/'.$name];
-            $target = $this->safeFileTarget($configuredTarget);
-            $suffix = hash('sha256', $target);
-            $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
-            $previous = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.previous';
+        try {
+            foreach ($this->configFiles as $name => $configuredTarget) {
+                $source = $entries['config/'.$name];
+                $target = $this->safeFileTarget($configuredTarget);
+                $suffix = hash('sha256', $target);
+                $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
+                $previous = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.previous';
 
-            $this->assertSwapPathsAvailable($stage, $previous);
-            $this->copyRegularFile($source, $stage);
-            $operations[] = [
-                'target' => $target,
-                'stage' => $stage,
-                'previous' => $previous,
-                'had_original' => file_exists($target),
-            ];
-        }
-
-        foreach ($this->privateDirectories as $name => $configuredTarget) {
-            $target = $this->safeDirectoryTarget($configuredTarget);
-            $suffix = hash('sha256', $target);
-            $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
-            $previous = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.previous';
-
-            $this->assertSwapPathsAvailable($stage, $previous);
-            if (! mkdir($stage, 0700) || ! chmod($stage, 0700)) {
-                throw new RuntimeException('A private restore staging directory could not be secured.');
+                $this->assertSwapPathsAvailable($stage, $previous);
+                $operations[] = [
+                    'target' => $target,
+                    'stage' => $stage,
+                    'previous' => $previous,
+                    'had_original' => file_exists($target),
+                ];
+                $this->copyRegularFile($source, $stage);
             }
 
-            $prefix = 'private/'.$name.'/';
-            foreach ($entries as $logicalPath => $source) {
-                if (! str_starts_with($logicalPath, $prefix)) {
-                    continue;
+            foreach ($this->privateDirectories as $name => $configuredTarget) {
+                $target = $this->safeDirectoryTarget($configuredTarget);
+                $suffix = hash('sha256', $target);
+                $stage = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.next';
+                $previous = dirname($target).'/.restore-'.$restoreRunId.'-'.$suffix.'.previous';
+
+                $this->assertSwapPathsAvailable($stage, $previous);
+                $operations[] = [
+                    'target' => $target,
+                    'stage' => $stage,
+                    'previous' => $previous,
+                    'had_original' => file_exists($target),
+                ];
+                if (! mkdir($stage, 0700) || ! chmod($stage, 0700)) {
+                    throw new RuntimeException('A private restore staging directory could not be secured.');
                 }
 
-                $relative = substr($logicalPath, strlen($prefix));
-                if ($relative === '') {
-                    throw new RuntimeException('A private restore entry is invalid.');
-                }
+                $prefix = 'private/'.$name.'/';
+                foreach ($entries as $logicalPath => $source) {
+                    if (! str_starts_with($logicalPath, $prefix)) {
+                        continue;
+                    }
 
-                $destination = $stage.'/'.str_replace('/', DIRECTORY_SEPARATOR, $relative);
-                $this->createDirectoriesUnder($stage, dirname($destination));
-                $this->copyRegularFile($source, $destination);
+                    $relative = substr($logicalPath, strlen($prefix));
+                    if ($relative === '') {
+                        throw new RuntimeException('A private restore entry is invalid.');
+                    }
+
+                    $destination = $stage.'/'.str_replace('/', DIRECTORY_SEPARATOR, $relative);
+                    $this->createDirectoriesUnder($stage, dirname($destination));
+                    $this->copyRegularFile($source, $destination);
+                }
+            }
+        } catch (Throwable $throwable) {
+            foreach ($operations as $operation) {
+                if (file_exists($operation['stage']) || is_link($operation['stage'])) {
+                    $this->removeTree($operation['stage']);
+                }
             }
 
-            $operations[] = [
-                'target' => $target,
-                'stage' => $stage,
-                'previous' => $previous,
-                'had_original' => file_exists($target),
-            ];
+            throw $throwable;
         }
 
         $committed = [];
