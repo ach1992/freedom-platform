@@ -96,6 +96,10 @@ final readonly class LaravelRestoreCriticalAuthorityIdentity implements RestoreC
         }
 
         return [
+            'application' => [
+                'environment' => app()->environment(),
+                'debug' => (bool) config('app.debug', false),
+            ],
             'database' => [
                 'connection' => $connectionName,
                 'driver' => $this->requiredArrayString($database, 'driver', 'Restore database driver authority'),
