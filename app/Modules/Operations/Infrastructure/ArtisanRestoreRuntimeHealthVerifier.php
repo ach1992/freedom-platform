@@ -11,6 +11,23 @@ use Throwable;
 
 final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRuntimeHealthVerifier
 {
+    /** @var list<string> */
+    private const PROCESS_ENVIRONMENT_ALLOWLIST = [
+        'PATH',
+        'HOME',
+        'TMPDIR',
+        'TMP',
+        'TEMP',
+        'LANG',
+        'LC_ALL',
+        'LC_CTYPE',
+        'TZ',
+        'SYSTEMROOT',
+        'SystemRoot',
+        'WINDIR',
+        'COMSPEC',
+        'PATHEXT',
+    ];
     public function __construct(
         private string $phpBinary,
         private string $artisanPath,
@@ -37,7 +54,7 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
                 '--no-interaction',
             ],
             $this->workingDirectory,
-            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+            $this->sanitizedEnvironment(),
             null,
             max(1, $this->timeoutSeconds),
         );
@@ -52,6 +69,45 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
         if (! $process->isSuccessful()) {
             throw new RuntimeException('The restored runtime health checks failed.');
         }
+    }
+
+    /**
+     * Symfony Process merges explicit overrides with the parent process
+     * environment. Explicitly mask every inherited variable except a minimal
+     * operating-system allowlist so Laravel must load application authority
+     * from the restored environment file.
+     *
+     * @return array<string, string|false>
+     */
+    private function sanitizedEnvironment(): array
+    {
+        $environment = [];
+
+        foreach ([getenv(), $_ENV, $_SERVER] as $source) {
+            if (! is_array($source)) {
+                continue;
+            }
+
+            foreach (array_keys($source) as $name) {
+                if (is_string($name) && $name !== '') {
+                    $environment[$name] = false;
+                }
+            }
+        }
+
+        foreach (self::PROCESS_ENVIRONMENT_ALLOWLIST as $name) {
+            $value = getenv($name);
+
+            if ($value === false) {
+                $value = $_ENV[$name] ?? $_SERVER[$name] ?? null;
+            }
+
+            if (is_string($value)) {
+                $environment[$name] = $value;
+            }
+        }
+
+        return $environment;
     }
 
     private function assertRuntime(): void
