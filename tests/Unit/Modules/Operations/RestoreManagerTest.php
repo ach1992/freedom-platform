@@ -273,6 +273,45 @@ final class RestoreManagerTest extends TestCase
     }
 
     /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_resume_failure_reestablishes_and_reports_proven_containment(): void
+    {
+        $fixture = $this->fixture('resume-failure');
+
+        try {
+            $source = $this->sourceBackup($fixture);
+            $events = new RestoreEventLog;
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                resumeFailure: true,
+            );
+
+            $this->expectRestoreFailure(fn () => $manager->run($source, true));
+
+            self::assertSame([
+                'payload_preflight',
+                'maintenance_enter',
+                'safety_backup_capture',
+                'payload_preflight',
+                'database_restore',
+                'payload_restore',
+                'runtime_refresh',
+                'post_restore_verify',
+                'maintenance_leave',
+            ], $events->events);
+
+            $report = $this->singleReport($fixture['root']);
+            self::assertSame('resume_failed', $report['failure_code']);
+            self::assertTrue($report['mutation_started']);
+            self::assertTrue($report['maintenance_retained']);
+            self::assertTrue($report['scheduler_mutation_fence_retained']);
+            self::assertTrue($report['containment_retained']);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
     public function test_maintenance_entry_failure_stops_before_safety_backup_or_mutation(): void
     {
         $fixture = $this->fixture('maintenance-failure');
@@ -355,6 +394,7 @@ final class RestoreManagerTest extends TestCase
         bool $runtimeRefreshFailure = false,
         bool $postRestoreFailure = false,
         bool $maintenanceFailure = false,
+        bool $resumeFailure = false,
     ): RestoreManager {
         $backup = $this->backupConfiguration($fixture);
         $repository = new FilesystemBackupRepository($backup->root);
@@ -384,7 +424,12 @@ final class RestoreManagerTest extends TestCase
             new SodiumBackupCipherFactory,
             new BackupBundleReader,
             new RestoreTestDatabaseRestorer($events, $databaseFailure),
-            new RestoreTestMaintenance($events, $maintenanceFailure, $runtimeRefreshFailure),
+            new RestoreTestMaintenance(
+                $events,
+                $maintenanceFailure,
+                $runtimeRefreshFailure,
+                $resumeFailure,
+            ),
             new RestoreTestPayloadRestorer($events, $payloadFailure),
             new RestoreTestPostVerifier($events, $postRestoreFailure),
             new FilesystemRestoreWorkspace($backup->root),
@@ -584,6 +629,7 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
         private readonly RestoreEventLog $events,
         private readonly bool $failEnter = false,
         private readonly bool $failRefresh = false,
+        private readonly bool $failLeaveAfterDeactivate = false,
     ) {}
 
     public function enter(string $restoreRunId): void
@@ -610,6 +656,20 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
     {
         $this->events->events[] = 'maintenance_leave';
         $this->active = false;
+
+        if ($this->failLeaveAfterDeactivate) {
+            throw new RuntimeException('test-only resume failure after maintenance deactivation');
+        }
+    }
+
+    public function retain(string $restoreRunId): array
+    {
+        $this->active = true;
+
+        return [
+            'maintenance_owned' => true,
+            'scheduler_fence_held' => true,
+        ];
     }
 }
 
