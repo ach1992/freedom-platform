@@ -102,6 +102,14 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
     {
         $release = $this->releasePath($releasePath);
 
+        if (! is_link($release.'/.env')
+            || realpath($release.'/.env') === false
+            || ! is_link($release.'/storage')
+            || realpath($release.'/storage') === false
+        ) {
+            throw new RuntimeException('The exact-release shared runtime links are not prepared.');
+        }
+
         $this->process([
             $this->configuration->phpBinary,
             $release.'/artisan',
