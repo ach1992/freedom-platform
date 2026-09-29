@@ -33,7 +33,7 @@ final readonly class MariaDbBackupDumper implements BackupDatabaseDumper
             $process = new Process(
                 [
                     $this->binary,
-                    '--defaults-extra-file='.$optionFile,
+                    '--defaults-file='.$optionFile,
                     '--single-transaction',
                     '--quick',
                     '--skip-lock-tables',

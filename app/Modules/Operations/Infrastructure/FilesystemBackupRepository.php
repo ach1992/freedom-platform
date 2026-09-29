@@ -27,12 +27,48 @@ final readonly class FilesystemBackupRepository implements BackupRepository
      * @param  Closure(self):T  $callback
      * @return T
      */
-    public function synchronized(Closure $callback): mixed
-    {
+    public function synchronized(
+        Closure $callback,
+        bool $priority = false,
+        int $waitMilliseconds = 0,
+    ): mixed {
+        if ($waitMilliseconds < 0 || (! $priority && $waitMilliseconds !== 0)) {
+            throw new RuntimeException('The backup lock coordination request is invalid.');
+        }
+
         $root = $this->root();
+        $priorityPath = $root.'/backup.priority.lock';
+        $priorityHandle = fopen($priorityPath, 'c+b');
+        if ($priorityHandle === false || ! chmod($priorityPath, 0600)) {
+            if (is_resource($priorityHandle)) {
+                fclose($priorityHandle);
+            }
+
+            throw new RuntimeException('The backup priority lock could not be prepared.');
+        }
+
+        $deadline = $priority && $waitMilliseconds > 0
+            ? microtime(true) + ($waitMilliseconds / 1000)
+            : null;
+        $priorityAcquired = $priority
+            ? $this->acquireExclusiveLock($priorityHandle, $deadline)
+            : flock($priorityHandle, LOCK_SH | LOCK_NB);
+
+        if (! $priorityAcquired) {
+            fclose($priorityHandle);
+
+            throw new RuntimeException(
+                $priority
+                    ? 'The prioritized backup operation could not acquire coordination in time.'
+                    : 'A prioritized backup operation is waiting or active.',
+            );
+        }
+
         $lockPath = $root.'/backup.lock';
         $handle = fopen($lockPath, 'c+b');
         if ($handle === false || ! chmod($lockPath, 0600)) {
+            flock($priorityHandle, LOCK_UN);
+            fclose($priorityHandle);
             if (is_resource($handle)) {
                 fclose($handle);
             }
@@ -40,10 +76,26 @@ final readonly class FilesystemBackupRepository implements BackupRepository
             throw new RuntimeException('The backup lock could not be prepared.');
         }
 
-        if (! flock($handle, LOCK_EX | LOCK_NB)) {
+        if (! $this->acquireExclusiveLock($handle, $priority ? $deadline : null)) {
             fclose($handle);
+            flock($priorityHandle, LOCK_UN);
+            fclose($priorityHandle);
 
-            throw new RuntimeException('Another backup operation is already active.');
+            throw new RuntimeException(
+                $priority
+                    ? 'The prioritized backup operation could not acquire the shared backup lock in time.'
+                    : 'Another backup operation is already active.',
+            );
+        }
+
+        // A normal frequent backup only needs the shared priority gate while it races
+        // for the execution lock. Once it owns backup.lock, a priority backup may
+        // claim the gate and wait for this one to finish; no later frequent backup
+        // can enter ahead of that priority waiter.
+        if (! $priority) {
+            flock($priorityHandle, LOCK_UN);
+            fclose($priorityHandle);
+            $priorityHandle = null;
         }
 
         try {
@@ -51,7 +103,30 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         } finally {
             flock($handle, LOCK_UN);
             fclose($handle);
+
+            if (is_resource($priorityHandle)) {
+                flock($priorityHandle, LOCK_UN);
+                fclose($priorityHandle);
+            }
         }
+    }
+
+    /**
+     * @param  resource  $handle
+     */
+    private function acquireExclusiveLock($handle, ?float $deadline): bool
+    {
+        do {
+            if (flock($handle, LOCK_EX | LOCK_NB)) {
+                return true;
+            }
+
+            if ($deadline === null || microtime(true) >= $deadline) {
+                return false;
+            }
+
+            usleep(50_000);
+        } while (true);
     }
 
     public function recoverIncomplete(): void

@@ -14,4 +14,9 @@ enum BackupKind: string
     {
         return $this !== self::FrequentDatabase;
     }
+
+    public function requiresPriorityLock(): bool
+    {
+        return $this !== self::FrequentDatabase;
+    }
 }

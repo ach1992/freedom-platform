@@ -7,6 +7,7 @@ namespace Tests\Unit\Modules\Operations;
 use App\Modules\Operations\Infrastructure\FilesystemBackupRepository;
 use DateTimeImmutable;
 use RuntimeException;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 final class FilesystemBackupRepositoryTest extends TestCase
@@ -120,6 +121,95 @@ final class FilesystemBackupRepositoryTest extends TestCase
             $repository->completedArtifactMetadata($id);
         } finally {
             $this->removeTree($base);
+        }
+    }
+
+    /** @requirement BAK-001 OPS-003 QUA-001 */
+    public function test_priority_backup_waits_for_active_frequent_and_blocks_later_frequent_work(): void
+    {
+        $base = $this->directory('priority');
+        $repository = new FilesystemBackupRepository($base.'/backups');
+
+        try {
+            $root = $repository->root();
+            $autoload = base_path('vendor/autoload.php');
+            $holderScript = $base.'/hold-frequent.php';
+            $contenderScript = $base.'/try-frequent.php';
+
+            file_put_contents($holderScript, sprintf(<<<'PHP'
+<?php
+require %s;
+
+$root = $argv[1];
+$repository = new App\Modules\Operations\Infrastructure\FilesystemBackupRepository($root);
+$repository->synchronized(function () use ($root): void {
+    file_put_contents($root.'/holder-ready', '1');
+    usleep(500000);
+});
+PHP, var_export($autoload, true)));
+
+            file_put_contents($contenderScript, sprintf(<<<'PHP'
+<?php
+require %s;
+
+$root = $argv[1];
+usleep(100000);
+$repository = new App\Modules\Operations\Infrastructure\FilesystemBackupRepository($root);
+
+try {
+    $repository->synchronized(function () use ($root): void {
+        file_put_contents($root.'/late-frequent-ran', '1');
+    });
+    file_put_contents($root.'/late-frequent-result', 'ran');
+} catch (RuntimeException $exception) {
+    file_put_contents($root.'/late-frequent-result', $exception->getMessage());
+}
+PHP, var_export($autoload, true)));
+
+            $holder = new Process([PHP_BINARY, $holderScript, $root]);
+            $holder->start();
+            $this->waitForFile($root.'/holder-ready');
+
+            $contender = new Process([PHP_BINARY, $contenderScript, $root]);
+            $contender->start();
+
+            $result = $repository->synchronized(
+                function () use ($root): string {
+                    file_put_contents($root.'/daily-ran', '1');
+
+                    return 'daily-completed';
+                },
+                true,
+                2_000,
+            );
+
+            $holder->wait();
+            $contender->wait();
+
+            self::assertSame('daily-completed', $result);
+            self::assertTrue($holder->isSuccessful(), $holder->getErrorOutput());
+            self::assertTrue($contender->isSuccessful(), $contender->getErrorOutput());
+            self::assertFileExists($root.'/daily-ran');
+            self::assertFileDoesNotExist($root.'/late-frequent-ran');
+            self::assertSame(
+                'A prioritized backup operation is waiting or active.',
+                file_get_contents($root.'/late-frequent-result'),
+            );
+            self::assertSame(0600, fileperms($root.'/backup.priority.lock') & 0777);
+            self::assertSame(0600, fileperms($root.'/backup.lock') & 0777);
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
+    private function waitForFile(string $path): void
+    {
+        $deadline = microtime(true) + 2.0;
+        while (! is_file($path)) {
+            if (microtime(true) >= $deadline) {
+                self::fail('Timed out waiting for concurrent backup fixture.');
+            }
+            usleep(10_000);
         }
     }
 

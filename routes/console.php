@@ -207,6 +207,7 @@ Schedule::command('operations:backup', [
     ->withoutOverlapping($backupFrequentOverlap)
     ->onOneServer()
     ->runInBackground()
+    ->skip(static fn (): bool => now()->format('H:i') === $backupDailyTime)
     ->when($backupEnabled);
 
 Schedule::command('operations:backup', [

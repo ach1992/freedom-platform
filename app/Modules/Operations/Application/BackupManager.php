@@ -38,6 +38,9 @@ final readonly class BackupManager
             throw new RuntimeException('Backup execution is disabled.');
         }
 
+        $priority = $kind->requiresPriorityLock();
+        $waitMilliseconds = $priority ? $this->configuration->priorityLockWaitSeconds * 1000 : 0;
+
         return $this->repository->synchronized(function () use ($kind): BackupArtifact {
             $now = $this->clock->now();
             $this->repository->recoverIncomplete();
@@ -130,7 +133,7 @@ final readonly class BackupManager
             } finally {
                 $this->repository->discardWorkingDirectory($work);
             }
-        });
+        }, $priority, $waitMilliseconds);
     }
 
     private function fileHash(string $path): string

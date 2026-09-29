@@ -148,6 +148,7 @@ final class BackupTelegramExportServiceTest extends TestCase
             '02:30',
             30,
             180,
+            1800,
             $telegramEnabled,
             $partBytes,
             [],

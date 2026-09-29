@@ -17,7 +17,11 @@ interface BackupRepository
      * @param  Closure(self):T  $callback
      * @return T
      */
-    public function synchronized(Closure $callback): mixed;
+    public function synchronized(
+        Closure $callback,
+        bool $priority = false,
+        int $waitMilliseconds = 0,
+    ): mixed;
 
     public function recoverIncomplete(): void;
 

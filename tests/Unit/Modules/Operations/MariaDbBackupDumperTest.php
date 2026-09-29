@@ -38,6 +38,8 @@ final class MariaDbBackupDumperTest extends TestCase
             $argumentText = implode("\n", $arguments);
             self::assertStringNotContainsString('test-only-db-secret', $argumentText);
             self::assertStringNotContainsString('test-only-inherited-mysql-secret', $argumentText);
+            self::assertStringStartsWith('--defaults-file=', (string) ($arguments[0] ?? ''));
+            self::assertStringNotContainsString('--defaults-extra-file=', $argumentText);
             self::assertStringContainsString('--single-transaction', $argumentText);
             self::assertStringContainsString('--result-file='.$destination, $argumentText);
 
@@ -49,9 +51,9 @@ final class MariaDbBackupDumperTest extends TestCase
 
             $optionArgument = collect($arguments)
                 ->first(static fn (mixed $value): bool => is_string($value)
-                    && str_starts_with($value, '--defaults-extra-file='));
+                    && str_starts_with($value, '--defaults-file='));
             self::assertIsString($optionArgument);
-            self::assertFileDoesNotExist(substr($optionArgument, strlen('--defaults-extra-file=')));
+            self::assertFileDoesNotExist(substr($optionArgument, strlen('--defaults-file=')));
         } finally {
             $this->clearEnvironment('MYSQL_PWD');
             $this->removeTree($directory);
@@ -91,9 +93,9 @@ final class MariaDbBackupDumperTest extends TestCase
             );
             $optionArgument = collect($arguments)
                 ->first(static fn (mixed $value): bool => is_string($value)
-                    && str_starts_with($value, '--defaults-extra-file='));
+                    && str_starts_with($value, '--defaults-file='));
             self::assertIsString($optionArgument);
-            self::assertFileDoesNotExist(substr($optionArgument, strlen('--defaults-extra-file=')));
+            self::assertFileDoesNotExist(substr($optionArgument, strlen('--defaults-file=')));
         } finally {
             $this->removeTree($directory);
         }
@@ -111,8 +113,8 @@ file_put_contents($directory.'/capture-args.json', json_encode($args, JSON_THROW
 $optionFile = null;
 $resultFile = null;
 foreach ($args as $argument) {
-    if (str_starts_with($argument, '--defaults-extra-file=')) {
-        $optionFile = substr($argument, strlen('--defaults-extra-file='));
+    if (str_starts_with($argument, '--defaults-file=')) {
+        $optionFile = substr($argument, strlen('--defaults-file='));
     }
     if (str_starts_with($argument, '--result-file=')) {
         $resultFile = substr($argument, strlen('--result-file='));
