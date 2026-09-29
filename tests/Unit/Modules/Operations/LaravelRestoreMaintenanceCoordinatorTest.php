@@ -247,7 +247,7 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
     {
         $runId = '20260929T040014Z-9999999999999999';
         $maintenance = $this->createMock(MaintenanceMode::class);
-        $console = $this->createMock(Kernel::class);
+        $console = $this->createStub(Kernel::class);
         $scheduler = $this->createMock(RestoreSchedulerMutationLock::class);
         $events = [];
 
