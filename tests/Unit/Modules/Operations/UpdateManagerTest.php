@@ -55,6 +55,7 @@ final class UpdateManagerTest extends TestCase
             'maintenance.enter',
             'safety.no_unsafe_work',
             'executor.migrate',
+            'safety.installed_schema',
             'executor.verify',
             'release.activate',
             'executor.verify',
@@ -429,7 +430,7 @@ final class UpdateManagerTest extends TestCase
             payloadChecksums: ['artisan' => str_repeat('2', 64)],
         );
         $workspace = new FakeUpdateWorkspace($events);
-        $safety = new FakeUpdateSafetyInspector($events, $fromSchema, $toSchema);
+        $safety = new FakeUpdateSafetyInspector($events, $workspace, $fromSchema, $toSchema);
         $executor = new FakeUpdateReleaseExecutor($events, $safety);
         $packages = new FakeUpdatePackageVerifier($events, $package);
         $backup = new FakeVerifiedPreUpdateBackupProvider($events);
@@ -624,12 +625,30 @@ final class FakeUpdateSafetyInspector implements UpdateSafetyInspector
 
     public function __construct(
         private readonly UpdateEventLog $events,
+        private readonly FakeUpdateWorkspace $workspace,
         public string $schema,
         private readonly string $targetSchema,
     ) {}
 
     public function currentSchemaSha256(): string
     {
+        if (hash_equals($this->schema, $this->targetSchema)
+            && $this->workspace->current !== '1.1.0'
+        ) {
+            throw new RuntimeException('test-only-active-release-schema-mismatch');
+        }
+
+        return $this->schema;
+    }
+
+    public function installedSchemaSha256ForRelease(string $releasePath): string
+    {
+        $this->events->add('safety.installed_schema');
+
+        if (! str_ends_with($releasePath, '/releases/1.1.0')) {
+            throw new RuntimeException('test-only-unexpected-schema-release');
+        }
+
         return $this->schema;
     }
 
