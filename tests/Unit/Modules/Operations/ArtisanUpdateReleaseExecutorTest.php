@@ -17,9 +17,12 @@ final class ArtisanUpdateReleaseExecutorTest extends TestCase
     public function test_disk_capacity_failure_is_rejected_before_release_mutation(): void
     {
         $root = storage_path('framework/testing/update-executor-disk-'.bin2hex(random_bytes(4)));
+        $php = $root.'/php';
         $composer = $root.'/composer';
         mkdir($root.'/releases', 0700, true);
+        file_put_contents($php, "#!/bin/sh\nexit 0\n");
         file_put_contents($composer, "#!/bin/sh\nexit 0\n");
+        chmod($php, 0700);
         chmod($composer, 0700);
 
         $id = new Process(['/usr/bin/id', '-un']);
@@ -30,7 +33,7 @@ final class ArtisanUpdateReleaseExecutorTest extends TestCase
             enabled: true,
             deploymentRoot: $root,
             packageRoot: $root,
-            phpBinary: PHP_BINARY,
+            phpBinary: $php,
             composerBinary: $composer,
             runUser: $runUser,
             processTimeoutSeconds: 60,
