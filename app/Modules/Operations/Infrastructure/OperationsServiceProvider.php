@@ -4,19 +4,32 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\Operations\Application\BackupCompatibilityIdentity;
 use App\Modules\Operations\Application\BackupManager;
 use App\Modules\Operations\Application\BackupRuntimeConfiguration;
 use App\Modules\Operations\Application\BackupTelegramExportService;
+use App\Modules\Operations\Application\RestoreManager;
+use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
+use App\Modules\Operations\Application\RuntimeHealthProbe;
 use App\Modules\Operations\Application\Contracts\BackupArtifactCipherFactory;
+use App\Modules\Operations\Application\Contracts\BackupBundleReader as BackupBundleReaderContract;
 use App\Modules\Operations\Application\Contracts\BackupBundleWriter as BackupBundleWriterContract;
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
 use App\Modules\Operations\Application\Contracts\BackupPayloadCollector as BackupPayloadCollectorContract;
 use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
+use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
+use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
+use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
+use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\QueueWorkerHeartbeatReporter;
 use App\Modules\Operations\Application\WorkerHeartbeatService;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
+use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Foundation\MaintenanceMode;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
@@ -72,6 +85,18 @@ final class OperationsServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            RestoreRuntimeConfiguration::class,
+            static function (): RestoreRuntimeConfiguration {
+                $configuration = config('operations.restore');
+                if (! is_array($configuration)) {
+                    throw new RuntimeException('Restore configuration is unavailable.');
+                }
+
+                return RestoreRuntimeConfiguration::fromArray($configuration);
+            },
+        );
+
+        $this->app->singleton(
             BackupRepository::class,
             fn (Application $application): BackupRepository => new FilesystemBackupRepository(
                 $application->make(BackupRuntimeConfiguration::class)->root,
@@ -123,6 +148,102 @@ final class OperationsServiceProvider extends ServiceProvider
                 );
             },
         );
+
+        $this->app->singleton(
+            BackupCompatibilityIdentity::class,
+            static function (): BackupCompatibilityIdentity {
+                $connectionName = config('database.default');
+                $database = is_string($connectionName)
+                    ? config('database.connections.'.$connectionName)
+                    : null;
+                $driver = is_array($database) ? ($database['driver'] ?? null) : null;
+                if (! is_string($driver) || $driver === '') {
+                    throw new RuntimeException('Backup compatibility database driver configuration is invalid.');
+                }
+
+                $version = config('app.version');
+                $applicationVersion = is_string($version) && $version !== '' ? $version : 'unversioned';
+
+                return new BackupCompatibilityIdentity(
+                    $applicationVersion,
+                    base_path('composer.lock'),
+                    database_path('migrations'),
+                    $driver,
+                );
+            },
+        );
+
+        $this->app->singleton(BackupBundleReaderContract::class, BackupBundleReader::class);
+
+        $this->app->singleton(
+            RestoreWorkspace::class,
+            fn (Application $application): RestoreWorkspace => new FilesystemRestoreWorkspace(
+                $application->make(BackupRuntimeConfiguration::class)->root,
+            ),
+        );
+
+        $this->app->singleton(
+            RestorePayloadRestorer::class,
+            function (Application $application): RestorePayloadRestorer {
+                $backup = $application->make(BackupRuntimeConfiguration::class);
+
+                return new FilesystemRestorePayloadRestorer(
+                    $backup->configFiles,
+                    $backup->privateDirectories,
+                );
+            },
+        );
+
+        $this->app->singleton(
+            RestoreMaintenanceCoordinator::class,
+            function (Application $application): RestoreMaintenanceCoordinator {
+                $restore = $application->make(RestoreRuntimeConfiguration::class);
+
+                return new LaravelRestoreMaintenanceCoordinator(
+                    $application->make(MaintenanceMode::class),
+                    $application->make(Kernel::class),
+                    $restore->quiesceSeconds,
+                );
+            },
+        );
+
+        $this->app->singleton(
+            RestoreDatabaseRestorer::class,
+            function (Application $application): RestoreDatabaseRestorer {
+                $connectionName = config('database.default');
+                if (! is_string($connectionName) || $connectionName === '') {
+                    throw new RuntimeException('Restore database connection configuration is invalid.');
+                }
+
+                $database = config('database.connections.'.$connectionName);
+                if (! is_array($database) || ($database['driver'] ?? null) !== 'mysql') {
+                    throw new RuntimeException('Restore requires the supported MariaDB/MySQL connection.');
+                }
+
+                $restore = $application->make(RestoreRuntimeConfiguration::class);
+
+                return new MariaDbRestoreExecutor(
+                    $restore->mariaDbBinary,
+                    self::requiredString($database['host'] ?? null, 'Restore database host'),
+                    self::boundedInteger($database['port'] ?? null, 1, 65535, 'Restore database port'),
+                    self::requiredString($database['database'] ?? null, 'Restore database name'),
+                    self::requiredString($database['username'] ?? null, 'Restore database username'),
+                    self::stringValue($database['password'] ?? null, 'Restore database credential'),
+                    $restore->processTimeoutSeconds,
+                );
+            },
+        );
+
+        $this->app->singleton(
+            RestorePostRestoreVerifier::class,
+            fn (Application $application): RestorePostRestoreVerifier => new DatabaseRestorePostVerifier(
+                $application->make(DatabaseManager::class),
+                $application->make(RuntimeHealthProbe::class),
+                database_path('migrations'),
+            ),
+        );
+
+        $this->app->singleton(RestoreManager::class);
 
         $this->app->singleton(
             BackupManager::class,
