@@ -43,6 +43,32 @@ final class PharUpdatePackageVerifierTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 RUN-002 RUN-006 SEC-001 QUA-001 */
+    public function test_final_extracted_payload_verification_detects_post_extraction_tampering(): void
+    {
+        $fixture = $this->fixture('final-payload');
+
+        try {
+            [$packagePath, $sha256] = $this->package($fixture);
+            $verifier = new PharUpdatePackageVerifier($fixture.'/packages');
+            $verified = $verifier->verify($packagePath, $sha256);
+            $destination = $fixture.'/release';
+            $verifier->extract($verified, $destination);
+            $verifier->verifyExtracted($verified, $destination);
+
+            file_put_contents($destination.'/artisan', "<?php\n// tampered after dependency preparation\n");
+
+            try {
+                $verifier->verifyExtracted($verified, $destination);
+                self::fail('Reviewed payload changes before activation must fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('A staged release file failed checksum verification.', $exception->getMessage());
+            }
+        } finally {
+            $this->removeTree($fixture);
+        }
+    }
+
     /** @requirement UPD-001 SEC-001 QUA-001 */
     public function test_it_rejects_wrong_complete_package_trusted_checksum_before_archive_use(): void
     {
@@ -195,7 +221,12 @@ final class PharUpdatePackageVerifierTest extends TestCase
     /** @requirement UPD-001 SEC-008 QUA-001 */
     public function test_it_rejects_reserved_secret_and_mutable_runtime_payload_paths(): void
     {
-        foreach (['.env', 'storage/private.txt', 'vendor/autoload.php'] as $reserved) {
+        foreach ([
+            '.env',
+            'storage/private.txt',
+            'vendor/autoload.php',
+            'bootstrap/cache/config.php',
+        ] as $reserved) {
             $fixture = $this->fixture('reserved-'.str_replace(['/', '.'], '-', $reserved));
 
             try {
