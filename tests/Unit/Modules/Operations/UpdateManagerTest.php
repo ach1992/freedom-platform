@@ -49,6 +49,7 @@ final class UpdateManagerTest extends TestCase
             'executor.prepare',
             'workspace.publish',
             'release.prepare',
+            'executor.prepare_runtime',
             'workspace.seal',
             'fence.enter',
             'safety.no_unsafe_work',
@@ -722,6 +723,11 @@ final class FakeUpdateReleaseExecutor implements UpdateReleaseExecutor
         if ($this->failPrepare) {
             throw new RuntimeException('test-only-dependency-failure');
         }
+    }
+
+    public function prepareRuntime(string $releasePath): void
+    {
+        $this->events->add('executor.prepare_runtime');
     }
 
     public function migrate(string $releasePath): void
