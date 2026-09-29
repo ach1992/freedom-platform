@@ -46,6 +46,16 @@ final class RestoreBackupCommand extends Command
             'safety_backup_id' => $result->safetyBackupId,
         ];
 
+        if ($result->status === 'completed_reporting_failed') {
+            if ($this->option('json')) {
+                $this->line(json_encode($payload + ['error_code' => 'final_report_unavailable'], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+            } else {
+                $this->error('Restore finished, but final reporting did not complete.');
+            }
+
+            return self::FAILURE;
+        }
+
         if ($this->option('json')) {
             $this->line(json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
         } else {
