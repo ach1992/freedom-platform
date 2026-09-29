@@ -440,7 +440,8 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 throw new RuntimeException('Restore critical environment authority contains duplicate keys.');
             }
 
-            if (preg_match_all('/\\$\\{([A-Z][A-Z0-9_]*)\\}/', $matches[2], $references) > 0) {
+            $rightHandSide = $matches[2];
+            if (preg_match_all('/\\$\\{([A-Z][A-Z0-9_]*)\\}/', $rightHandSide, $references) > 0) {
                 foreach ($references[1] as $reference) {
                     if (! in_array($reference, self::CRITICAL_ENVIRONMENT_KEYS, true)
                         || ! array_key_exists($reference, $seenCriticalKeys)
@@ -450,6 +451,145 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                         );
                     }
                 }
+            }
+
+            $unresolvedInterpolation = preg_replace(
+                '/\\$\\{[A-Z][A-Z0-9_]*\\}/',
+                '',
+                $rightHandSide,
+            );
+            if (! is_string($unresolvedInterpolation) || str_contains($unresolvedInterpolation, '
+        }
+
+        if ($seenCriticalKeys === []) {
+            return [];
+        }
+
+        try {
+            $parsed = Dotenv::parse($contents);
+        } catch (Throwable) {
+            throw new RuntimeException('Restore critical environment authority could not be parsed.');
+        }
+
+        $identity = [];
+
+        foreach (self::CRITICAL_ENVIRONMENT_KEYS as $key) {
+            if (! array_key_exists($key, $parsed)) {
+                continue;
+            }
+
+            $value = $parsed[$key];
+            if (! is_string($value)) {
+                throw new RuntimeException('Restore critical environment authority contains an invalid critical value.');
+            }
+
+            $identity[$key] = hash('sha256', $value);
+        }
+
+        ksort($identity, SORT_STRING);
+
+        return $identity;
+    }
+
+    private function safeFileTarget(string $configuredPath): string
+    {
+        if (! str_starts_with($configuredPath, DIRECTORY_SEPARATOR)
+            || str_contains($configuredPath, "\0")
+            || is_link($configuredPath)
+        ) {
+            throw new RuntimeException('A restore configuration target is unsafe.');
+        }
+
+        $parent = realpath(dirname($configuredPath));
+        if ($parent === false || ! is_dir($parent)) {
+            throw new RuntimeException('A restore configuration target parent is unavailable.');
+        }
+
+        $target = $parent.'/'.basename($configuredPath);
+        if (file_exists($target) && ! is_file($target)) {
+            throw new RuntimeException('A restore configuration target is not a regular file.');
+        }
+
+        return $target;
+    }
+
+    private function safeDirectoryTarget(string $configuredPath): string
+    {
+        if (! str_starts_with($configuredPath, DIRECTORY_SEPARATOR)
+            || str_contains($configuredPath, "\0")
+            || is_link($configuredPath)
+        ) {
+            throw new RuntimeException('A private restore target is unsafe.');
+        }
+
+        $parent = realpath(dirname($configuredPath));
+        if ($parent === false || ! is_dir($parent)) {
+            throw new RuntimeException('A private restore target parent is unavailable.');
+        }
+
+        $target = $parent.'/'.basename($configuredPath);
+        if (file_exists($target) && ! is_dir($target)) {
+            throw new RuntimeException('A private restore target is not a directory.');
+        }
+
+        return $target;
+    }
+
+    private function assertSwapPathsAvailable(string $stage, string $recovery): void
+    {
+        foreach ([$stage, $recovery] as $path) {
+            if (file_exists($path) || is_link($path)) {
+                throw new RuntimeException('A restore swap or recovery path already exists.');
+            }
+        }
+    }
+
+    private function copyRegularFile(string $source, string $destination): void
+    {
+        if (! is_file($source) || is_link($source) || ! is_readable($source)
+            || file_exists($destination) || is_link($destination)
+        ) {
+            throw new RuntimeException('A restore file copy boundary is unsafe.');
+        }
+
+        if (! copy($source, $destination) || ! chmod($destination, 0600)) {
+            throw new RuntimeException('A restore file could not be staged securely.');
+        }
+    }
+
+    private function createDirectoriesUnder(string $root, string $directory): void
+    {
+        if (is_dir($directory)) {
+            $real = realpath($directory);
+            $rootReal = realpath($root);
+            if ($real === false || $rootReal === false
+                || ($real !== $rootReal && ! str_starts_with($real, $rootReal.DIRECTORY_SEPARATOR))
+            ) {
+                throw new RuntimeException('A private restore staging path is unsafe.');
+            }
+
+            return;
+        }
+
+        if (file_exists($directory) || is_link($directory)
+            || ! mkdir($directory, 0700, true)
+            || ! chmod($directory, 0700)
+        ) {
+            throw new RuntimeException('A private restore staging path could not be secured.');
+        }
+    }
+
+    private function assertRunId(string $restoreRunId): void
+    {
+        if (preg_match('/\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\z/', $restoreRunId) !== 1) {
+            throw new RuntimeException('The restore run identifier is invalid.');
+        }
+    }
+}
+)) {
+                throw new RuntimeException(
+                    'Restore critical environment authority uses unresolved or unapproved variable interpolation.',
+                );
             }
 
             $seenCriticalKeys[$key] = true;
