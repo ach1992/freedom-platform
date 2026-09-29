@@ -24,6 +24,8 @@ return [
         'daily_time' => env('BACKUP_DAILY_TIME', '02:30'),
         'frequent_overlap_minutes' => (int) env('BACKUP_FREQUENT_OVERLAP_MINUTES', 30),
         'daily_overlap_minutes' => (int) env('BACKUP_DAILY_OVERLAP_MINUTES', 180),
+        'telegram_export_enabled' => filter_var(env('BACKUP_TELEGRAM_EXPORT_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'telegram_part_bytes' => (int) env('BACKUP_TELEGRAM_PART_BYTES', 19_000_000),
         'dump_binary' => env('BACKUP_MARIADB_DUMP_BINARY', '/usr/bin/mariadb-dump'),
         'process_timeout_seconds' => (int) env('BACKUP_PROCESS_TIMEOUT_SECONDS', 900),
         'config_files' => [

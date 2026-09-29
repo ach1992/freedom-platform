@@ -73,15 +73,34 @@ final readonly class FilesystemBackupRepository implements BackupRepository
 
         $completed = $root.'/completed';
         foreach (scandir($completed) ?: [] as $name) {
-            if (preg_match('/\A(backup-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\.fbk\z/', $name, $matches) !== 1) {
+            if (preg_match('/\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\.fbk\z/', $name, $matches) === 1) {
+                $backupId = $matches[1];
+                $manifest = $completed.'/backup-'.$backupId.'.manifest.json';
+                if (! is_file($manifest)) {
+                    $this->unlinkRegularFile($completed.'/'.$name, 'An incomplete backup artifact could not be recovered safely.');
+                    $this->unlinkIfRegular($completed.'/backup-'.$backupId.'.telegram-export.json');
+                }
+
                 continue;
             }
 
-            $manifest = $completed.'/'.$matches[1].'.manifest.json';
-            if (! is_file($manifest)) {
-                $path = $completed.'/'.$name;
-                if (is_link($path) || ! is_file($path) || ! unlink($path)) {
-                    throw new RuntimeException('An incomplete backup artifact could not be recovered safely.');
+            if (preg_match('/\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\.manifest\.json\z/', $name, $matches) === 1) {
+                $backupId = $matches[1];
+                $artifact = $completed.'/backup-'.$backupId.'.fbk';
+                if (! is_file($artifact)) {
+                    $this->unlinkIfRegular($completed.'/backup-'.$backupId.'.telegram-export.json');
+                    $this->unlinkRegularFile($completed.'/'.$name, 'An incomplete backup manifest could not be recovered safely.');
+                }
+
+                continue;
+            }
+
+            if (preg_match('/\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\.telegram-export\.json\z/', $name, $matches) === 1) {
+                $backupId = $matches[1];
+                if (! is_file($completed.'/backup-'.$backupId.'.fbk')
+                    || ! is_file($completed.'/backup-'.$backupId.'.manifest.json')
+                ) {
+                    $this->unlinkIfRegular($completed.'/'.$name);
                 }
             }
         }
@@ -165,10 +184,11 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         $completed = $this->root().'/completed';
 
         foreach (scandir($completed) ?: [] as $name) {
-            if (preg_match('/\Abackup-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\.manifest\.json\z/', $name) !== 1) {
+            if (preg_match('/\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\.manifest\.json\z/', $name, $matches) !== 1) {
                 continue;
             }
 
+            $backupId = $matches[1];
             $manifestPath = $completed.'/'.$name;
             if (is_link($manifestPath) || ! is_file($manifestPath)) {
                 throw new RuntimeException('A backup manifest path is unsafe.');
@@ -178,13 +198,14 @@ final readonly class FilesystemBackupRepository implements BackupRepository
             $manifest = is_string($contents) ? json_decode($contents, true) : null;
             if (! is_array($manifest)
                 || ($manifest['authority'] ?? null) !== self::AUTHORITY
+                || ($manifest['backup_id'] ?? null) !== $backupId
                 || ! is_string($manifest['completed_at'] ?? null)
                 || ! is_string($manifest['artifact']['filename'] ?? null)
             ) {
                 continue;
             }
 
-            $expectedArtifact = substr($name, 0, -strlen('.manifest.json')).'.fbk';
+            $expectedArtifact = 'backup-'.$backupId.'.fbk';
             if (! hash_equals($expectedArtifact, $manifest['artifact']['filename'])) {
                 continue;
             }
@@ -204,6 +225,8 @@ final readonly class FilesystemBackupRepository implements BackupRepository
                 throw new RuntimeException('A backup artifact path is unsafe.');
             }
 
+            $this->unlinkIfRegular($completed.'/backup-'.$backupId.'.telegram-export.json');
+
             if (is_file($artifactPath) && ! unlink($artifactPath)) {
                 throw new RuntimeException('An expired backup artifact could not be removed.');
             }
@@ -212,6 +235,120 @@ final readonly class FilesystemBackupRepository implements BackupRepository
                 throw new RuntimeException('An expired backup manifest could not be removed.');
             }
         }
+    }
+
+    /** @return array{filename:string,bytes:int,sha256:string,completed_at:string} */
+    public function completedArtifactMetadata(string $backupId): array
+    {
+        $completed = $this->validatedCompletedArtifact($backupId, true);
+
+        return [
+            'filename' => $completed['filename'],
+            'bytes' => $completed['bytes'],
+            'sha256' => $completed['sha256'],
+            'completed_at' => $completed['completed_at'],
+        ];
+    }
+
+    public function readArtifactSlice(string $backupId, int $offset, int $length): string
+    {
+        if ($offset < 0 || $length < 1) {
+            throw new RuntimeException('The backup artifact slice is invalid.');
+        }
+
+        $completed = $this->validatedCompletedArtifact($backupId, false);
+        if ($offset > $completed['bytes'] || $length > $completed['bytes'] - $offset) {
+            throw new RuntimeException('The backup artifact slice exceeds the completed artifact.');
+        }
+
+        $handle = fopen($completed['path'], 'rb');
+        if ($handle === false) {
+            throw new RuntimeException('The completed backup artifact could not be opened.');
+        }
+
+        try {
+            if (fseek($handle, $offset, SEEK_SET) !== 0) {
+                throw new RuntimeException('The completed backup artifact slice could not be positioned.');
+            }
+
+            $contents = '';
+            while (($remaining = $length - strlen($contents)) > 0) {
+                $chunk = fread($handle, max(1, $remaining));
+                if ($chunk === false || $chunk === '') {
+                    throw new RuntimeException('The completed backup artifact slice is truncated.');
+                }
+                $contents .= $chunk;
+            }
+
+            return $contents;
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    public function storeTelegramExportManifest(string $backupId, string $contents): void
+    {
+        $this->assertBackupId($backupId);
+        if ($contents === '' || strlen($contents) > 20_000_000) {
+            throw new RuntimeException('The backup Telegram export manifest is invalid.');
+        }
+
+        $this->validatedCompletedArtifact($backupId, false);
+        $completed = $this->root().'/completed';
+        $path = $completed.'/backup-'.$backupId.'.telegram-export.json';
+
+        if (is_file($path)) {
+            if (is_link($path)) {
+                throw new RuntimeException('The backup Telegram export manifest path is unsafe.');
+            }
+
+            $existing = file_get_contents($path);
+            if (! is_string($existing) || ! hash_equals($existing, $contents)) {
+                throw new RuntimeException('The backup Telegram export manifest conflicts with existing state.');
+            }
+
+            return;
+        }
+
+        if (file_exists($path) || is_link($path)) {
+            throw new RuntimeException('The backup Telegram export manifest path is unsafe.');
+        }
+
+        $temporary = tempnam($completed, '.backup-telegram-export-');
+        if ($temporary === false) {
+            throw new RuntimeException('The backup Telegram export manifest temporary file could not be created.');
+        }
+
+        try {
+            if (file_put_contents($temporary, $contents, LOCK_EX) !== strlen($contents)
+                || ! chmod($temporary, 0600)
+                || ! rename($temporary, $path)
+            ) {
+                throw new RuntimeException('The backup Telegram export manifest could not be published.');
+            }
+        } finally {
+            if (is_file($temporary)) {
+                @unlink($temporary);
+            }
+        }
+    }
+
+    public function telegramExportManifest(string $backupId): string
+    {
+        $this->assertBackupId($backupId);
+        $this->validatedCompletedArtifact($backupId, false);
+
+        $path = $this->root().'/completed/backup-'.$backupId.'.telegram-export.json';
+        if (! is_file($path) || is_link($path)) {
+            throw new RuntimeException('The backup Telegram export manifest is unavailable.');
+        }
+
+        $contents = file_get_contents($path);
+        if (! is_string($contents) || $contents === '') {
+            throw new RuntimeException('The backup Telegram export manifest could not be read.');
+        }
+
+        return $contents;
     }
 
     public function root(): string
@@ -254,10 +391,91 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         return $root;
     }
 
+    /**
+     * @return array{path:string,filename:string,bytes:int,sha256:string,completed_at:string}
+     */
+    private function validatedCompletedArtifact(string $backupId, bool $verifyHash): array
+    {
+        $this->assertBackupId($backupId);
+        $completed = $this->root().'/completed';
+        $artifactFilename = 'backup-'.$backupId.'.fbk';
+        $artifactPath = $completed.'/'.$artifactFilename;
+        $manifestPath = $completed.'/backup-'.$backupId.'.manifest.json';
+
+        if (! is_file($artifactPath)
+            || is_link($artifactPath)
+            || ! is_file($manifestPath)
+            || is_link($manifestPath)
+        ) {
+            throw new RuntimeException('The completed backup artifact is unavailable.');
+        }
+
+        $manifestJson = file_get_contents($manifestPath);
+        $manifest = is_string($manifestJson) ? json_decode($manifestJson, true) : null;
+        $bytes = is_array($manifest) ? ($manifest['artifact']['bytes'] ?? null) : null;
+        $sha256 = is_array($manifest) ? ($manifest['artifact']['sha256'] ?? null) : null;
+        $completedAt = is_array($manifest) ? ($manifest['completed_at'] ?? null) : null;
+
+        if (! is_array($manifest)
+            || ($manifest['authority'] ?? null) !== self::AUTHORITY
+            || ($manifest['backup_id'] ?? null) !== $backupId
+            || ($manifest['artifact']['filename'] ?? null) !== $artifactFilename
+            || ! is_int($bytes)
+            || $bytes < 1
+            || ! is_string($sha256)
+            || preg_match('/\A[0-9a-f]{64}\z/', $sha256) !== 1
+            || ! is_string($completedAt)
+        ) {
+            throw new RuntimeException('The completed backup manifest is invalid.');
+        }
+
+        try {
+            new DateTimeImmutable($completedAt);
+        } catch (Throwable) {
+            throw new RuntimeException('The completed backup timestamp is invalid.');
+        }
+
+        $actualBytes = filesize($artifactPath);
+        if (! is_int($actualBytes) || $actualBytes !== $bytes) {
+            throw new RuntimeException('The completed backup artifact size failed verification.');
+        }
+
+        if ($verifyHash) {
+            $actualHash = hash_file('sha256', $artifactPath);
+            if (! is_string($actualHash) || ! hash_equals($sha256, $actualHash)) {
+                throw new RuntimeException('The completed backup artifact hash failed verification.');
+            }
+        }
+
+        return [
+            'path' => $artifactPath,
+            'filename' => $artifactFilename,
+            'bytes' => $bytes,
+            'sha256' => $sha256,
+            'completed_at' => $completedAt,
+        ];
+    }
+
     private function assertBackupId(string $backupId): void
     {
         if (preg_match('/\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\z/', $backupId) !== 1) {
             throw new RuntimeException('The backup identifier is invalid.');
+        }
+    }
+
+    private function unlinkIfRegular(string $path): void
+    {
+        if (! file_exists($path) && ! is_link($path)) {
+            return;
+        }
+
+        $this->unlinkRegularFile($path, 'A backup-owned sidecar could not be removed safely.');
+    }
+
+    private function unlinkRegularFile(string $path, string $message): void
+    {
+        if (is_link($path) || ! is_file($path) || ! unlink($path)) {
+            throw new RuntimeException($message);
         }
     }
 

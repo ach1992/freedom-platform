@@ -7,6 +7,7 @@ namespace App\Modules\Telegram\Application;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -22,6 +23,7 @@ final readonly class TelegramProtectedPresentationResolver
         private ?TelegramSupportMembershipFreshnessGuard $supportMembership = null,
         private ?TelegramPrivateMediaDeliveryResolver $privateMedia = null,
         private ?TelegramAlternativePaymentReview $paymentReviews = null,
+        private ?TelegramBackupArtifactPresentationSource $backupArtifacts = null,
     ) {}
 
     public function resolveForSelf(
@@ -40,6 +42,13 @@ final readonly class TelegramProtectedPresentationResolver
         }
         if ($reference->isSupportAttachment()) {
             return $this->supportAttachmentForSelf($userId, $reference);
+        }
+        if ($reference->isBackupExport()) {
+            if ($this->backupArtifacts === null) {
+                throw new RuntimeException('Protected Telegram backup-export resolver is unavailable.');
+            }
+
+            return $this->backupArtifacts->resolveForOwner($userId, $reference);
         }
         if ($reference->isPaymentReviewEvidence()) {
             return $this->paymentReviewEvidenceForSelf($userId, $reference);

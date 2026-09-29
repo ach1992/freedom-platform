@@ -22,6 +22,8 @@ final readonly class BackupRuntimeConfiguration
         public string $dailyTime,
         public int $frequentOverlapMinutes,
         public int $dailyOverlapMinutes,
+        public bool $telegramExportEnabled,
+        public int $telegramPartBytes,
         public array $configFiles,
         public array $privateDirectories,
     ) {
@@ -55,6 +57,13 @@ final readonly class BackupRuntimeConfiguration
             if ($minutes < 1 || $minutes > 1440) {
                 throw new InvalidArgumentException('Backup overlap configuration is invalid.');
             }
+        }
+
+        // The current protected Telegram document boundary is 20 MB. Keeping the
+        // backup part below that bound also satisfies BAK-001's <=45 MB requirement
+        // without widening the generic Telegram provider surface.
+        if ($telegramPartBytes < 1 || $telegramPartBytes > 20_000_000) {
+            throw new InvalidArgumentException('Backup Telegram part-size configuration is invalid.');
         }
 
         $this->assertPathMap($configFiles, 'Backup configuration-file');
@@ -110,6 +119,8 @@ final readonly class BackupRuntimeConfiguration
             self::string($values['daily_time'] ?? null, 'Backup daily time'),
             self::integer($values['frequent_overlap_minutes'] ?? null, 'Backup frequent overlap'),
             self::integer($values['daily_overlap_minutes'] ?? null, 'Backup daily overlap'),
+            (bool) ($values['telegram_export_enabled'] ?? false),
+            self::integer($values['telegram_part_bytes'] ?? null, 'Backup Telegram part size'),
             self::stringMap($values['config_files'] ?? null, 'Backup configuration files'),
             self::stringMap($values['private_directories'] ?? null, 'Backup private directories'),
         );

@@ -29,4 +29,13 @@ interface BackupRepository
     public function publish(string $backupId, string $artifactPath, string $manifestPath): array;
 
     public function prune(DateTimeImmutable $now, int $retentionDays): void;
+
+    /** @return array{filename:string,bytes:int,sha256:string,completed_at:string} */
+    public function completedArtifactMetadata(string $backupId): array;
+
+    public function readArtifactSlice(string $backupId, int $offset, int $length): string;
+
+    public function storeTelegramExportManifest(string $backupId, string $contents): void;
+
+    public function telegramExportManifest(string $backupId): string;
 }

@@ -14,6 +14,7 @@ use App\Modules\Telegram\Application\Contracts\ProtectedTelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
@@ -407,6 +408,9 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramSupportMembershipFreshnessGuard::class),
                 $application->make(TelegramPrivateMediaDeliveryResolver::class),
                 $application->make(TelegramAlternativePaymentReview::class),
+                $application->bound(TelegramBackupArtifactPresentationSource::class)
+                    ? $application->make(TelegramBackupArtifactPresentationSource::class)
+                    : null,
             ),
         );
         $this->app->singleton(

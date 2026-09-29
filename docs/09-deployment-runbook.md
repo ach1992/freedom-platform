@@ -135,6 +135,17 @@ Production backups must be consistent, authenticated-encrypted, checksummed/mani
 
 A backup that has never been restored is not sufficient release evidence.
 
+The Phase 0.8 backup authority is disabled by default. When a reviewed deployment deliberately enables it:
+
+- set `BACKUP_ROOT` to protected persistent storage outside `current/` and the web root (normally `<root>/shared/backups`), with the runtime account able to create `0700` directories and `0600` artifacts;
+- provision `BACKUP_ENCRYPTION_KEY` as a dedicated base64-encoded 32-byte random secret through the protected deployment secret path. It is independent of `APP_KEY`; retain the exact key for every backup that may still need restore and never log or commit it;
+- `BACKUP_DATABASE_INTERVAL_MINUTES` must divide 60; `BACKUP_DAILY_TIME` is UTC `HH:MM`; retention is controlled by `BACKUP_RETENTION_DAYS`; the existing single Laravel Scheduler Cron owns both schedules when `BACKUP_ENABLED=true`;
+- `php artisan operations:backup --kind=frequent_database --json` creates the database-only artifact; `--kind=daily_full` also captures configured environment/private storage; `--kind=pre_update` is the explicit hook consumed by the later updater authority;
+- a completed backup is the encrypted `.fbk` plus its final `.manifest.json`. The manifest is published last; an artifact without its manifest is incomplete and is recovered on the next backup run. Never treat work-directory/intermediate files as backup evidence;
+- MariaDB credentials are supplied to `mariadb-dump` through a mode-`0600` temporary client option file rather than command arguments, and successful/failed runs remove authority-owned plaintext work state.
+
+Optional Telegram export is a secondary copy, not the local backup authority. Enable it separately with `BACKUP_TELEGRAM_EXPORT_ENABLED=true`. `BACKUP_TELEGRAM_PART_BYTES` is capped at 20,000,000 bytes, which remains within BAK-001's `<=45 MB` requirement while reusing the existing protected Telegram document boundary. `php artisan operations:backup:telegram-export <backup-id> --json` only queues an integrity-bound manifest plus encrypted artifact-part references through the existing durable Telegram Outbox; it does not bypass rate/retry/uncertain-delivery handling. At provider time, each part is re-read from the completed artifact and SHA-256 verified. Delivery is restricted to the single current active Owner Telegram account. Do not use Telegram export to send plaintext database/config/private-media material.
+
 ## Restore
 
 Restore is privileged and explicit. It must validate backup integrity/compatibility, preserve a safety copy before destructive replacement, restore through an isolated/staged boundary where possible, and reconcile financial/remote state before reopening.

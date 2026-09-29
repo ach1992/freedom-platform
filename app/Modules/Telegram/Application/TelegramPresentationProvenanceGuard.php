@@ -28,6 +28,7 @@ final class TelegramPresentationProvenanceGuard
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramMenuConfigurationNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
+        'app/Modules/Telegram/Application/TelegramBackupProtectedReferenceDeliveryQueue.php',
         'app/Modules/Telegram/Application/TelegramNavigationEntryGateway.php',
         'app/Modules/Telegram/Application/TelegramNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramPhoneVerificationNavigationHandler.php',

@@ -6,6 +6,7 @@ namespace Tests\Unit\Modules\Operations;
 
 use App\Modules\Operations\Infrastructure\FilesystemBackupRepository;
 use DateTimeImmutable;
+use RuntimeException;
 use Tests\TestCase;
 
 final class FilesystemBackupRepositoryTest extends TestCase
@@ -20,6 +21,7 @@ final class FilesystemBackupRepositoryTest extends TestCase
             $root = $repository->root();
             $orphanId = '20260929T040000Z-0101010101010101';
             file_put_contents($root.'/completed/backup-'.$orphanId.'.fbk', 'orphan-ciphertext');
+            file_put_contents($root.'/completed/backup-'.$orphanId.'.telegram-export.json', 'orphan-export');
             mkdir($root.'/work/backup-20260929T040001Z-0202020202020202', 0700);
             file_put_contents(
                 $root.'/work/backup-20260929T040001Z-0202020202020202/plaintext.tmp',
@@ -30,6 +32,7 @@ final class FilesystemBackupRepositoryTest extends TestCase
             $repository->recoverIncomplete();
 
             self::assertFileDoesNotExist($root.'/completed/backup-'.$orphanId.'.fbk');
+            self::assertFileDoesNotExist($root.'/completed/backup-'.$orphanId.'.telegram-export.json');
             self::assertDirectoryDoesNotExist($root.'/work/backup-20260929T040001Z-0202020202020202');
             self::assertFileExists($root.'/completed/operator-note.txt');
         } finally {
@@ -38,7 +41,7 @@ final class FilesystemBackupRepositoryTest extends TestCase
     }
 
     /** @requirement BAK-001 SEC-001 QUA-001 */
-    public function test_retention_removes_expired_completed_pairs_but_preserves_unknown_files(): void
+    public function test_retention_removes_expired_completed_pairs_and_export_sidecars_but_preserves_unknown_files(): void
     {
         $base = $this->directory('retention');
         $repository = new FilesystemBackupRepository($base.'/backups');
@@ -49,6 +52,8 @@ final class FilesystemBackupRepositoryTest extends TestCase
             $newId = '20260928T040000Z-0202020202020202';
             $this->completedPair($root, $oldId, '2026-07-01T04:00:00+00:00');
             $this->completedPair($root, $newId, '2026-09-28T04:00:00+00:00');
+            file_put_contents($root.'/completed/backup-'.$oldId.'.telegram-export.json', '{}');
+            file_put_contents($root.'/completed/backup-'.$newId.'.telegram-export.json', '{}');
             file_put_contents($root.'/completed/operator-note.txt', 'leave-me');
             file_put_contents($root.'/completed/backup-malformed.manifest.json', '{broken');
 
@@ -56,8 +61,10 @@ final class FilesystemBackupRepositoryTest extends TestCase
 
             self::assertFileDoesNotExist($root.'/completed/backup-'.$oldId.'.fbk');
             self::assertFileDoesNotExist($root.'/completed/backup-'.$oldId.'.manifest.json');
+            self::assertFileDoesNotExist($root.'/completed/backup-'.$oldId.'.telegram-export.json');
             self::assertFileExists($root.'/completed/backup-'.$newId.'.fbk');
             self::assertFileExists($root.'/completed/backup-'.$newId.'.manifest.json');
+            self::assertFileExists($root.'/completed/backup-'.$newId.'.telegram-export.json');
             self::assertFileExists($root.'/completed/operator-note.txt');
             self::assertFileExists($root.'/completed/backup-malformed.manifest.json');
         } finally {
@@ -65,18 +72,78 @@ final class FilesystemBackupRepositoryTest extends TestCase
         }
     }
 
-    private function completedPair(string $root, string $id, string $completedAt): void
+    /** @requirement BAK-001 SEC-001 QUA-001 */
+    public function test_completed_artifact_slice_and_telegram_manifest_are_integrity_bound_and_replay_safe(): void
+    {
+        $base = $this->directory('export');
+        $repository = new FilesystemBackupRepository($base.'/backups');
+
+        try {
+            $root = $repository->root();
+            $id = '20260929T050000Z-0303030303030303';
+            $ciphertext = $this->completedPair($root, $id, '2026-09-29T05:00:00+00:00');
+
+            self::assertSame([
+                'filename' => 'backup-'.$id.'.fbk',
+                'bytes' => strlen($ciphertext),
+                'sha256' => hash('sha256', $ciphertext),
+                'completed_at' => '2026-09-29T05:00:00+00:00',
+            ], $repository->completedArtifactMetadata($id));
+            self::assertSame(substr($ciphertext, 3, 8), $repository->readArtifactSlice($id, 3, 8));
+
+            $telegramManifest = "{\"authority\":\"test\"}\n";
+            $repository->storeTelegramExportManifest($id, $telegramManifest);
+            $repository->storeTelegramExportManifest($id, $telegramManifest);
+            self::assertSame($telegramManifest, $repository->telegramExportManifest($id));
+            self::assertSame(
+                0600,
+                fileperms($root.'/completed/backup-'.$id.'.telegram-export.json') & 0777,
+            );
+
+            try {
+                $repository->storeTelegramExportManifest($id, "{\"authority\":\"different\"}\n");
+                self::fail('Conflicting Telegram export manifest must be rejected.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'The backup Telegram export manifest conflicts with existing state.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $artifactPath = $root.'/completed/backup-'.$id.'.fbk';
+            $tampered = $ciphertext;
+            $tampered[0] = $tampered[0] === 'x' ? 'y' : 'x';
+            file_put_contents($artifactPath, $tampered);
+
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('The completed backup artifact hash failed verification.');
+            $repository->completedArtifactMetadata($id);
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
+    private function completedPair(string $root, string $id, string $completedAt): string
     {
         $artifact = 'backup-'.$id.'.fbk';
-        file_put_contents($root.'/completed/'.$artifact, 'ciphertext');
+        $contents = 'ciphertext-'.$id.'-payload';
+        file_put_contents($root.'/completed/'.$artifact, $contents);
         file_put_contents(
             $root.'/completed/backup-'.$id.'.manifest.json',
             json_encode([
+                'version' => 1,
                 'authority' => 'freedom_platform_backup_v1',
+                'backup_id' => $id,
                 'completed_at' => $completedAt,
-                'artifact' => ['filename' => $artifact],
+                'artifact' => [
+                    'filename' => $artifact,
+                    'bytes' => strlen($contents),
+                    'sha256' => hash('sha256', $contents),
+                ],
             ], JSON_THROW_ON_ERROR),
         );
+
+        return $contents;
     }
 
     private function directory(string $case): string

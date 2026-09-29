@@ -6,6 +6,7 @@ namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\BackupManager;
 use App\Modules\Operations\Application\BackupRuntimeConfiguration;
+use App\Modules\Operations\Application\BackupTelegramExportService;
 use App\Modules\Operations\Application\Contracts\BackupArtifactCipherFactory;
 use App\Modules\Operations\Application\Contracts\BackupBundleWriter as BackupBundleWriterContract;
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
@@ -91,6 +92,7 @@ final class OperationsServiceProvider extends ServiceProvider
 
         $this->app->singleton(BackupBundleWriterContract::class, BackupBundleWriter::class);
         $this->app->singleton(BackupArtifactCipherFactory::class, SodiumBackupCipherFactory::class);
+        $this->app->singleton(BackupTelegramExportService::class);
 
         $this->app->singleton(
             BackupDatabaseDumper::class,

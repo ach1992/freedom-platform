@@ -85,6 +85,8 @@ final class BackupManagerTest extends TestCase
             '02:30',
             30,
             180,
+            false,
+            19_000_000,
             ['environment' => $fixture['base'].'/missing.env'],
             ['application' => $fixture['base'].'/missing-private'],
         );
@@ -144,6 +146,8 @@ final class BackupManagerTest extends TestCase
             '02:30',
             30,
             180,
+            false,
+            19_000_000,
             ['environment' => $fixture['environment']],
             ['application' => $fixture['private']],
         );
