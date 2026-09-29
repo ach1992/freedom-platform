@@ -312,9 +312,10 @@ final readonly class PharUpdatePackageVerifier implements UpdatePackageVerifier
                 }
 
                 $contents = $entry->getContent();
+                $fileMode = ($entry->getPerms() & 0111) !== 0 ? 0750 : 0640;
                 if (! is_string($contents)
                     || file_put_contents($target, $contents, LOCK_EX) !== strlen($contents)
-                    || ! chmod($target, 0640)
+                    || ! chmod($target, $fileMode)
                 ) {
                     throw new RuntimeException('A release file could not be staged.');
                 }
