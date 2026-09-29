@@ -666,6 +666,22 @@ final readonly class UpdateManager
                     $this->maintenance->refreshRuntime($updateRunId);
                     $this->safety->assertWorkersRestartedAfter($restartAfter);
                     $this->executor->verifyRelease($previousPath);
+
+                    // A failed update may already have persisted the candidate installed identity
+                    // before the final resume transition. Reconcile that durable authority to the
+                    // proven active previous release before reopening processing.
+                    $this->workspace->storeInstalledIdentity([
+                        'version' => 1,
+                        'release_id' => $previousRelease,
+                        'application_version' => $package->fromApplicationVersion,
+                        'schema_sha256' => $currentSchema,
+                        'recovered_from_release_attempt' => $package->releaseId,
+                        'pre_update_backup_id' => $backup?->backupId,
+                        'pre_update_backup_completed_at' => $backup?->completedAt,
+                        'activated_at' => $this->timestamp(),
+                    ]);
+                    $this->markPhase($report, 'failure_installed_identity_reconciled');
+
                     $this->maintenance->leave($updateRunId);
 
                     $report['maintenance_retained'] = false;
