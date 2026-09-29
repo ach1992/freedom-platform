@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\Operations\Application\BackupKind;
 use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\ResolvedBackup;
 use Closure;
 use DateTimeImmutable;
 use RuntimeException;
@@ -312,6 +314,114 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         }
     }
 
+    public function completedBackup(string $backupId): ResolvedBackup
+    {
+        $this->assertBackupId($backupId);
+        $completed = $this->root().'/completed';
+        $artifactFilename = 'backup-'.$backupId.'.fbk';
+        $artifactPath = $completed.'/'.$artifactFilename;
+        $manifestPath = $completed.'/backup-'.$backupId.'.manifest.json';
+
+        if (! is_file($artifactPath)
+            || is_link($artifactPath)
+            || ! is_file($manifestPath)
+            || is_link($manifestPath)
+        ) {
+            throw new RuntimeException('The completed backup artifact is unavailable.');
+        }
+
+        $manifestJson = file_get_contents($manifestPath);
+        try {
+            $manifest = is_string($manifestJson)
+                ? json_decode($manifestJson, true, 64, JSON_THROW_ON_ERROR)
+                : null;
+        } catch (Throwable) {
+            $manifest = null;
+        }
+
+        $kind = is_array($manifest) && is_string($manifest['kind'] ?? null)
+            ? BackupKind::tryFrom($manifest['kind'])
+            : null;
+        $compatibility = is_array($manifest) && is_array($manifest['compatibility'] ?? null)
+            ? $manifest['compatibility']
+            : [];
+        $contents = is_array($manifest) && is_array($manifest['contents'] ?? null)
+            ? $manifest['contents']
+            : [];
+        $artifact = is_array($manifest) && is_array($manifest['artifact'] ?? null)
+            ? $manifest['artifact']
+            : [];
+        $encryption = is_array($artifact['encryption'] ?? null) ? $artifact['encryption'] : [];
+
+        $bytes = $artifact['bytes'] ?? null;
+        $sha256 = $artifact['sha256'] ?? null;
+        $completedAt = is_array($manifest) ? ($manifest['completed_at'] ?? null) : null;
+        $entryCount = $contents['entry_count'] ?? null;
+        $includesPrivateFiles = $contents['includes_private_files'] ?? null;
+
+        if (! is_array($manifest)
+            || ($manifest['version'] ?? null) !== 1
+            || ($manifest['authority'] ?? null) !== self::AUTHORITY
+            || ($manifest['backup_id'] ?? null) !== $backupId
+            || $kind === null
+            || ($artifact['filename'] ?? null) !== $artifactFilename
+            || ! is_int($bytes)
+            || $bytes < 1
+            || ! is_string($sha256)
+            || preg_match('/\A[0-9a-f]{64}\z/', $sha256) !== 1
+            || ! is_string($completedAt)
+            || ! is_int($entryCount)
+            || $entryCount < 1
+            || ! is_bool($includesPrivateFiles)
+            || $includesPrivateFiles !== $kind->includesPrivateFiles()
+            || ! self::compatibilityValue($compatibility, 'application_version')
+            || ! self::compatibilityValue($compatibility, 'php_version')
+            || ! self::compatibilityValue($compatibility, 'database_driver')
+            || ! self::sha256Value($compatibility, 'composer_lock_sha256')
+            || ! self::sha256Value($compatibility, 'migrations_sha256')
+            || ! is_string($encryption['algorithm'] ?? null)
+            || $encryption['algorithm'] === ''
+            || ! is_string($encryption['key_id'] ?? null)
+            || preg_match('/\A[0-9a-f]{16}\z/', $encryption['key_id']) !== 1
+        ) {
+            throw new RuntimeException('The completed backup manifest is invalid.');
+        }
+
+        try {
+            new DateTimeImmutable($completedAt);
+        } catch (Throwable) {
+            throw new RuntimeException('The completed backup timestamp is invalid.');
+        }
+
+        $actualBytes = filesize($artifactPath);
+        if (! is_int($actualBytes) || $actualBytes !== $bytes) {
+            throw new RuntimeException('The completed backup artifact size failed verification.');
+        }
+
+        $actualHash = hash_file('sha256', $artifactPath);
+        if (! is_string($actualHash) || ! hash_equals($sha256, $actualHash)) {
+            throw new RuntimeException('The completed backup artifact hash failed verification.');
+        }
+
+        return new ResolvedBackup(
+            $backupId,
+            $kind,
+            $artifactPath,
+            $bytes,
+            $sha256,
+            $completedAt,
+            $compatibility['application_version'],
+            $compatibility['php_version'],
+            $compatibility['database_driver'],
+            $compatibility['composer_lock_sha256'],
+            $compatibility['migrations_sha256'],
+            $entryCount,
+            $includesPrivateFiles,
+            $encryption['algorithm'],
+            $encryption['key_id'],
+        );
+    }
+
     /** @return array{filename:string,bytes:int,sha256:string,completed_at:string} */
     public function completedArtifactMetadata(string $backupId): array
     {
@@ -536,6 +646,21 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         if (preg_match('/\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\z/', $backupId) !== 1) {
             throw new RuntimeException('The backup identifier is invalid.');
         }
+    }
+
+    /** @param array<string, mixed> $values */
+    private static function compatibilityValue(array $values, string $key): bool
+    {
+        return is_string($values[$key] ?? null)
+            && $values[$key] !== ''
+            && strlen($values[$key]) <= 255;
+    }
+
+    /** @param array<string, mixed> $values */
+    private static function sha256Value(array $values, string $key): bool
+    {
+        return is_string($values[$key] ?? null)
+            && preg_match('/\A[0-9a-f]{64}\z/', $values[$key]) === 1;
     }
 
     private function unlinkIfRegular(string $path): void

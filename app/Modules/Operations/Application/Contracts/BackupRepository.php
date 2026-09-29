@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Application\Contracts;
 
+use App\Modules\Operations\Application\ResolvedBackup;
 use Closure;
 use DateTimeImmutable;
 
@@ -33,6 +34,8 @@ interface BackupRepository
     public function publish(string $backupId, string $artifactPath, string $manifestPath): array;
 
     public function prune(DateTimeImmutable $now, int $retentionDays): void;
+
+    public function completedBackup(string $backupId): ResolvedBackup;
 
     /** @return array{filename:string,bytes:int,sha256:string,completed_at:string} */
     public function completedArtifactMetadata(string $backupId): array;
