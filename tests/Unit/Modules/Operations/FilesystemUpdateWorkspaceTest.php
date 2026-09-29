@@ -36,6 +36,40 @@ final class FilesystemUpdateWorkspaceTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 RUN-002 SEC-008 QUA-001 */
+    public function test_published_release_is_sealed_read_only_except_runtime_cache_and_can_be_pruned_safely(): void
+    {
+        $root = $this->deployment('seal');
+        $workspace = new FilesystemUpdateWorkspace($root);
+        $runId = '20260930T010207Z-0123456789abcdef';
+
+        try {
+            $staging = $workspace->createStaging($runId, '1.1.0');
+            file_put_contents($staging.'/release-manifest.json', json_encode([
+                'version' => 1,
+                'authority' => 'freedom_platform_release_v1',
+                'release_id' => '1.1.0',
+            ], JSON_THROW_ON_ERROR));
+            file_put_contents($staging.'/code.php', "<?php\n");
+            mkdir($staging.'/bootstrap/cache', 0750, true);
+            file_put_contents($staging.'/bootstrap/cache/packages.php', "<?php\nreturn [];\n");
+
+            $published = $workspace->publishRelease($staging, '1.1.0');
+            $workspace->sealPublishedRelease('1.1.0');
+
+            self::assertSame(0550, fileperms($published) & 0777);
+            self::assertSame(0440, fileperms($published.'/code.php') & 0777);
+            self::assertSame(0550, fileperms($published.'/bootstrap') & 0777);
+            self::assertSame(0750, fileperms($published.'/bootstrap/cache') & 0777);
+            self::assertSame(0640, fileperms($published.'/bootstrap/cache/packages.php') & 0777);
+
+            $workspace->discardInactiveRelease('1.1.0');
+            self::assertDirectoryDoesNotExist($published);
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
     /** @requirement UPD-001 RUN-002 QUA-001 */
     public function test_interrupted_pre_mutation_staging_is_cleaned_and_report_is_finalized(): void
     {
