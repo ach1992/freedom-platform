@@ -186,7 +186,7 @@ final readonly class UpdateManager
                     $this->workspace->storeReport($updateRunId, $report);
 
                     $this->executor->migrate($releasePath);
-                    $schemaAfter = $this->safety->currentSchemaSha256();
+                    $schemaAfter = $this->safety->installedSchemaSha256ForRelease($releasePath);
                     if (! hash_equals($package->toSchemaSha256, $schemaAfter)) {
                         throw new RuntimeException('The post-migration schema identity is inconsistent.');
                     }
@@ -480,6 +480,7 @@ final readonly class UpdateManager
             &$report,
         ): UpdateRunResult {
             $maintenanceEntered = false;
+            $sourceReleasePath = $this->configuration->deploymentRoot.'/releases/'.$releaseId;
 
             try {
                 $this->safety->assertNoUnsafeWork();
@@ -507,7 +508,10 @@ final readonly class UpdateManager
                 $switch = $this->releases->rollbackTo($previousRelease);
                 if (! in_array($switch['status'], ['rolled_back', 'already_active'], true)
                     || $this->workspace->currentReleaseId() !== $previousRelease
-                    || ! $this->schemaMatches($schema, $this->safety->currentSchemaSha256())
+                    || ! $this->schemaMatches(
+                        $schema,
+                        $this->safety->installedSchemaSha256ForRelease($sourceReleasePath),
+                    )
                 ) {
                     throw new RuntimeException('The controlled code rollback could not be proven.');
                 }
@@ -534,7 +538,10 @@ final readonly class UpdateManager
                 $this->maintenance->leave($updateRunId);
 
                 if ($this->workspace->currentReleaseId() !== $previousRelease
-                    || ! $this->schemaMatches($schema, $this->safety->currentSchemaSha256())
+                    || ! $this->schemaMatches(
+                        $schema,
+                        $this->safety->installedSchemaSha256ForRelease($sourceReleasePath),
+                    )
                 ) {
                     throw new RuntimeException('The resumed rollback release identity is inconsistent.');
                 }
@@ -641,7 +648,11 @@ final readonly class UpdateManager
         $currentSchema = null;
         try {
             $currentRelease = $this->workspace->currentReleaseId();
-            $currentSchema = $this->safety->currentSchemaSha256();
+            $currentSchema = $mutationStarted
+                ? $this->safety->installedSchemaSha256ForRelease(
+                    $this->configuration->deploymentRoot.'/releases/'.$package->releaseId,
+                )
+                : $this->safety->currentSchemaSha256();
         } catch (Throwable) {
             // Uncertain current state must remain contained.
         }
@@ -669,6 +680,15 @@ final readonly class UpdateManager
                     $this->maintenance->refreshRuntime($updateRunId);
                     $this->safety->assertWorkersRestartedAfter($restartAfter);
                     $this->executor->verifyRelease($previousPath);
+
+                    if (! $this->schemaMatches(
+                        $currentSchema,
+                        $this->safety->installedSchemaSha256ForRelease(
+                            $this->configuration->deploymentRoot.'/releases/'.$package->releaseId,
+                        ),
+                    )) {
+                        throw new RuntimeException('The compatible rollback schema identity changed unexpectedly.');
+                    }
 
                     // A failed update may already have persisted the candidate installed identity
                     // before the final resume transition. Reconcile that durable authority to the
