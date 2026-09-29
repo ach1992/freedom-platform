@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Modules\Installer\Application;
 
+use Dotenv\Dotenv;
+use Dotenv\Exception\InvalidFileException;
+use Dotenv\Parser\Parser;
 use RuntimeException;
 
 final readonly class InstallerProductionEnvironmentPolicy
@@ -19,87 +22,72 @@ final readonly class InstallerProductionEnvironmentPolicy
 
     public function __construct(private string $runtimeEnvironment) {}
 
+    /** @return list<string> */
+    public static function sensitiveKeys(): array
+    {
+        return self::REQUIRED_PRODUCTION_KEYS;
+    }
+
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function assertSafe(string $contents): void
     {
-        $appEnvironmentValues = $this->valuesFor($contents, 'APP_ENV');
-        $productionBoot = strtolower(trim($this->runtimeEnvironment)) === 'production';
-        $productionTarget = false;
+        try {
+            $entries = (new Parser)->parse($contents);
+            $values = Dotenv::parse($contents);
+        } catch (InvalidFileException) {
+            throw new RuntimeException('The installer environment file is invalid.');
+        }
 
-        foreach ($appEnvironmentValues as $appEnvironmentValue) {
-            if (strtolower($this->decode($appEnvironmentValue)) === 'production') {
-                $productionTarget = true;
-                break;
+        $counts = [];
+
+        foreach ($entries as $entry) {
+            $name = $entry->getName();
+
+            if (in_array($name, self::REQUIRED_PRODUCTION_KEYS, true)) {
+                $counts[$name] = ($counts[$name] ?? 0) + 1;
             }
         }
+
+        if (($counts['APP_ENV'] ?? 0) > 1) {
+            throw new RuntimeException(
+                'The installer production environment must define each security-critical setting exactly once.',
+            );
+        }
+
+        $productionBoot = $this->runtimeEnvironment === 'production';
+        $productionTarget = ($values['APP_ENV'] ?? null) === 'production';
 
         if (! $productionBoot && ! $productionTarget) {
             return;
         }
 
-        $values = [];
-
         foreach (self::REQUIRED_PRODUCTION_KEYS as $key) {
-            $matches = $this->valuesFor($contents, $key);
-
-            if (count($matches) !== 1) {
+            if (($counts[$key] ?? 0) !== 1 || ! array_key_exists($key, $values) || $values[$key] === null) {
                 throw new RuntimeException(
                     'The installer production environment must define each security-critical setting exactly once.',
                 );
             }
-
-            $values[$key] = $this->decode($matches[0]);
         }
 
         if ($values['APP_ENV'] !== 'production'
-            || ! $this->isFalse($values['APP_DEBUG'])
+            || (bool) $this->laravelEnvironmentValue($values['APP_DEBUG'])
             || ! $this->isSecureApplicationUrl($values['APP_URL'])
-            || ! $this->isTrue($values['SESSION_ENCRYPT'])
-            || ! $this->isTrue($values['SESSION_SECURE_COOKIE'])
+            || $this->laravelEnvironmentValue($values['SESSION_ENCRYPT']) !== true
+            || $this->laravelEnvironmentValue($values['SESSION_SECURE_COOKIE']) !== true
         ) {
             throw new RuntimeException('The installer production environment is not safe to finalize.');
         }
     }
 
-    /** @return list<string> */
-    private function valuesFor(string $contents, string $key): array
+    private function laravelEnvironmentValue(string $value): mixed
     {
-        $pattern = '/^\s*(?:export\s+)?'.preg_quote($key, '/').'\s*=\s*(.*?)\s*$/';
-        $values = [];
-
-        foreach (preg_split('/\R/', $contents) ?: [] as $line) {
-            if (preg_match($pattern, $line, $matches) === 1) {
-                $values[] = $matches[1];
-            }
-        }
-
-        return $values;
-    }
-
-    private function decode(string $value): string
-    {
-        $value = trim($value);
-
-        if (strlen($value) >= 2) {
-            $first = $value[0];
-            $last = $value[strlen($value) - 1];
-
-            if (($first === '"' && $last === '"') || ($first === "'" && $last === "'")) {
-                $value = substr($value, 1, -1);
-            }
-        }
-
-        return trim($value);
-    }
-
-    private function isTrue(string $value): bool
-    {
-        return in_array(strtolower(trim($value)), ['true', '(true)', '1'], true);
-    }
-
-    private function isFalse(string $value): bool
-    {
-        return in_array(strtolower(trim($value)), ['false', '(false)', '0'], true);
+        return match (strtolower($value)) {
+            'true', '(true)' => true,
+            'false', '(false)' => false,
+            'empty', '(empty)' => '',
+            'null', '(null)' => null,
+            default => $value,
+        };
     }
 
     private function isSecureApplicationUrl(string $value): bool

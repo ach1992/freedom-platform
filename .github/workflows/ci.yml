@@ -133,7 +133,7 @@ jobs:
           done < "$plan"
 
           # Independent self-modifying-CI guard: these surfaces may not suppress their own control validation.
-          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness-runtime\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             project_control=true
             control_plane=true
           fi
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           changed=build/evidence/preflight/changed-files.txt
-          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness-runtime)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
             bash scripts/ci/test-validation-plan.sh
             bash scripts/ci/test-feature-integration-scope.sh
             bash scripts/ci/test-feature-sharding.sh

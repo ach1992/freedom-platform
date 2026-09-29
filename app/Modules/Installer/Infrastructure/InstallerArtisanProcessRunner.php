@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Installer\Infrastructure;
 
 use App\Modules\Installer\Application\Contracts\InstallerFinalizationRunner;
+use App\Modules\Installer\Application\InstallerProductionEnvironmentPolicy;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 use Throwable;
@@ -57,6 +58,11 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
     private function run(string $step, array $arguments, array $environment): void
     {
         $this->validateRuntime();
+
+        $environment = array_replace(
+            array_fill_keys(InstallerProductionEnvironmentPolicy::sensitiveKeys(), false),
+            $environment,
+        );
 
         $process = new Process(
             [$this->phpBinary, $this->artisanPath, ...$arguments],

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-workflow=${1:-.github/workflows/staging-readiness.yml}
+workflow=${1:-.github/workflows/staging-readiness-runtime.yml}
 
 fail() {
     echo "Read-only staging workflow verification failed: $*" >&2
@@ -31,14 +31,19 @@ selector_has_label() {
 
 test -s "$workflow" || fail "workflow is missing or empty: $workflow"
 
-grep -F 'workflow_dispatch:' "$workflow" >/dev/null \
-    || fail 'workflow must remain manually dispatched'
+grep -F 'repository_dispatch:' "$workflow" >/dev/null \
+    || fail 'workflow must be sourced from the default branch through repository_dispatch'
+grep -F 'types: [staging_readiness]' "$workflow" >/dev/null \
+    || fail 'workflow must accept only the staging_readiness repository-dispatch event type'
+if grep -F 'workflow_dispatch:' "$workflow" >/dev/null; then
+    fail 'workflow must not expose a branch-selectable workflow_dispatch trigger'
+fi
 grep -F 'READ_ONLY_STAGING_CHECK' "$workflow" >/dev/null \
     || fail 'workflow must retain the explicit read-only confirmation sentinel'
 grep -A4 -F 'permissions:' "$workflow" | grep -F 'contents: read' >/dev/null \
     || fail 'workflow must retain explicit read-only repository permissions'
 
-trusted_ref_guard="    if: \${{ github.ref == 'refs/heads/main' && inputs.confirmation == 'READ_ONLY_STAGING_CHECK' }}"
+trusted_ref_guard="    if: \${{ github.ref == 'refs/heads/main' && github.event.client_payload.confirmation == 'READ_ONLY_STAGING_CHECK' }}"
 grep -Fx "$trusted_ref_guard" "$workflow" >/dev/null \
     || fail 'self-hosted staging job must require the exact trusted main ref before scheduling'
 

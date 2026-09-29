@@ -84,7 +84,7 @@ else
                 control_plane=true
                 ;;
 
-            .github/workflows/ci.yml|.github/workflows/staging-readiness.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
+            .github/workflows/ci.yml|.github/workflows/staging-readiness-runtime.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
                 project_control=true
                 control_plane=true
                 ;;

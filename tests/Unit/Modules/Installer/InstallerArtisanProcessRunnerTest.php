@@ -65,6 +65,41 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
         }
     }
 
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_production_sensitive_parent_environment_is_removed_from_every_finalization_child(): void
+    {
+        [$directory, $artisanPath, , $environmentLogPath] = $this->fixture('production-env');
+        $this->writeSensitiveEnvironmentFixture($artisanPath, $environmentLogPath);
+        $runner = new InstallerArtisanProcessRunner(PHP_BINARY, $artisanPath, $directory, 5);
+        $keys = [
+            'APP_ENV',
+            'APP_DEBUG',
+            'APP_URL',
+            'SESSION_ENCRYPT',
+            'SESSION_SECURE_COOKIE',
+        ];
+        $parent = array_fill_keys($keys, 'test-only-parent-value');
+
+        try {
+            $this->withEnvironment($parent, function () use ($runner): void {
+                $runner->clearConfiguration();
+                $runner->migrate();
+                $runner->cacheConfiguration();
+            });
+
+            $expected = [];
+            foreach (['config:clear', 'migrate', 'config:cache'] as $command) {
+                foreach ($keys as $key) {
+                    $expected[] = $command.':'.$key.'=<absent>';
+                }
+            }
+
+            $this->assertSame($expected, file($environmentLogPath, FILE_IGNORE_NEW_LINES));
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
     /** @requirement INS-001 SEC-007 SEC-008 QUA-011 */
     public function test_config_cache_cannot_capture_a_parent_lifecycle_password(): void
     {
@@ -164,6 +199,31 @@ PHP,
             var_export($logPath, true),
             var_export($environmentLogPath, true),
             var_export($failurePath, true),
+        );
+
+        file_put_contents($artisanPath, $script);
+    }
+
+    private function writeSensitiveEnvironmentFixture(string $artisanPath, string $environmentLogPath): void
+    {
+        $script = sprintf(
+            <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+$command = $argv[1] ?? '<unknown>';
+
+foreach (['APP_ENV', 'APP_DEBUG', 'APP_URL', 'SESSION_ENCRYPT', 'SESSION_SECURE_COOKIE'] as $key) {
+    $value = getenv($key);
+    file_put_contents(
+        %s,
+        $command.':'.$key.'='.($value === false ? '<absent>' : $value).PHP_EOL,
+        FILE_APPEND,
+    );
+}
+PHP,
+            var_export($environmentLogPath, true),
         );
 
         file_put_contents($artisanPath, $script);

@@ -65,6 +65,55 @@ final class InstallerProductionEnvironmentPolicyTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_phpdotenv_quoted_whitespace_is_not_normalized_into_a_safe_production_value(): void
+    {
+        $policy = new InstallerProductionEnvironmentPolicy('production');
+
+        foreach ([
+            ['APP_DEBUG' => ' false '],
+            ['APP_ENV' => ' production '],
+        ] as $overrides) {
+            try {
+                $policy->assertSafe($this->environment($overrides));
+                $this->fail('Whitespace-bearing production values must retain phpdotenv semantics and be rejected.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame(
+                    'The installer production environment is not safe to finalize.',
+                    $exception->getMessage(),
+                );
+            }
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_boolean_policy_matches_laravel_environment_value_semantics(): void
+    {
+        $policy = new InstallerProductionEnvironmentPolicy('production');
+
+        $policy->assertSafe($this->environment([
+            'APP_DEBUG' => '0',
+            'SESSION_ENCRYPT' => '(true)',
+            'SESSION_SECURE_COOKIE' => 'TRUE',
+        ]));
+        $this->addToAssertionCount(1);
+
+        foreach ([
+            ['SESSION_ENCRYPT' => '1'],
+            ['SESSION_SECURE_COOKIE' => '1'],
+        ] as $overrides) {
+            try {
+                $policy->assertSafe($this->environment($overrides));
+                $this->fail('String truthy values must not be accepted as Laravel boolean true values.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame(
+                    'The installer production environment is not safe to finalize.',
+                    $exception->getMessage(),
+                );
+            }
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
     public function test_production_target_is_enforced_even_when_runtime_booted_non_production(): void
     {
         $this->expectException(RuntimeException::class);
@@ -75,7 +124,7 @@ final class InstallerProductionEnvironmentPolicyTest extends TestCase
     }
 
     /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
-    public function test_non_production_runtime_rejects_ambiguous_app_env_when_any_value_is_production(): void
+    public function test_non_production_runtime_rejects_duplicate_app_env_before_classifying_target(): void
     {
         $contents = $this->environment(['APP_ENV' => 'local'])."APP_ENV=\"production\"\n";
 
@@ -105,6 +154,21 @@ final class InstallerProductionEnvironmentPolicyTest extends TestCase
                     $exception->getMessage(),
                 );
             }
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_invalid_dotenv_syntax_is_rejected_without_echoing_contents(): void
+    {
+        $marker = 'test-only-invalid-dotenv-marker';
+
+        try {
+            (new InstallerProductionEnvironmentPolicy('production'))
+                ->assertSafe("APP_ENV=production\nSAFE_MARKER={$marker}\n=broken\n");
+            $this->fail('Invalid dotenv syntax must be rejected before persistence.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('The installer environment file is invalid.', $exception->getMessage());
+            $this->assertStringNotContainsString($marker, $exception->getMessage());
         }
     }
 
