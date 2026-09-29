@@ -165,3 +165,58 @@ Schedule::command('support:alerts:scan', [
     // The scan is bounded and idempotent; keep the scheduler lock bounded after abnormal termination.
     ->withoutOverlapping(10)
     ->onOneServer();
+
+$backupInterval = filter_var(
+    config('operations.backup.database_interval_minutes', 10),
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1, 'max_range' => 60]],
+);
+if ($backupInterval === false || 60 % $backupInterval !== 0) {
+    throw new RuntimeException('Backup database interval minutes must be a divisor of 60 between 1 and 60.');
+}
+
+$backupFrequentOverlap = filter_var(
+    config('operations.backup.frequent_overlap_minutes', 30),
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1, 'max_range' => 1440]],
+);
+$backupDailyOverlap = filter_var(
+    config('operations.backup.daily_overlap_minutes', 180),
+    FILTER_VALIDATE_INT,
+    ['options' => ['min_range' => 1, 'max_range' => 1440]],
+);
+$backupDailyTime = config('operations.backup.daily_time', '02:30');
+
+if ($backupFrequentOverlap === false
+    || $backupDailyOverlap === false
+    || ! is_string($backupDailyTime)
+    || preg_match('/\A(?:[01]\d|2[0-3]):[0-5]\d\z/', $backupDailyTime) !== 1
+) {
+    throw new RuntimeException('Backup scheduler configuration is invalid.');
+}
+
+$backupCron = $backupInterval === 60 ? '0 * * * *' : '*/'.$backupInterval.' * * * *';
+$backupEnabled = static fn (): bool => (bool) config('operations.backup.enabled', false);
+
+Schedule::command('operations:backup', [
+    '--kind' => 'frequent_database',
+    '--json' => true,
+])
+    ->name('operations.backup.frequent-database')
+    ->cron($backupCron)
+    ->withoutOverlapping($backupFrequentOverlap)
+    ->onOneServer()
+    ->runInBackground()
+    ->skip(static fn (): bool => now()->format('H:i') === $backupDailyTime)
+    ->when($backupEnabled);
+
+Schedule::command('operations:backup', [
+    '--kind' => 'daily_full',
+    '--json' => true,
+])
+    ->name('operations.backup.daily-full')
+    ->dailyAt($backupDailyTime)
+    ->withoutOverlapping($backupDailyOverlap)
+    ->onOneServer()
+    ->runInBackground()
+    ->when($backupEnabled);

@@ -14,4 +14,26 @@ return [
         'stale_after_seconds' => (int) env('WORKER_HEARTBEAT_STALE_AFTER_SECONDS', 480),
         'release_version' => env('APP_VERSION'),
     ],
+
+    'backup' => [
+        'enabled' => filter_var(env('BACKUP_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'root' => env('BACKUP_ROOT', storage_path('backups')),
+        'encryption_key' => env('BACKUP_ENCRYPTION_KEY'),
+        'retention_days' => (int) env('BACKUP_RETENTION_DAYS', 30),
+        'database_interval_minutes' => (int) env('BACKUP_DATABASE_INTERVAL_MINUTES', 10),
+        'daily_time' => env('BACKUP_DAILY_TIME', '02:30'),
+        'frequent_overlap_minutes' => (int) env('BACKUP_FREQUENT_OVERLAP_MINUTES', 30),
+        'daily_overlap_minutes' => (int) env('BACKUP_DAILY_OVERLAP_MINUTES', 180),
+        'priority_lock_wait_seconds' => (int) env('BACKUP_PRIORITY_LOCK_WAIT_SECONDS', 1800),
+        'telegram_export_enabled' => filter_var(env('BACKUP_TELEGRAM_EXPORT_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'telegram_part_bytes' => (int) env('BACKUP_TELEGRAM_PART_BYTES', 19_000_000),
+        'dump_binary' => env('BACKUP_MARIADB_DUMP_BINARY', '/usr/bin/mariadb-dump'),
+        'process_timeout_seconds' => (int) env('BACKUP_PROCESS_TIMEOUT_SECONDS', 900),
+        'config_files' => [
+            'environment' => base_path('.env'),
+        ],
+        'private_directories' => [
+            'application' => storage_path('app/private'),
+        ],
+    ],
 ];

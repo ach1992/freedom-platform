@@ -9,8 +9,10 @@ use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
 use App\Modules\Operations\Presentation\Console\CheckOutboxContractRetirementCommand;
 use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
+use App\Modules\Operations\Presentation\Console\CreateBackupCommand;
 use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
+use App\Modules\Operations\Presentation\Console\QueueBackupTelegramExportCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
 use App\Modules\Payments\Presentation\Console\AlternativePaymentMaintenanceCommand;
 use App\Modules\Payments\Presentation\Console\PurchasePaymentMaintenanceCommand;
@@ -50,6 +52,8 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withCommands([
         CheckOutboxContractRetirementCommand::class,
         CheckWorkerHeartbeatsCommand::class,
+        CreateBackupCommand::class,
+        QueueBackupTelegramExportCommand::class,
         RecalculateCustomerTiersCommand::class,
         ConfigureTelegramWebhookCommand::class,
         DispatchOutboxCommand::class,

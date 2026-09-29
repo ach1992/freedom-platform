@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\ProtectedTelegramMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramDeliveryRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
@@ -137,6 +138,40 @@ final readonly class TelegramProtectedReferenceTestCardToCard implements Telegra
         );
     }
 }
+final readonly class TelegramProtectedReferenceTestBackupSource implements TelegramBackupArtifactPresentationSource
+{
+    public function __construct(
+        private int $expectedUserId,
+        private string $expectedBackupId,
+        private string $bytes,
+    ) {}
+
+    public function resolveForOwner(
+        int $userId,
+        TelegramProtectedPresentationReference $reference,
+    ): ProtectedTelegramPresentation {
+        if ($userId !== $this->expectedUserId
+            || ! $reference->isBackupExport()
+            || ! hash_equals($this->expectedBackupId, $reference->publicId)
+        ) {
+            throw new DomainException('Protected backup test source received an unexpected identity.');
+        }
+
+        $identity = $reference->backupExportIdentity();
+        if ($identity['item'] !== 'part'
+            || $identity['bytes'] !== strlen($this->bytes)
+            || ! hash_equals($identity['sha256'], hash('sha256', $this->bytes))
+        ) {
+            throw new DomainException('Protected backup test source received an invalid integrity identity.');
+        }
+
+        return ProtectedTelegramPresentation::binaryDocument(
+            $this->bytes,
+            'backup-'.$this->expectedBackupId.'.part-000001-of-000001.fbk',
+            'Backup part 1/1',
+        );
+    }
+}
 
 /** @requirement ARCH-003 ARCH-004 C2C-001 DAT-002 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 QUA-010 */
 final class TelegramProtectedReferenceDeliveryTest extends TestCase
@@ -211,6 +246,68 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
         self::assertStringNotContainsString(
             '4242424242424242',
             (string) DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->value('presentation_text'),
+        );
+    }
+
+    public function test_backup_export_reference_persists_only_integrity_identity_and_resolves_bytes_at_provider_boundary(): void
+    {
+        $backupId = '20260929T051500Z-4444444444444444';
+        $bytes = 'encrypted-backup-part-bytes';
+        $reference = TelegramProtectedPresentationReference::backupExport(
+            $backupId,
+            'part',
+            1,
+            1,
+            strlen($bytes),
+            hash('sha256', $bytes),
+        );
+        $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900001,
+            $reference,
+            'protected-backup-reference-success-001',
+            'correlation-protected-backup-reference-success',
+        );
+
+        $operation = DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->first();
+        $outbox = DB::table('outbox_messages')->where('id', $created->outboxEventId)->first();
+        self::assertNotNull($operation);
+        self::assertNotNull($outbox);
+        self::assertSame($reference->durableText(), $operation->presentation_text);
+        self::assertStringNotContainsString($bytes, (string) $operation->presentation_text);
+        self::assertStringNotContainsString($bytes, (string) $outbox->payload);
+        self::assertStringNotContainsString('/backups/', (string) $operation->presentation_text);
+
+        $generic = new TelegramProtectedReferenceTestTransport;
+        $sender = new TelegramProtectedReferenceTestSender(new ProtectedTelegramSendResult(
+            ProtectedTelegramSendOutcome::Success,
+            'telegram_success',
+            messageId: 4410,
+        ));
+        $result = $this->executor(
+            $generic,
+            $sender,
+            backupArtifacts: new TelegramProtectedReferenceTestBackupSource(
+                $this->userId,
+                $backupId,
+                $bytes,
+            ),
+        )->execute(
+            $created->publicId,
+            $created->outboxEventId,
+            'correlation-protected-backup-reference-success',
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        );
+
+        self::assertSame(TelegramDeliveryOperationState::Succeeded, $result->state);
+        self::assertSame(0, $generic->attempts);
+        self::assertSame(1, $sender->attempts);
+        self::assertCount(1, $sender->presentations);
+        self::assertSame($bytes, $sender->presentations[0]->documentContents());
+        self::assertSame(
+            'backup-'.$backupId.'.part-000001-of-000001.fbk',
+            $sender->presentations[0]->documentFilename(),
         );
     }
 
@@ -415,6 +512,7 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
         TelegramMutationTransport $transport,
         ProtectedTelegramMessageSender $sender,
         bool $rejectDestination = false,
+        ?TelegramBackupArtifactPresentationSource $backupArtifacts = null,
     ): TelegramDeliveryOperationExecutor {
         $database = $this->app->make(DatabaseManager::class);
         $cardToCard = new TelegramProtectedReferenceTestCardToCard(
@@ -437,6 +535,7 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
             new TelegramProtectedPresentationResolver(
                 $cardToCard,
                 $this->app->make(LocalizationResolver::class),
+                backupArtifacts: $backupArtifacts,
             ),
         );
     }

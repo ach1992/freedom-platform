@@ -4,9 +4,18 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\Operations\Application\BackupManager;
+use App\Modules\Operations\Application\BackupRuntimeConfiguration;
+use App\Modules\Operations\Application\BackupTelegramExportService;
+use App\Modules\Operations\Application\Contracts\BackupArtifactCipherFactory;
+use App\Modules\Operations\Application\Contracts\BackupBundleWriter as BackupBundleWriterContract;
+use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
+use App\Modules\Operations\Application\Contracts\BackupPayloadCollector as BackupPayloadCollectorContract;
+use App\Modules\Operations\Application\Contracts\BackupRepository;
 use App\Modules\Operations\Application\QueueWorkerHeartbeatReporter;
 use App\Modules\Operations\Application\WorkerHeartbeatService;
 use App\Shared\Application\Clock;
+use App\Shared\Application\RandomGenerator;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobProcessed;
@@ -14,11 +23,13 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 
 final class OperationsServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+
         $this->app->singleton(
             WorkerRuntimeConfiguration::class,
             static fn (): WorkerRuntimeConfiguration => WorkerRuntimeConfiguration::resolve([
@@ -47,6 +58,103 @@ final class OperationsServiceProvider extends ServiceProvider
                 );
             },
         );
+
+        $this->app->singleton(
+            BackupRuntimeConfiguration::class,
+            static function (): BackupRuntimeConfiguration {
+                $configuration = config('operations.backup');
+                if (! is_array($configuration)) {
+                    throw new RuntimeException('Backup configuration is unavailable.');
+                }
+
+                return BackupRuntimeConfiguration::fromArray($configuration);
+            },
+        );
+
+        $this->app->singleton(
+            BackupRepository::class,
+            fn (Application $application): BackupRepository => new FilesystemBackupRepository(
+                $application->make(BackupRuntimeConfiguration::class)->root,
+            ),
+        );
+
+        $this->app->singleton(
+            BackupPayloadCollectorContract::class,
+            function (Application $application): BackupPayloadCollectorContract {
+                $configuration = $application->make(BackupRuntimeConfiguration::class);
+
+                return new BackupPayloadCollector(
+                    $configuration->configFiles,
+                    $configuration->privateDirectories,
+                );
+            },
+        );
+
+        $this->app->singleton(BackupBundleWriterContract::class, BackupBundleWriter::class);
+        $this->app->singleton(BackupArtifactCipherFactory::class, SodiumBackupCipherFactory::class);
+        $this->app->singleton(BackupTelegramExportService::class);
+
+        $this->app->singleton(
+            BackupDatabaseDumper::class,
+            function (): BackupDatabaseDumper {
+                $connectionName = config('database.default');
+                if (! is_string($connectionName) || $connectionName === '') {
+                    throw new RuntimeException('Backup database connection configuration is invalid.');
+                }
+
+                $database = config('database.connections.'.$connectionName);
+                if (! is_array($database) || ($database['driver'] ?? null) !== 'mysql') {
+                    throw new RuntimeException('Backup requires the supported MariaDB/MySQL connection.');
+                }
+
+                return new MariaDbBackupDumper(
+                    self::requiredString(config('operations.backup.dump_binary'), 'Backup dump binary'),
+                    self::requiredString($database['host'] ?? null, 'Backup database host'),
+                    self::boundedInteger($database['port'] ?? null, 1, 65535, 'Backup database port'),
+                    self::requiredString($database['database'] ?? null, 'Backup database name'),
+                    self::requiredString($database['username'] ?? null, 'Backup database username'),
+                    self::stringValue($database['password'] ?? null, 'Backup database credential'),
+                    self::boundedInteger(
+                        config('operations.backup.process_timeout_seconds'),
+                        1,
+                        86_400,
+                        'Backup process timeout',
+                    ),
+                );
+            },
+        );
+
+        $this->app->singleton(
+            BackupManager::class,
+            function (Application $application): BackupManager {
+                $connectionName = config('database.default');
+                $database = is_string($connectionName)
+                    ? config('database.connections.'.$connectionName)
+                    : null;
+                $driver = is_array($database) ? ($database['driver'] ?? null) : null;
+                if (! is_string($driver) || $driver === '') {
+                    throw new RuntimeException('Backup database driver configuration is invalid.');
+                }
+
+                $version = config('app.version');
+                $applicationVersion = is_string($version) && $version !== '' ? $version : 'unversioned';
+
+                return new BackupManager(
+                    $application->make(BackupRuntimeConfiguration::class),
+                    static fn (): BackupDatabaseDumper => $application->make(BackupDatabaseDumper::class),
+                    $application->make(BackupPayloadCollectorContract::class),
+                    $application->make(BackupBundleWriterContract::class),
+                    $application->make(BackupArtifactCipherFactory::class),
+                    $application->make(BackupRepository::class),
+                    $application->make(Clock::class),
+                    $application->make(RandomGenerator::class),
+                    $applicationVersion,
+                    base_path('composer.lock'),
+                    database_path('migrations'),
+                    $driver,
+                );
+            },
+        );
     }
 
     public function boot(): void
@@ -71,5 +179,38 @@ final class OperationsServiceProvider extends ServiceProvider
         Queue::exceptionOccurred(static function (JobExceptionOccurred $event) use ($reporter): void {
             $reporter->reportSafely($event->job->getQueue());
         });
+    }
+
+    private static function requiredString(mixed $value, string $label): string
+    {
+        if (! is_string($value) || $value === '') {
+            throw new RuntimeException($label.' configuration is invalid.');
+        }
+
+        return $value;
+    }
+
+    private static function stringValue(mixed $value, string $label): string
+    {
+        if (! is_string($value)) {
+            throw new RuntimeException($label.' configuration is invalid.');
+        }
+
+        return $value;
+    }
+
+    private static function boundedInteger(mixed $value, int $minimum, int $maximum, string $label): int
+    {
+        $validated = filter_var(
+            $value,
+            FILTER_VALIDATE_INT,
+            ['options' => ['min_range' => $minimum, 'max_range' => $maximum]],
+        );
+
+        if ($validated === false) {
+            throw new RuntimeException($label.' configuration is invalid.');
+        }
+
+        return $validated;
     }
 }

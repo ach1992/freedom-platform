@@ -18,6 +18,8 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
 
     private const PREFIX_V4 = '[PROTECTED_TELEGRAM_REFERENCE:v4:';
 
+    private const PREFIX_V5 = '[PROTECTED_TELEGRAM_REFERENCE:v5:';
+
     private const PURPOSE_CARD_TO_CARD_DESTINATION = 'card_to_card_destination';
 
     private const PURPOSE_MEMBERSHIP_JOIN_PROMPT = 'membership_join_prompt';
@@ -25,6 +27,8 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
     private const PURPOSE_SUPPORT_ATTACHMENT = 'support_attachment';
 
     private const PURPOSE_PAYMENT_REVIEW_EVIDENCE = 'payment_review_evidence';
+
+    private const PURPOSE_BACKUP_EXPORT = 'backup_export';
 
     private function __construct(
         public string $purpose,
@@ -35,6 +39,10 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         public ?string $configurationHash = null,
         public ?string $audience = null,
         public ?string $kind = null,
+        public ?int $partIndex = null,
+        public ?int $partCount = null,
+        public ?int $contentBytes = null,
+        public ?string $contentSha256 = null,
     ) {}
 
     public static function cardToCardDestination(string $reservationPublicId, string $locale): self
@@ -111,6 +119,43 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         );
     }
 
+    public static function backupExport(
+        string $backupId,
+        string $item,
+        int $partIndex,
+        int $partCount,
+        int $contentBytes,
+        string $contentSha256,
+    ): self {
+        if (preg_match('/\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\z/', $backupId) !== 1
+            || ! in_array($item, ['manifest', 'part'], true)
+            || $partCount < 1
+            || $partCount > 10_000
+            || $contentBytes < 1
+            || $contentBytes > 20_000_000
+            || preg_match('/\A[0-9a-f]{64}\z/', $contentSha256) !== 1
+        ) {
+            throw new DomainException('Protected Telegram backup-export reference is invalid.');
+        }
+
+        if (($item === 'manifest' && $partIndex !== 0)
+            || ($item === 'part' && ($partIndex < 1 || $partIndex > $partCount))
+        ) {
+            throw new DomainException('Protected Telegram backup-export part identity is invalid.');
+        }
+
+        return new self(
+            self::PURPOSE_BACKUP_EXPORT,
+            $backupId,
+            'en',
+            kind: $item,
+            partIndex: $partIndex,
+            partCount: $partCount,
+            contentBytes: $contentBytes,
+            contentSha256: $contentSha256,
+        );
+    }
+
     public static function restore(string $value): self
     {
         if (preg_match(
@@ -151,6 +196,21 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
             return self::paymentReviewEvidence($matches[1], $matches[2], $matches[3]);
         }
 
+        if (preg_match(
+            '/\A\[PROTECTED_TELEGRAM_REFERENCE:v5:backup_export:([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}):(manifest|part):([0-9]+):([1-9][0-9]*):([1-9][0-9]*):([0-9a-f]{64})\]\z/',
+            $value,
+            $matches,
+        ) === 1) {
+            return self::backupExport(
+                $matches[1],
+                $matches[2],
+                (int) $matches[3],
+                (int) $matches[4],
+                (int) $matches[5],
+                $matches[6],
+            );
+        }
+
         throw new DomainException('Stored protected Telegram reference is invalid.');
     }
 
@@ -174,6 +234,11 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         return $this->purpose === self::PURPOSE_PAYMENT_REVIEW_EVIDENCE;
     }
 
+    public function isBackupExport(): bool
+    {
+        return $this->purpose === self::PURPOSE_BACKUP_EXPORT;
+    }
+
     public function paymentReviewKind(): string
     {
         if (! $this->isPaymentReviewEvidence() || $this->kind === null) {
@@ -190,6 +255,28 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         }
 
         return $this->audience;
+    }
+
+    /** @return array{item:string,index:int,count:int,bytes:int,sha256:string} */
+    public function backupExportIdentity(): array
+    {
+        if (! $this->isBackupExport()
+            || $this->kind === null
+            || $this->partIndex === null
+            || $this->partCount === null
+            || $this->contentBytes === null
+            || $this->contentSha256 === null
+        ) {
+            throw new LogicException('Protected Telegram backup-export identity is unavailable.');
+        }
+
+        return [
+            'item' => $this->kind,
+            'index' => $this->partIndex,
+            'count' => $this->partCount,
+            'bytes' => $this->contentBytes,
+            'sha256' => $this->contentSha256,
+        ];
     }
 
     public function durableText(): string
@@ -211,6 +298,12 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         }
         if ($this->isPaymentReviewEvidence() && $this->kind !== null) {
             return self::PREFIX_V4.$this->purpose.':'.$this->kind.':'.$this->publicId.':'.$this->locale.']';
+        }
+        if ($this->isBackupExport()) {
+            $identity = $this->backupExportIdentity();
+
+            return self::PREFIX_V5.$this->purpose.':'.$this->publicId.':'.$identity['item'].':'
+                .$identity['index'].':'.$identity['count'].':'.$identity['bytes'].':'.$identity['sha256'].']';
         }
 
         throw new LogicException('Protected Telegram reference is incomplete.');

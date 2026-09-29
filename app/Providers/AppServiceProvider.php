@@ -12,6 +12,9 @@ use App\Modules\Customers\Application\CustomerIdentityProfilePersistence;
 use App\Modules\Customers\Application\TelegramAdministratorCustomerTargetDiscoveryService;
 use App\Modules\Customers\Application\TelegramAdministratorIdentitySearchSource;
 use App\Modules\Identity\Application\Contracts\CustomerIdentityProfileWriter;
+use App\Modules\Operations\Application\BackupTelegramArtifactPresentationSource;
+use App\Modules\Operations\Application\Contracts\BackupTelegramDeliveryQueue;
+use App\Modules\Operations\Application\Contracts\BackupTelegramOwnerDestinationResolver;
 use App\Modules\Orders\Application\AgentPurchaseCountService;
 use App\Modules\Orders\Application\AgentReportService;
 use App\Modules\Orders\Application\Contracts\QuoteDiscountAuthority;
@@ -69,6 +72,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
+use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramClientGuideCatalog;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardReceiptSubmission;
@@ -97,6 +101,8 @@ use App\Modules\Telegram\Application\Contracts\TelegramServiceNotificationPrefer
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedPaymentIntentProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceReferenceResolver;
+use App\Modules\Telegram\Application\DatabaseBackupTelegramOwnerDestinationResolver;
+use App\Modules\Telegram\Application\TelegramBackupDeliveryQueue;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
@@ -113,6 +119,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->bind(TelegramBackupArtifactPresentationSource::class, BackupTelegramArtifactPresentationSource::class);
+        $this->app->bind(BackupTelegramDeliveryQueue::class, TelegramBackupDeliveryQueue::class);
+        $this->app->bind(BackupTelegramOwnerDestinationResolver::class, DatabaseBackupTelegramOwnerDestinationResolver::class);
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);
         $this->app->bind(CustomerTierPurchaseMetricsSource::class, CustomerTierPurchaseMetricsSourceService::class);
         $this->app->bind(TelegramAgentPurchaseCount::class, AgentPurchaseCountService::class);
