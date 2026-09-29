@@ -302,8 +302,8 @@ final class FilesystemRestorePayloadRestorerTest extends TestCase
     }
 
     /**
-     * @param array<string, string> $configFiles
-     * @param array<string, string> $privateDirectories
+     * @param  array<string, string>  $configFiles
+     * @param  array<string, string>  $privateDirectories
      */
     private function restorer(
         array $configFiles,
@@ -375,8 +375,8 @@ final class FaultInjectingRestorePayloadFilesystem implements RestorePayloadFile
     private int $removeCalls = 0;
 
     /**
-     * @param list<int> $failedMoveCalls
-     * @param list<int> $failedRemoveCalls
+     * @param  list<int>  $failedMoveCalls
+     * @param  list<int>  $failedRemoveCalls
      */
     public function __construct(
         private readonly array $failedMoveCalls = [],
