@@ -99,6 +99,64 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
     }
 
     /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_refresh_runtime_clears_config_then_restarts_workers_while_maintenance_remains_owned(): void
+    {
+        $runId = '20260929T040011Z-6666666666666666';
+        $maintenance = $this->createMock(MaintenanceMode::class);
+        $console = $this->createMock(Kernel::class);
+        $calls = [];
+
+        $maintenance->expects(self::exactly(2))
+            ->method('active')
+            ->willReturn(true);
+        $maintenance->expects(self::exactly(2))
+            ->method('data')
+            ->willReturn(['restore_run_id' => $runId]);
+        $maintenance->expects(self::never())->method('deactivate');
+
+        $console->expects(self::exactly(2))
+            ->method('call')
+            ->willReturnCallback(static function (string $command, array $arguments) use (&$calls): int {
+                $calls[] = [$command, $arguments];
+
+                return 0;
+            });
+
+        $this->coordinator($maintenance, $console)->refreshRuntime($runId);
+
+        self::assertSame([
+            ['config:clear', ['--no-ansi' => true, '--no-interaction' => true]],
+            ['queue:restart', ['--no-interaction' => true]],
+        ], $calls);
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_refresh_runtime_config_failure_stops_before_worker_restart_and_keeps_maintenance(): void
+    {
+        $runId = '20260929T040012Z-7777777777777777';
+        $maintenance = $this->createMock(MaintenanceMode::class);
+        $console = $this->createMock(Kernel::class);
+
+        $maintenance->expects(self::once())->method('active')->willReturn(true);
+        $maintenance->expects(self::once())
+            ->method('data')
+            ->willReturn(['restore_run_id' => $runId]);
+        $maintenance->expects(self::never())->method('deactivate');
+
+        $console->expects(self::once())
+            ->method('call')
+            ->with('config:clear', ['--no-ansi' => true, '--no-interaction' => true])
+            ->willReturn(1);
+
+        try {
+            $this->coordinator($maintenance, $console)->refreshRuntime($runId);
+            self::fail('A restored config-cache refresh failure must remain fail-closed.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Restored configuration cache could not be cleared.', $exception->getMessage());
+        }
+    }
+
+    /** @requirement BAK-002 OPS-003 QUA-001 */
     public function test_leave_requires_restore_ownership_before_reopening_processing(): void
     {
         $runId = '20260929T040002Z-3333333333333333';
