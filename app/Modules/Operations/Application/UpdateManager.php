@@ -139,6 +139,10 @@ final readonly class UpdateManager
             }
             $this->markPhase($report, 'shared_resources_linked');
 
+            $phase = 'runtime_bootstrap';
+            $this->executor->prepareRuntime($releasePath);
+            $this->markPhase($report, 'runtime_bootstrap_completed');
+
             $this->workspace->sealPublishedRelease($package->releaseId);
             $this->markPhase($report, 'immutable_release_sealed');
             $this->workspace->storeReport($updateRunId, $report);
