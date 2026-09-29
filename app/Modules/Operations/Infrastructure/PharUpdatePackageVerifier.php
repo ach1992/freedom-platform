@@ -321,30 +321,47 @@ final readonly class PharUpdatePackageVerifier implements UpdatePackageVerifier
                 }
             }
 
-            $manifestHash = hash_file('sha256', $destination.'/'.self::MANIFEST);
-            $checksumsHash = hash_file('sha256', $destination.'/'.self::CHECKSUMS);
-            if (! is_string($manifestHash)
-                || ! is_string($checksumsHash)
-                || ! hash_equals($package->manifestSha256, $manifestHash)
-                || ! hash_equals($package->checksumsSha256, $checksumsHash)
-            ) {
-                throw new RuntimeException('The staged release metadata failed verification.');
-            }
-
-            foreach ($package->payloadChecksums as $relative => $expectedSha256) {
-                $path = $destination.'/'.$relative;
-                if (! is_file($path) || is_link($path)) {
-                    throw new RuntimeException('A staged release file is unavailable or unsafe.');
-                }
-                $actual = hash_file('sha256', $path);
-                if (! is_string($actual) || ! hash_equals($expectedSha256, $actual)) {
-                    throw new RuntimeException('A staged release file failed checksum verification.');
-                }
-            }
+            $this->verifyExtracted($package, $destination);
         } catch (Throwable $throwable) {
             $this->removeTree($destination);
 
             throw $throwable;
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 RUN-006 SEC-001 SEC-008 QUA-001 */
+    public function verifyExtracted(VerifiedUpdatePackage $package, string $releasePath): void
+    {
+        if (! str_starts_with($releasePath, DIRECTORY_SEPARATOR)
+            || is_link($releasePath)
+        ) {
+            throw new RuntimeException('The staged release path is unavailable or unsafe.');
+        }
+
+        $release = realpath($releasePath);
+        if ($release === false || ! is_dir($release)) {
+            throw new RuntimeException('The staged release path is unavailable or unsafe.');
+        }
+
+        $manifestHash = hash_file('sha256', $release.'/'.self::MANIFEST);
+        $checksumsHash = hash_file('sha256', $release.'/'.self::CHECKSUMS);
+        if (! is_string($manifestHash)
+            || ! is_string($checksumsHash)
+            || ! hash_equals($package->manifestSha256, $manifestHash)
+            || ! hash_equals($package->checksumsSha256, $checksumsHash)
+        ) {
+            throw new RuntimeException('The staged release metadata failed verification.');
+        }
+
+        foreach ($package->payloadChecksums as $relative => $expectedSha256) {
+            $path = $release.'/'.$relative;
+            if (! is_file($path) || is_link($path)) {
+                throw new RuntimeException('A staged release file is unavailable or unsafe.');
+            }
+            $actual = hash_file('sha256', $path);
+            if (! is_string($actual) || ! hash_equals($expectedSha256, $actual)) {
+                throw new RuntimeException('A staged release file failed checksum verification.');
+            }
         }
     }
 
@@ -592,6 +609,7 @@ final readonly class PharUpdatePackageVerifier implements UpdatePackageVerifier
             || str_starts_with($path, 'storage/')
             || $path === 'vendor'
             || str_starts_with($path, 'vendor/')
+            || (str_starts_with($path, 'bootstrap/cache/') && $path !== 'bootstrap/cache/.gitignore')
             || in_array($path, [self::MANIFEST, self::CHECKSUMS], true)
         ) {
             throw new RuntimeException('The update package contains an untrusted or reserved payload path.');
