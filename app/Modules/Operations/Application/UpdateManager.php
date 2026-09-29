@@ -126,7 +126,7 @@ final readonly class UpdateManager
             $stagingPath = null;
             $report['staging_path'] = null;
             $report['release_published'] = true;
-            $this->markPhase($report, 'immutable_release_published');
+            $this->markPhase($report, 'release_published');
 
             $prepared = $this->releases->prepare($package->releaseId);
             if (! hash_equals($releasePath, $prepared)) {
@@ -138,6 +138,9 @@ final readonly class UpdateManager
                 throw new RuntimeException('The published release schema identity is inconsistent.');
             }
             $this->markPhase($report, 'shared_resources_linked');
+
+            $this->workspace->sealPublishedRelease($package->releaseId);
+            $this->markPhase($report, 'immutable_release_sealed');
             $this->workspace->storeReport($updateRunId, $report);
 
             return $this->mutationFence->run(function () use (
