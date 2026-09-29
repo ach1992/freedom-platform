@@ -62,6 +62,8 @@ final readonly class RestoreManager
             'safety_artifact_sha256' => null,
             'mutation_started' => false,
             'maintenance_retained' => false,
+            'scheduler_mutation_fence_retained' => false,
+            'containment_retained' => false,
             'phases' => [],
             'verification' => null,
             'failure_code' => null,
@@ -129,6 +131,8 @@ final readonly class RestoreManager
             $this->maintenance->enter($restoreRunId);
             $maintenanceEntered = true;
             $report['maintenance_retained'] = true;
+            $report['scheduler_mutation_fence_retained'] = true;
+            $report['containment_retained'] = true;
             $this->markPhase($report, 'maintenance_entered');
             $this->workspace->storeReport($restoreRunId, $report);
 
@@ -215,6 +219,8 @@ final readonly class RestoreManager
             $this->maintenance->leave($restoreRunId);
             $maintenanceEntered = false;
             $report['maintenance_retained'] = false;
+            $report['scheduler_mutation_fence_retained'] = false;
+            $report['containment_retained'] = false;
             $this->markPhase($report, 'maintenance_released');
 
             $phase = 'final_report';
@@ -229,19 +235,24 @@ final readonly class RestoreManager
                 $safetyBackupId,
             );
         } catch (Throwable $throwable) {
-            if ($maintenanceEntered && ! $mutationStarted) {
+            if ($mutationStarted) {
+                $containment = $this->retainContainment($restoreRunId);
+                $maintenanceEntered = $containment['maintenance_owned'];
+                $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
+                $report['containment_retained'] = $containment['maintenance_owned']
+                    && $containment['scheduler_fence_held'];
+            } elseif ($maintenanceEntered) {
                 try {
                     $this->maintenance->leave($restoreRunId);
                     $maintenanceEntered = false;
+                    $report['scheduler_mutation_fence_retained'] = false;
+                    $report['containment_retained'] = false;
                 } catch (Throwable) {
-                    // A failed pre-mutation release remains fail-closed.
-                }
-            } elseif (! $maintenanceEntered && $mutationStarted) {
-                try {
-                    $this->maintenance->enter($restoreRunId);
-                    $maintenanceEntered = true;
-                } catch (Throwable) {
-                    // Report the uncertain containment state without concealing the failure.
+                    $containment = $this->retainContainment($restoreRunId);
+                    $maintenanceEntered = $containment['maintenance_owned'];
+                    $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
+                    $report['containment_retained'] = $containment['maintenance_owned']
+                        && $containment['scheduler_fence_held'];
                 }
             }
 
@@ -267,6 +278,24 @@ final readonly class RestoreManager
 
             throw new RuntimeException('Controlled restore failed.', 0, $throwable);
         }
+    }
+
+    /** @return array{maintenance_owned:bool,scheduler_fence_held:bool} */
+    private function retainContainment(string $restoreRunId): array
+    {
+        try {
+            $state = $this->maintenance->retain($restoreRunId);
+        } catch (Throwable) {
+            return [
+                'maintenance_owned' => false,
+                'scheduler_fence_held' => false,
+            ];
+        }
+
+        return [
+            'maintenance_owned' => ($state['maintenance_owned'] ?? false) === true,
+            'scheduler_fence_held' => ($state['scheduler_fence_held'] ?? false) === true,
+        ];
     }
 
     /** @param array<string, mixed> $report */
