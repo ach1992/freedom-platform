@@ -23,7 +23,7 @@ final class ArtisanRestoreRuntimeHealthVerifierTest extends TestCase
                 base_path('artisan'),
                 $directory,
                 30,
-            ))->verify();
+            ))->verify(str_repeat('a', 64));
 
             $arguments = json_decode(
                 (string) file_get_contents($directory.'/health-args.json'),
@@ -33,10 +33,9 @@ final class ArtisanRestoreRuntimeHealthVerifierTest extends TestCase
 
             self::assertSame([
                 base_path('artisan'),
-                'health:check',
-                '--critical',
+                'operations:restore-runtime-attest',
+                '--expected-authority-fingerprint='.str_repeat('a', 64),
                 '--json',
-                '--redact',
                 '--no-ansi',
                 '--no-interaction',
             ], $arguments);
@@ -61,7 +60,7 @@ final class ArtisanRestoreRuntimeHealthVerifierTest extends TestCase
                     base_path('artisan'),
                     $directory,
                     30,
-                ))->verify();
+                ))->verify(str_repeat('b', 64));
                 self::fail('A failed restored-runtime health check must fail closed.');
             } catch (RuntimeException $exception) {
                 self::assertSame('The restored runtime health checks failed.', $exception->getMessage());
