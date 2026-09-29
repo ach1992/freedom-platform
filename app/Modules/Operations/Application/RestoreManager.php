@@ -56,6 +56,7 @@ final readonly class RestoreManager
             'restore_run_id' => $restoreRunId,
             'mode' => $apply ? 'apply' : 'dry_run',
             'status' => 'running',
+            'report_finalized' => false,
             'source_backup_id' => $backupId,
             'source_artifact_sha256' => null,
             'source_completed_at' => null,
@@ -117,6 +118,7 @@ final readonly class RestoreManager
                 $phase = 'cleanup';
                 $this->workspace->discard($workspacePath);
                 $report['status'] = 'dry_run_completed';
+                $report['report_finalized'] = true;
                 $report['completed_at'] = $this->timestamp();
                 $this->markPhase($report, 'plaintext_cleanup_completed');
                 $this->workspace->storeReport($restoreRunId, $report);
@@ -215,7 +217,8 @@ final readonly class RestoreManager
             $this->markPhase($report, 'plaintext_cleanup_completed');
 
             $phase = 'pre_resume_report';
-            $report['status'] = 'verified';
+            $report['status'] = 'resume_pending';
+            $report['report_finalized'] = false;
             $this->workspace->storeReport($restoreRunId, $report);
 
             $phase = 'resume';
@@ -230,6 +233,7 @@ final readonly class RestoreManager
 
             $phase = 'final_report';
             $report['status'] = 'completed';
+            $report['report_finalized'] = true;
             $report['completed_at'] = $this->timestamp();
 
             try {
@@ -290,6 +294,7 @@ final readonly class RestoreManager
             }
 
             $report['status'] = $resumeCompleted ? 'failed_after_resume' : 'failed';
+            $report['report_finalized'] = true;
             $report['failure_code'] = $resumeCompleted
                 ? $phase.'_failed_after_resume'
                 : $phase.'_failed';
