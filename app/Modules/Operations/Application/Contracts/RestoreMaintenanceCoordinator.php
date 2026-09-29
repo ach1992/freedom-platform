@@ -12,6 +12,6 @@ interface RestoreMaintenanceCoordinator
 
     public function leave(string $restoreRunId): void;
 
-    /** @return array{maintenance_owned:bool,scheduler_fence_held:bool} */
+    /** @return array{maintenance_owned:bool,scheduler_fence_held:bool,workers_quiesced:bool} */
     public function retain(string $restoreRunId): array;
 }
