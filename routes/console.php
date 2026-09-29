@@ -85,8 +85,9 @@ Schedule::command('payments:alternative-maintenance', [
     ->name('payments.alternative-maintenance')
     ->everyFiveMinutes()
     ->withoutOverlapping(10)
-    ->onOneServer()
-    ->runInBackground();
+    // Keep mutation in the foreground so the production Scheduler flock remains
+    // held until this database-mutating maintenance command has completely drained.
+    ->onOneServer();
 
 Schedule::command('services:auto-renew', [
     '--limit' => config('auto_renew.batch_limit', 50),
@@ -153,8 +154,8 @@ Schedule::command('telegram:process-broadcasts', [
     // Keep broadcast provider work small and isolated so it cannot monopolize the scheduler
     // ahead of payment/provisioning maintenance or the common Outbox dispatcher.
     ->withoutOverlapping(10)
-    ->onOneServer()
-    ->runInBackground();
+    // Provider/database broadcast mutation must remain inside the Scheduler flock.
+    ->onOneServer();
 
 Schedule::command('support:alerts:scan', [
     '--limit' => 100,
