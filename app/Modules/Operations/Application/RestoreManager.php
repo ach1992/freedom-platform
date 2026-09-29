@@ -49,6 +49,7 @@ final readonly class RestoreManager
         $phase = 'resolve';
         $maintenanceEntered = false;
         $mutationStarted = false;
+        $resumeCompleted = false;
         $safetyBackupId = null;
         $report = [
             'version' => 1,
@@ -63,6 +64,7 @@ final readonly class RestoreManager
             'mutation_started' => false,
             'maintenance_retained' => false,
             'scheduler_mutation_fence_retained' => false,
+            'worker_quiescence_retained' => false,
             'containment_retained' => false,
             'phases' => [],
             'verification' => null,
@@ -132,6 +134,7 @@ final readonly class RestoreManager
             $maintenanceEntered = true;
             $report['maintenance_retained'] = true;
             $report['scheduler_mutation_fence_retained'] = true;
+            $report['worker_quiescence_retained'] = true;
             $report['containment_retained'] = true;
             $this->markPhase($report, 'maintenance_entered');
             $this->workspace->storeReport($restoreRunId, $report);
@@ -217,16 +220,28 @@ final readonly class RestoreManager
 
             $phase = 'resume';
             $this->maintenance->leave($restoreRunId);
+            $resumeCompleted = true;
             $maintenanceEntered = false;
             $report['maintenance_retained'] = false;
             $report['scheduler_mutation_fence_retained'] = false;
+            $report['worker_quiescence_retained'] = false;
             $report['containment_retained'] = false;
             $this->markPhase($report, 'maintenance_released');
 
             $phase = 'final_report';
             $report['status'] = 'completed';
             $report['completed_at'] = $this->timestamp();
-            $this->workspace->storeReport($restoreRunId, $report);
+
+            try {
+                $this->workspace->storeReport($restoreRunId, $report);
+            } catch (Throwable) {
+                return new RestoreRunResult(
+                    $restoreRunId,
+                    'completed_reporting_failed',
+                    $source->backupId,
+                    $safetyBackupId,
+                );
+            }
 
             return new RestoreRunResult(
                 $restoreRunId,
@@ -235,24 +250,34 @@ final readonly class RestoreManager
                 $safetyBackupId,
             );
         } catch (Throwable $throwable) {
-            if ($mutationStarted) {
+            if ($resumeCompleted) {
+                $maintenanceEntered = false;
+                $report['scheduler_mutation_fence_retained'] = false;
+                $report['worker_quiescence_retained'] = false;
+                $report['containment_retained'] = false;
+            } elseif ($mutationStarted) {
                 $containment = $this->retainContainment($restoreRunId);
                 $maintenanceEntered = $containment['maintenance_owned'];
                 $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
+                $report['worker_quiescence_retained'] = $containment['workers_quiesced'];
                 $report['containment_retained'] = $containment['maintenance_owned']
-                    && $containment['scheduler_fence_held'];
+                    && $containment['scheduler_fence_held']
+                    && $containment['workers_quiesced'];
             } elseif ($maintenanceEntered) {
                 try {
                     $this->maintenance->leave($restoreRunId);
                     $maintenanceEntered = false;
                     $report['scheduler_mutation_fence_retained'] = false;
+                    $report['worker_quiescence_retained'] = false;
                     $report['containment_retained'] = false;
                 } catch (Throwable) {
                     $containment = $this->retainContainment($restoreRunId);
                     $maintenanceEntered = $containment['maintenance_owned'];
                     $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
+                    $report['worker_quiescence_retained'] = $containment['workers_quiesced'];
                     $report['containment_retained'] = $containment['maintenance_owned']
-                        && $containment['scheduler_fence_held'];
+                        && $containment['scheduler_fence_held']
+                        && $containment['workers_quiesced'];
                 }
             }
 
@@ -264,8 +289,10 @@ final readonly class RestoreManager
                 $phase = 'plaintext_cleanup';
             }
 
-            $report['status'] = 'failed';
-            $report['failure_code'] = $phase.'_failed';
+            $report['status'] = $resumeCompleted ? 'failed_after_resume' : 'failed';
+            $report['failure_code'] = $resumeCompleted
+                ? $phase.'_failed_after_resume'
+                : $phase.'_failed';
             $report['mutation_started'] = $mutationStarted;
             $report['maintenance_retained'] = $maintenanceEntered;
             $report['completed_at'] = $this->timestamp();
@@ -276,11 +303,17 @@ final readonly class RestoreManager
                 // The command still fails closed if protected reporting itself is unavailable.
             }
 
-            throw new RuntimeException('Controlled restore failed.', 0, $throwable);
+            throw new RuntimeException(
+                $resumeCompleted
+                    ? 'Controlled restore encountered a failure after normal processing resumed.'
+                    : 'Controlled restore failed.',
+                0,
+                $throwable,
+            );
         }
     }
 
-    /** @return array{maintenance_owned:bool,scheduler_fence_held:bool} */
+    /** @return array{maintenance_owned:bool,scheduler_fence_held:bool,workers_quiesced:bool} */
     private function retainContainment(string $restoreRunId): array
     {
         try {
@@ -289,12 +322,14 @@ final readonly class RestoreManager
             return [
                 'maintenance_owned' => false,
                 'scheduler_fence_held' => false,
+                'workers_quiesced' => false,
             ];
         }
 
         return [
             'maintenance_owned' => ($state['maintenance_owned'] ?? false) === true,
             'scheduler_fence_held' => ($state['scheduler_fence_held'] ?? false) === true,
+            'workers_quiesced' => ($state['workers_quiesced'] ?? false) === true,
         ];
     }
 
