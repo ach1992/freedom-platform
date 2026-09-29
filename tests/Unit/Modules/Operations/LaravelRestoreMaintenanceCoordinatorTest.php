@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Modules\Operations;
 
+use Closure;
 use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
 use App\Modules\Operations\Infrastructure\LaravelRestoreMaintenanceCoordinator;
@@ -300,6 +301,7 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
 
         self::assertTrue($state['maintenance_owned']);
         self::assertTrue($state['scheduler_fence_held']);
+        self::assertTrue($state['workers_quiesced']);
         self::assertTrue($maintenance->active);
         self::assertTrue($scheduler->held());
     }
@@ -335,10 +337,66 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
         self::assertTrue($scheduler->held());
     }
 
+    /** @requirement BAK-002 OPS-003 QUA-001 */
+    public function test_recontainment_drains_worker_started_during_maintenance_release_gap(): void
+    {
+        $runId = '20260929T040017Z-cccccccccccccccc';
+        $workerRunning = false;
+        $restartRequested = false;
+        $maintenance = new FaultInjectingRestoreMaintenanceMode($runId);
+        $maintenance->throwAfterDeactivate = true;
+        $maintenance->afterDeactivate = static function () use (&$workerRunning): void {
+            $workerRunning = true;
+        };
+        $scheduler = new StatefulRestoreSchedulerMutationLock(true);
+        $console = $this->createMock(Kernel::class);
+        $console->expects(self::once())
+            ->method('call')
+            ->with('queue:restart', ['--no-interaction' => true])
+            ->willReturnCallback(static function () use (&$restartRequested, &$workerRunning): int {
+                self::assertTrue($workerRunning);
+                $restartRequested = true;
+
+                return 0;
+            });
+
+        $coordinator = $this->coordinator(
+            $maintenance,
+            $console,
+            $scheduler,
+            static function (int $_seconds) use (&$restartRequested, &$workerRunning): void {
+                self::assertTrue($restartRequested);
+                self::assertTrue($workerRunning);
+                $workerRunning = false;
+            },
+        );
+
+        try {
+            $coordinator->leave($runId);
+            self::fail('Injected resume failure must interrupt reopening.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('test-only maintenance deactivation failure', $exception->getMessage());
+        }
+
+        self::assertTrue($workerRunning);
+        self::assertTrue($scheduler->held());
+        self::assertFalse($maintenance->active);
+
+        $state = $coordinator->retain($runId);
+
+        self::assertTrue($state['maintenance_owned']);
+        self::assertTrue($state['scheduler_fence_held']);
+        self::assertTrue($state['workers_quiesced']);
+        self::assertFalse($workerRunning);
+        self::assertTrue($maintenance->active);
+        self::assertTrue($scheduler->held());
+    }
+
     private function coordinator(
         MaintenanceMode $maintenance,
         Kernel $console,
         ?RestoreSchedulerMutationLock $scheduler = null,
+        ?Closure $waiter = null,
     ): LaravelRestoreMaintenanceCoordinator {
         return new LaravelRestoreMaintenanceCoordinator(
             $maintenance,
@@ -347,7 +405,7 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
             $scheduler ?? $this->createStub(RestoreSchedulerMutationLock::class),
             base_path('deploy/supervisor/freedom-platform.conf'),
             360,
-            static function (int $_seconds): void {},
+            $waiter ?? static function (int $_seconds): void {},
         );
     }
 }
@@ -359,6 +417,8 @@ final class FaultInjectingRestoreMaintenanceMode implements MaintenanceMode
     public bool $throwAfterDeactivate = false;
 
     public ?int $throwOnActiveCall = null;
+
+    public ?Closure $afterDeactivate = null;
 
     private int $activeCalls = 0;
 
@@ -380,6 +440,10 @@ final class FaultInjectingRestoreMaintenanceMode implements MaintenanceMode
     {
         $this->active = false;
         $this->payload = [];
+
+        if ($this->afterDeactivate !== null) {
+            ($this->afterDeactivate)();
+        }
 
         if ($this->throwAfterDeactivate) {
             $this->throwAfterDeactivate = false;
