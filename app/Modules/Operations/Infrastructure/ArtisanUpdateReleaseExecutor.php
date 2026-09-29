@@ -79,6 +79,7 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
             '--no-dev',
             '--prefer-dist',
             '--optimize-autoloader',
+            '--no-scripts',
             '--no-interaction',
             '--no-progress',
         ], $release);
@@ -94,6 +95,20 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
         if (! is_string($afterHash) || ! hash_equals($package->composerLockSha256, $afterHash)) {
             throw new RuntimeException('Dependency preparation changed the reviewed Composer lock.');
         }
+    }
+
+    /** @requirement UPD-001 RUN-001 RUN-006 SEC-008 QUA-001 */
+    public function prepareRuntime(string $releasePath): void
+    {
+        $release = $this->releasePath($releasePath);
+
+        $this->process([
+            $this->configuration->phpBinary,
+            $release.'/artisan',
+            'package:discover',
+            '--ansi',
+            '--no-interaction',
+        ], $release);
     }
 
     /** @requirement UPD-001 DAT-004 QUA-001 */
