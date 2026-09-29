@@ -6,5 +6,5 @@ namespace App\Modules\Operations\Application\Contracts;
 
 interface RestoreRuntimeHealthVerifier
 {
-    public function verify(): void;
+    public function verify(string $expectedAuthorityFingerprint): void;
 }
