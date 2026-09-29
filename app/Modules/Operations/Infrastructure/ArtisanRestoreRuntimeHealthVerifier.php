@@ -28,6 +28,7 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
         'COMSPEC',
         'PATHEXT',
     ];
+
     public function __construct(
         private string $phpBinary,
         private string $artisanPath,
