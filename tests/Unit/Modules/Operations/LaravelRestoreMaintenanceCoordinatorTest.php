@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Modules\Operations;
 
-use Closure;
 use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
 use App\Modules\Operations\Infrastructure\LaravelRestoreMaintenanceCoordinator;
+use Closure;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Foundation\MaintenanceMode;
 use RuntimeException;
