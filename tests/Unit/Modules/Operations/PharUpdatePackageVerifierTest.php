@@ -35,6 +35,8 @@ final class PharUpdatePackageVerifierTest extends TestCase
             self::assertFileExists($destination.'/release-manifest.json');
             self::assertFileExists($destination.'/release-checksums.json');
             self::assertFileExists($destination.'/database/migrations/2026_01_01_000000_test.php');
+            self::assertFileExists($destination.'/deploy/bin/queue-worker-with-heartbeat.sh');
+            self::assertSame(0750, fileperms($destination.'/deploy/bin/queue-worker-with-heartbeat.sh') & 0777);
             self::assertFileDoesNotExist($destination.'/.env');
         } finally {
             $this->removeTree($fixture);
@@ -244,6 +246,7 @@ final class PharUpdatePackageVerifierTest extends TestCase
             ], JSON_THROW_ON_ERROR),
             'public/index.php' => "<?php\n",
             'RELEASE_NOTES.md' => "Controlled test release.\n",
+            'deploy/bin/queue-worker-with-heartbeat.sh' => "#!/usr/bin/env bash\nexit 0\n",
             'database/migrations/'.$migration.'.php' => "<?php\nreturn new class {};\n",
             ...$extraPayload,
         ];
@@ -299,6 +302,8 @@ final class PharUpdatePackageVerifierTest extends TestCase
         foreach ($payload as $relative => $contents) {
             $archive->addFromString($relative, $contents);
         }
+        $workerEntry = $archive['deploy/bin/queue-worker-with-heartbeat.sh'];
+        $workerEntry->chmod(0750);
         $archive->addFromString('release-checksums.json', $checksumContents);
         $archive->addFromString('release-manifest.json', $manifestContents);
         unset($archive);
