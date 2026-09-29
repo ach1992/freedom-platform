@@ -130,6 +130,63 @@ final class FilesystemRestorePayloadRestorerTest extends TestCase
         }
     }
 
+    /** @requirement BAK-002 OPS-003 SEC-001 QUA-001 */
+    public function test_preflight_compares_effective_dotenv_semantics_for_critical_values(): void
+    {
+        $base = $this->directory('effective-authority');
+        $targetConfig = $base.'/.env';
+        $entries = $this->entries($base);
+        unset($entries['private/application/nested/new.txt']);
+
+        file_put_contents(
+            $targetConfig,
+            "APP_NAME=Freedom\nDB_HOST=\"db-a.internal\" # current comment\nREDIS_PREFIX=\"${APP_NAME}_cache_\"\n",
+        );
+        file_put_contents(
+            $entries['config/environment'],
+            "APP_NAME=Freedom\nDB_HOST=db-a.internal\nREDIS_PREFIX=${APP_NAME}_cache_\n",
+        );
+
+        try {
+            $this->restorer(['environment' => $targetConfig], [])->preflight($entries);
+            self::assertTrue(true);
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
+    /** @requirement BAK-002 OPS-003 SEC-001 QUA-001 */
+    public function test_preflight_rejects_unapproved_critical_environment_interpolation(): void
+    {
+        $base = $this->directory('indirect-authority');
+        $targetConfig = $base.'/.env';
+        $entries = $this->entries($base);
+        unset($entries['private/application/nested/new.txt']);
+
+        file_put_contents(
+            $targetConfig,
+            "CURRENT_DB_HOST=db-a.internal\nDB_HOST=${CURRENT_DB_HOST}\n",
+        );
+        file_put_contents(
+            $entries['config/environment'],
+            "CURRENT_DB_HOST=db-b.internal\nDB_HOST=${CURRENT_DB_HOST}\n",
+        );
+
+        try {
+            try {
+                $this->restorer(['environment' => $targetConfig], [])->preflight($entries);
+                self::fail('Critical authority may not depend on an unapproved environment indirection.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Restore critical environment authority uses unresolved or unapproved variable interpolation.',
+                    $exception->getMessage(),
+                );
+            }
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
     /** @requirement BAK-002 SEC-001 QUA-001 */
     public function test_staging_failure_removes_plaintext_swap_files_before_rethrow(): void
     {
