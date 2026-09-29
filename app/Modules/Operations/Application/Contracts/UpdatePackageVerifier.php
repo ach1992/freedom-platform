@@ -11,4 +11,6 @@ interface UpdatePackageVerifier
     public function verify(string $packagePath, string $trustedPackageSha256): VerifiedUpdatePackage;
 
     public function extract(VerifiedUpdatePackage $package, string $destination): void;
+
+    public function verifyExtracted(VerifiedUpdatePackage $package, string $releasePath): void;
 }
