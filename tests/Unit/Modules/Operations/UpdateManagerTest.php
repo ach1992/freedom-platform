@@ -144,6 +144,28 @@ final class UpdateManagerTest extends TestCase
         self::assertContains('maintenance.leave', $fixture->events->events);
     }
 
+    /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
+    public function test_resume_failure_after_candidate_identity_write_reconciles_identity_to_safe_rollback(): void
+    {
+        $fixture = $this->fixture(rollbackCompatible: true);
+        $fixture->maintenance->failLeaveOnce = true;
+        $manager = $this->manager($fixture);
+
+        $result = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+
+        self::assertSame('failed_safely_rolled_back', $result->status);
+        self::assertSame('1.0.0', $fixture->workspace->current);
+        self::assertSame('1.0.0', $fixture->workspace->identity['release_id'] ?? null);
+        self::assertSame('1.0.0', $fixture->workspace->identity['application_version'] ?? null);
+        self::assertSame($fixture->package->toSchemaSha256, $fixture->workspace->identity['schema_sha256'] ?? null);
+        self::assertSame('1.1.0', $fixture->workspace->identity['recovered_from_release_attempt'] ?? null);
+        self::assertSame(2, count(array_filter(
+            $fixture->events->events,
+            static fn (string $event): bool => $event === 'workspace.identity',
+        )));
+        self::assertFalse($fixture->maintenance->retained);
+    }
+
     /** @requirement UPD-001 BAK-002 OPS-003 QUA-001 */
     public function test_incompatible_post_activation_failure_withholds_old_code_and_requires_controlled_restore(): void
     {
@@ -595,6 +617,8 @@ final class FakeUpdateMaintenanceCoordinator implements RestoreMaintenanceCoordi
 {
     public bool $retained = false;
 
+    public bool $failLeaveOnce = false;
+
     public function __construct(private readonly UpdateEventLog $events) {}
 
     public function enter(string $restoreRunId): void
@@ -611,6 +635,13 @@ final class FakeUpdateMaintenanceCoordinator implements RestoreMaintenanceCoordi
     public function leave(string $restoreRunId): void
     {
         $this->events->add('maintenance.leave');
+
+        if ($this->failLeaveOnce) {
+            $this->failLeaveOnce = false;
+
+            throw new RuntimeException('test-only-resume-failure');
+        }
+
         $this->retained = false;
     }
 
