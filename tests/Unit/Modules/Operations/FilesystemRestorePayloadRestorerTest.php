@@ -138,14 +138,16 @@ final class FilesystemRestorePayloadRestorerTest extends TestCase
         $entries = $this->entries($base);
         unset($entries['private/application/nested/new.txt']);
 
-        file_put_contents(
-            $targetConfig,
-            "APP_NAME=Freedom\nDB_HOST=\"db-a.internal\" # current comment\nREDIS_PREFIX=\"${APP_NAME}_cache_\"\n",
-        );
-        file_put_contents(
-            $entries['config/environment'],
-            "APP_NAME=Freedom\nDB_HOST=db-a.internal\nREDIS_PREFIX=${APP_NAME}_cache_\n",
-        );
+        file_put_contents($targetConfig, <<<'ENV'
+APP_NAME=Freedom
+DB_HOST="db-a.internal" # current comment
+REDIS_PREFIX="${APP_NAME}_cache_"
+ENV);
+        file_put_contents($entries['config/environment'], <<<'ENV'
+APP_NAME=Freedom
+DB_HOST=db-a.internal
+REDIS_PREFIX=${APP_NAME}_cache_
+ENV);
 
         try {
             $this->restorer(['environment' => $targetConfig], [])->preflight($entries);
@@ -163,14 +165,14 @@ final class FilesystemRestorePayloadRestorerTest extends TestCase
         $entries = $this->entries($base);
         unset($entries['private/application/nested/new.txt']);
 
-        file_put_contents(
-            $targetConfig,
-            "CURRENT_DB_HOST=db-a.internal\nDB_HOST=${CURRENT_DB_HOST}\n",
-        );
-        file_put_contents(
-            $entries['config/environment'],
-            "CURRENT_DB_HOST=db-b.internal\nDB_HOST=${CURRENT_DB_HOST}\n",
-        );
+        file_put_contents($targetConfig, <<<'ENV'
+CURRENT_DB_HOST=db-a.internal
+DB_HOST=${CURRENT_DB_HOST}
+ENV);
+        file_put_contents($entries['config/environment'], <<<'ENV'
+CURRENT_DB_HOST=db-b.internal
+DB_HOST=${CURRENT_DB_HOST}
+ENV);
 
         try {
             try {
