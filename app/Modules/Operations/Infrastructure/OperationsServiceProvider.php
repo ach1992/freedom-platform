@@ -14,6 +14,8 @@ use App\Modules\Operations\Application\Contracts\BackupBundleWriter as BackupBun
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
 use App\Modules\Operations\Application\Contracts\BackupPayloadCollector as BackupPayloadCollectorContract;
 use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\ReleaseActivator;
+use App\Modules\Operations\Application\Contracts\ReleaseHealthVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreCriticalAuthorityIdentity;
 use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
@@ -23,11 +25,20 @@ use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreRuntimeHealthVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
+use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
+use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
+use App\Modules\Operations\Application\Contracts\UpdateSafetyInspector;
+use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
+use App\Modules\Operations\Application\Contracts\VerifiedPreUpdateBackupProvider;
 use App\Modules\Operations\Application\QueueWorkerHeartbeatReporter;
 use App\Modules\Operations\Application\RestoreManager;
 use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
 use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
+use App\Modules\Operations\Application\UpdateManager;
+use App\Modules\Operations\Application\UpdateRuntimeConfiguration;
 use App\Modules\Operations\Application\WorkerHeartbeatService;
+use App\Modules\Payments\Application\PurchaseProviderMutationBarrier;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
 use Illuminate\Contracts\Console\Kernel;
@@ -97,6 +108,18 @@ final class OperationsServiceProvider extends ServiceProvider
                 }
 
                 return RestoreRuntimeConfiguration::fromArray($configuration);
+            },
+        );
+
+        $this->app->singleton(
+            UpdateRuntimeConfiguration::class,
+            static function (): UpdateRuntimeConfiguration {
+                $configuration = config('operations.update');
+                if (! is_array($configuration)) {
+                    throw new RuntimeException('Update configuration is unavailable.');
+                }
+
+                return UpdateRuntimeConfiguration::fromArray($configuration);
             },
         );
 
@@ -315,6 +338,70 @@ final class OperationsServiceProvider extends ServiceProvider
                 );
             },
         );
+
+        $this->app->singleton(
+            UpdatePackageVerifier::class,
+            fn (Application $application): UpdatePackageVerifier => new PharUpdatePackageVerifier(
+                $application->make(UpdateRuntimeConfiguration::class)->packageRoot,
+            ),
+        );
+
+        $this->app->singleton(
+            UpdateWorkspace::class,
+            fn (Application $application): UpdateWorkspace => new FilesystemUpdateWorkspace(
+                $application->make(UpdateRuntimeConfiguration::class)->deploymentRoot,
+            ),
+        );
+
+        $this->app->singleton(
+            UpdateSafetyInspector::class,
+            fn (Application $application): UpdateSafetyInspector => new DatabaseUpdateSafetyInspector(
+                $application->make(DatabaseManager::class),
+                base_path('database/migrations'),
+                base_path('deploy/supervisor/freedom-platform.conf'),
+            ),
+        );
+
+        $this->app->singleton(
+            VerifiedPreUpdateBackupProvider::class,
+            fn (Application $application): VerifiedPreUpdateBackupProvider => new RestoreVerifiedPreUpdateBackupProvider(
+                $application->make(BackupManager::class),
+                $application->make(RestoreManager::class),
+            ),
+        );
+
+        $this->app->singleton(
+            UpdateReleaseExecutor::class,
+            fn (Application $application): UpdateReleaseExecutor => new ArtisanUpdateReleaseExecutor(
+                $application->make(UpdateRuntimeConfiguration::class),
+            ),
+        );
+
+        $this->app->singleton(
+            UpdateMutationFence::class,
+            fn (Application $application): UpdateMutationFence => new PurchaseProviderUpdateMutationFence(
+                $application->make(PurchaseProviderMutationBarrier::class),
+            ),
+        );
+
+        $this->app->singleton(
+            ReleaseHealthVerifier::class,
+            fn (Application $application): ReleaseHealthVerifier => new ArtisanReleaseHealthVerifier(
+                $application->make(UpdateRuntimeConfiguration::class)->phpBinary,
+                min($application->make(UpdateRuntimeConfiguration::class)->processTimeoutSeconds, 600),
+            ),
+        );
+
+        $this->app->singleton(
+            ReleaseActivator::class,
+            fn (Application $application): ReleaseActivator => new FilesystemReleaseActivator(
+                $application->make(ReleaseHealthVerifier::class),
+                $application->make(UpdateRuntimeConfiguration::class)->deploymentRoot,
+                $application->make(UpdateRuntimeConfiguration::class)->deploymentRoot.'/shared/release-journal.json',
+            ),
+        );
+
+        $this->app->singleton(UpdateManager::class);
     }
 
     public function boot(): void

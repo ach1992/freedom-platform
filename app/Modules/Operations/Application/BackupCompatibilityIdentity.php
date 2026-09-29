@@ -68,23 +68,6 @@ final readonly class BackupCompatibilityIdentity
 
     private function migrationsHash(string $directory): string
     {
-        $root = realpath($directory);
-        if ($root === false || ! is_dir($root) || is_link($directory)) {
-            throw new RuntimeException('The migration compatibility directory is unavailable.');
-        }
-
-        $files = glob($root.'/*.php');
-        if ($files === false || $files === []) {
-            throw new RuntimeException('Migration compatibility inputs are unavailable.');
-        }
-
-        sort($files, SORT_STRING);
-        $hash = hash_init('sha256');
-
-        foreach ($files as $file) {
-            hash_update($hash, basename($file)."\0".$this->fileHash($file)."\n");
-        }
-
-        return hash_final($hash);
+        return UpdateMigrationIdentity::fromDirectory($directory);
     }
 }
