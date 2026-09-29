@@ -62,6 +62,11 @@ final class FilesystemRestoreSchedulerMutationLock implements RestoreSchedulerMu
         throw new RuntimeException('Restore Scheduler mutation did not quiesce within the configured bound.');
     }
 
+    public function held(): bool
+    {
+        return is_resource($this->handle);
+    }
+
     /** @requirement BAK-002 OPS-003 QUA-001 */
     public function release(): void
     {
