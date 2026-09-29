@@ -12,6 +12,8 @@ interface UpdateReleaseExecutor
 
     public function prepare(string $releasePath, VerifiedUpdatePackage $package): void;
 
+    public function prepareRuntime(string $releasePath): void;
+
     public function migrate(string $releasePath): void;
 
     public function verifyRelease(string $releasePath, ?VerifiedUpdatePackage $package = null): void;
