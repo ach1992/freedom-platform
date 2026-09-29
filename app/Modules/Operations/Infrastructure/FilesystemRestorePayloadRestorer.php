@@ -455,6 +455,10 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             $seenCriticalKeys[$key] = true;
         }
 
+        if ($seenCriticalKeys === []) {
+            return [];
+        }
+
         try {
             $parsed = Dotenv::parse($contents);
         } catch (Throwable) {
