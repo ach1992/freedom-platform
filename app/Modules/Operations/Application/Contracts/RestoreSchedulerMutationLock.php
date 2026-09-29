@@ -9,4 +9,6 @@ interface RestoreSchedulerMutationLock
     public function acquire(int $timeoutSeconds): void;
 
     public function release(): void;
+
+    public function held(): bool;
 }
