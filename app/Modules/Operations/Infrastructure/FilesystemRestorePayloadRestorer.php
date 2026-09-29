@@ -155,6 +155,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 if (count($segments) !== 2 || ! array_key_exists($segments[1], $this->configFiles)) {
                     throw new RuntimeException('The restore bundle contains an unknown configuration target.');
                 }
+
                 continue;
             }
 
@@ -162,6 +163,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 if (count($segments) < 3 || ! array_key_exists($segments[1], $this->privateDirectories)) {
                     throw new RuntimeException('The restore bundle contains an unknown private target.');
                 }
+
                 continue;
             }
 
@@ -245,6 +247,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             ) {
                 throw new RuntimeException('A private restore staging path is unsafe.');
             }
+
             return;
         }
 
@@ -266,6 +269,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
             if (! unlink($path)) {
                 throw new RuntimeException('A restore swap file could not be removed.');
             }
+
             return;
         }
 

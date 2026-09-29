@@ -134,6 +134,7 @@ final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
             if (! unlink($path)) {
                 throw new RuntimeException('A restore workspace file could not be removed.');
             }
+
             return;
         }
 
