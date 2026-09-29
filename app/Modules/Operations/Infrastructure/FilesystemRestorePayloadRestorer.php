@@ -74,7 +74,8 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
                 $source = $entries['config/'.$name];
                 $target = $this->safeFileTarget($configuredTarget);
                 $operations[] = $this->fileOperation($source, $target, $restoreRunId);
-                $this->copyRegularFile($source, $operations[array_key_last($operations)]['stage']);
+                $operationIndex = count($operations) - 1;
+                $this->copyRegularFile($source, $operations[$operationIndex]['stage']);
             }
 
             foreach ($this->privateDirectories as $name => $configuredTarget) {
