@@ -81,7 +81,7 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
 
     private function ledgerViolations(Connection $connection): int
     {
-        return $this->violationCount($connection, <<<'SQL'
+        $row = $connection->selectOne(<<<'SQL'
 SELECT COUNT(*) AS violations
 FROM (
     SELECT transaction_row.id
@@ -106,45 +106,51 @@ FROM (
       )
 ) violation_rows
 SQL);
+
+        return $this->violationCount($row);
     }
 
     private function orderPaymentViolations(Connection $connection): int
     {
-        return $this->violationCount($connection, <<<'SQL'
+        $row = $connection->selectOne(<<<'SQL'
 SELECT COUNT(*) AS violations
 FROM orders order_row
 LEFT JOIN purchase_settlements settlement_row ON settlement_row.id = order_row.purchase_settlement_id
 LEFT JOIN payment_intents intent_row ON intent_row.id = order_row.payment_intent_id
 LEFT JOIN payment_provider_transactions provider_row ON provider_row.id = settlement_row.provider_transaction_row_id
-WHERE order_row.source_type <> 'purchase'
-   OR settlement_row.id IS NULL
-   OR intent_row.id IS NULL
-   OR provider_row.id IS NULL
-   OR settlement_row.payment_intent_id <> order_row.payment_intent_id
-   OR settlement_row.user_id <> order_row.user_id
-   OR settlement_row.source_quote_id <> order_row.source_quote_id
-   OR settlement_row.public_id <> order_row.purchase_settlement_public_id
-   OR intent_row.public_id <> order_row.payment_intent_public_id
-   OR intent_row.purpose <> 'purchase'
-   OR intent_row.state NOT IN ('captured','refund_pending','refunded','partially_refunded')
-   OR intent_row.captured_at IS NULL
-   OR intent_row.amount_irr <> order_row.total_amount_irr
-   OR settlement_row.amount_irr <> order_row.settled_amount_irr
-   OR settlement_row.currency <> order_row.currency
-   OR intent_row.currency <> order_row.currency
-   OR provider_row.payment_intent_id <> settlement_row.payment_intent_id
-   OR provider_row.provider_code <> settlement_row.provider_code
-   OR provider_row.provider_transaction_id <> settlement_row.provider_transaction_id
-   OR provider_row.evidence_payload_hash <> settlement_row.evidence_payload_hash
-   OR provider_row.transaction_status <> 'settled'
-   OR provider_row.amount_irr <> settlement_row.amount_irr
-   OR provider_row.currency <> settlement_row.currency
+WHERE order_row.source_type = 'purchase'
+  AND (
+       settlement_row.id IS NULL
+       OR intent_row.id IS NULL
+       OR provider_row.id IS NULL
+       OR settlement_row.payment_intent_id <> order_row.payment_intent_id
+       OR settlement_row.user_id <> order_row.user_id
+       OR settlement_row.source_quote_id <> order_row.source_quote_id
+       OR settlement_row.public_id <> order_row.purchase_settlement_public_id
+       OR intent_row.public_id <> order_row.payment_intent_public_id
+       OR intent_row.purpose <> 'purchase'
+       OR intent_row.state NOT IN ('captured','refund_pending','refunded','partially_refunded')
+       OR intent_row.captured_at IS NULL
+       OR intent_row.amount_irr <> order_row.total_amount_irr
+       OR settlement_row.amount_irr <> order_row.settled_amount_irr
+       OR settlement_row.currency <> order_row.currency
+       OR intent_row.currency <> order_row.currency
+       OR provider_row.payment_intent_id <> settlement_row.payment_intent_id
+       OR provider_row.provider_code <> settlement_row.provider_code
+       OR provider_row.provider_transaction_id <> settlement_row.provider_transaction_id
+       OR provider_row.evidence_payload_hash <> settlement_row.evidence_payload_hash
+       OR provider_row.transaction_status <> 'settled'
+       OR provider_row.amount_irr <> settlement_row.amount_irr
+       OR provider_row.currency <> settlement_row.currency
+  )
 SQL);
+
+        return $this->violationCount($row);
     }
 
     private function serviceViolations(Connection $connection): int
     {
-        return $this->violationCount($connection, <<<'SQL'
+        $row = $connection->selectOne(<<<'SQL'
 SELECT COUNT(*) AS violations
 FROM service_subscriptions service_row
 LEFT JOIN orders order_row ON order_row.id = service_row.order_id
@@ -152,30 +158,50 @@ LEFT JOIN order_items item_row ON item_row.id = service_row.order_item_id
 LEFT JOIN provisioning_operations operation_row
     ON operation_row.service_subscription_id = service_row.id
    AND operation_row.operation_type = 'initial_provision'
+LEFT JOIN service_imports import_row
+    ON import_row.service_subscription_id = service_row.id
+   AND import_row.state = 'attached'
 WHERE order_row.id IS NULL
    OR item_row.id IS NULL
-   OR operation_row.id IS NULL
    OR item_row.order_id <> service_row.order_id
    OR order_row.user_id <> service_row.user_id
-   OR operation_row.order_id <> service_row.order_id
-   OR operation_row.order_item_id <> service_row.order_item_id
-   OR operation_row.user_id <> service_row.user_id
+   OR (operation_row.id IS NULL AND import_row.id IS NULL)
    OR (
-       operation_row.state = 'succeeded'
+       operation_row.id IS NOT NULL
        AND (
-           service_row.remote_service_id IS NULL
-           OR operation_row.remote_service_id IS NULL
-           OR service_row.remote_service_id <> operation_row.remote_service_id
+           operation_row.order_id <> service_row.order_id
+           OR operation_row.order_item_id <> service_row.order_item_id
+           OR operation_row.user_id <> service_row.user_id
+           OR (
+               operation_row.state = 'succeeded'
+               AND (
+                   service_row.remote_service_id IS NULL
+                   OR operation_row.remote_service_id IS NULL
+                   OR service_row.remote_service_id <> operation_row.remote_service_id
+                   OR service_row.provisioned_at IS NULL
+               )
+           )
+       )
+   )
+   OR (
+       import_row.id IS NOT NULL
+       AND (
+           import_row.order_id <> service_row.order_id
+           OR import_row.user_id <> service_row.user_id
+           OR import_row.service_target_id <> service_row.service_target_id
+           OR import_row.remote_service_id <> service_row.remote_service_id
            OR service_row.provisioned_at IS NULL
        )
    )
 SQL);
+
+        return $this->violationCount($row);
     }
 
-    private function violationCount(Connection $connection, string $sql): int
+    private function violationCount(?object $row): int
     {
-        $row = $connection->selectOne($sql);
-        $violations = $row->violations ?? null;
+        $values = $row === null ? [] : (array) $row;
+        $violations = $values['violations'] ?? null;
 
         if (! is_int($violations) && ! is_string($violations)) {
             throw new RuntimeException('A restore reconciliation query returned an invalid result.');

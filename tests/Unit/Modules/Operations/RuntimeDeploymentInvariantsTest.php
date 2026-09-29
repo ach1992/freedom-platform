@@ -113,4 +113,17 @@ CONF;
         self::assertFalse($this->invariants->redisQueueRetryCompatible($configuration, $supervisor));
         self::assertFalse($this->invariants->redisQueueRetryCompatible($configuration, 'missing worker timeout'));
     }
+
+    /** @requirement BAK-002 OPS-003 */
+    public function test_restore_quiescence_must_cover_every_worker_timeout_plus_shutdown_margin(): void
+    {
+        $supervisor = <<<'CONF'
+command=php artisan queue:work redis --timeout=120
+command=php artisan queue:work redis --timeout=300
+CONF;
+
+        self::assertTrue($this->invariants->restoreQuiescenceCompatible(360, $supervisor));
+        self::assertFalse($this->invariants->restoreQuiescenceCompatible(359, $supervisor));
+        self::assertFalse($this->invariants->restoreQuiescenceCompatible(360, 'missing worker timeout'));
+    }
 }

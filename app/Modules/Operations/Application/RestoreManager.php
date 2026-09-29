@@ -40,8 +40,8 @@ final readonly class RestoreManager
     /** @requirement BAK-002 SEC-001 OPS-003 QUA-001 */
     public function run(string $backupId, bool $apply = false): RestoreRunResult
     {
-        if (! $this->configuration->enabled) {
-            throw new RuntimeException('Restore is disabled by configuration.');
+        if ($apply && ! $this->configuration->enabled) {
+            throw new RuntimeException('Restore execution is disabled by configuration.');
         }
 
         $restoreRunId = $this->restoreRunId();
@@ -59,6 +59,7 @@ final readonly class RestoreManager
             'source_artifact_sha256' => null,
             'source_completed_at' => null,
             'safety_backup_id' => null,
+            'safety_artifact_sha256' => null,
             'mutation_started' => false,
             'maintenance_retained' => false,
             'phases' => [],
@@ -137,8 +138,32 @@ final readonly class RestoreManager
             if ($verifiedSafety->kind !== BackupKind::DailyFull || ! $verifiedSafety->includesPrivateFiles) {
                 throw new RuntimeException('The current-state safety backup is incomplete.');
             }
+
+            $this->compatibility->assertCompatible($verifiedSafety);
+            $safetyCipher = $this->cipherFactory->create($this->backupConfiguration->encryptionKey());
+            if (! hash_equals($safetyCipher->algorithm(), $verifiedSafety->encryptionAlgorithm)
+                || ! hash_equals($safetyCipher->keyId(), $verifiedSafety->encryptionKeyId)
+            ) {
+                throw new RuntimeException('The current-state safety backup encryption identity is incompatible.');
+            }
+
+            $safetyBundlePath = $workspacePath.'/safety.bundle';
+            $safetyCipher->decryptFile($verifiedSafety->artifactPath, $safetyBundlePath);
+            $safetyEntries = $this->bundleReader->extract(
+                $safetyBundlePath,
+                $workspacePath.'/safety-extracted',
+            );
+            if (! unlink($safetyBundlePath)) {
+                throw new RuntimeException('The decrypted safety backup bundle could not be removed.');
+            }
+            if (count($safetyEntries) !== $verifiedSafety->entryCount) {
+                throw new RuntimeException('The safety backup bundle entry count does not match its manifest.');
+            }
+            $this->payloadRestorer->preflight($safetyEntries);
+
             $safetyBackupId = $verifiedSafety->backupId;
             $report['safety_backup_id'] = $safetyBackupId;
+            $report['safety_artifact_sha256'] = $verifiedSafety->artifactSha256;
             $this->markPhase($report, 'safety_backup_verified');
             $this->workspace->storeReport($restoreRunId, $report);
 

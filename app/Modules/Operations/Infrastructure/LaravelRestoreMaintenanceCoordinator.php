@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
+use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
+use Closure;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Foundation\MaintenanceMode;
 use RuntimeException;
@@ -15,9 +17,14 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
     public function __construct(
         private MaintenanceMode $maintenance,
         private Kernel $console,
+        private RuntimeDeploymentInvariants $deploymentInvariants,
+        private string $supervisorTemplatePath,
         private int $quiesceSeconds,
+        private ?Closure $waiter = null,
     ) {
-        if ($quiesceSeconds < 0 || $quiesceSeconds > 3600) {
+        if ($quiesceSeconds < 1 || $quiesceSeconds > 3600
+            || ! str_starts_with($supervisorTemplatePath, DIRECTORY_SEPARATOR)
+        ) {
             throw new RuntimeException('Restore quiescence configuration is invalid.');
         }
     }
@@ -29,6 +36,23 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
 
         if ($this->maintenance->active()) {
             throw new RuntimeException('Application maintenance mode is already active.');
+        }
+
+        if (! is_file($this->supervisorTemplatePath)
+            || is_link($this->supervisorTemplatePath)
+            || ! is_readable($this->supervisorTemplatePath)
+        ) {
+            throw new RuntimeException('Restore worker quiescence authority is unavailable.');
+        }
+
+        $supervisorTemplate = file_get_contents($this->supervisorTemplatePath);
+        if (! is_string($supervisorTemplate)
+            || ! $this->deploymentInvariants->restoreQuiescenceCompatible(
+                $this->quiesceSeconds,
+                $supervisorTemplate,
+            )
+        ) {
+            throw new RuntimeException('Restore quiescence is shorter than the reviewed worker timeout boundary.');
         }
 
         $activated = false;
@@ -50,9 +74,9 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
                 throw new RuntimeException('Queue worker quiescence could not be requested.');
             }
 
-            if ($this->quiesceSeconds > 0) {
-                sleep($this->quiesceSeconds);
-            }
+            ($this->waiter ?? static function (int $seconds): void {
+                sleep($seconds);
+            })($this->quiesceSeconds);
 
             $data = $this->maintenance->data();
             if (! $this->maintenance->active()

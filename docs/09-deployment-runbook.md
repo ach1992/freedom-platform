@@ -148,9 +148,33 @@ Optional Telegram export is a secondary copy, not the local backup authority. En
 
 ## Restore
 
-Restore is privileged and explicit. It must validate backup integrity/compatibility, preserve a safety copy before destructive replacement, restore through an isolated/staged boundary where possible, and reconcile financial/remote state before reopening.
+Restore is privileged and explicit. The Phase 0.8 authority consumes only completed full backups (`daily_full` or `pre_update`) from the local backup authority; database-only frequent backups are rejected for controlled full restore.
 
-Never edit ledger/payment history manually to make a restore appear consistent.
+The non-destructive preflight remains available without enabling destructive restore:
+
+```bash
+php artisan operations:restore <backup-id> --json
+```
+
+Preflight verifies backup authority/version/identity, artifact size and SHA-256, encryption algorithm/key identity, authenticated decryption, application/PHP/database/composer/migration compatibility, bundle entry count, and path-safe config/private payload ownership. It writes a protected sanitized report under `BACKUP_ROOT/restore/reports/` and removes decrypted work state.
+
+A real replacement is separately disabled by default. `RESTORE_ENABLED=true` only makes the reviewed execution path technically available; it is not authorization for a staging/production restore. A live invocation still requires the current destructive/production Owner gate. When that gate is satisfied, the command additionally requires exact backup-ID confirmation:
+
+```bash
+php artisan operations:restore <backup-id> --apply --confirm=<backup-id> --json
+```
+
+Apply enters Laravel maintenance mode with no bypass path, requests `queue:restart`, and waits the configured quiescence period before the safety backup. `RESTORE_QUIESCE_SECONDS` must remain at least 60 seconds above the largest reviewed Supervisor worker `--timeout`; the restore authority reads the canonical Supervisor template and fails before maintenance activation when this relationship is unsafe. This keeps web/Scheduler work closed while allowing already-running bounded queue jobs to finish before state capture.
+
+While maintenance is retained, Restore creates a new `daily_full` current-state safety backup and independently re-verifies its completed manifest/hash, compatibility, encryption identity, authenticated decryption, bundle entry count, and configured payload ownership. Destructive replacement cannot begin until that safety backup passes.
+
+Database replacement uses the MariaDB client with credentials confined to a mode-`0600` temporary `--defaults-file`; password material is not placed in argv or surfaced provider errors. Config/private payloads are staged beside their configured targets and swapped only from path-safe regular-file/directory inputs. The destructive database/config/private/post-check sequence holds the shared backup authority lock so another backup cannot race replacement.
+
+Before reopening, Restore requires exact migration identity, balanced finalized-ledger checks, purchase Order/Payment/Settlement/Provider consistency, Service/Order consistency for both provisioned and imported Services, and the existing critical runtime health contract. It then removes decrypted work state, persists the protected restore report, and releases only the maintenance mode owned by that restore run.
+
+Failures before the destructive boundary release owned maintenance when that can be proven safe. Any failure after destructive replacement starts retains maintenance/quiescence, never reports success, and records only sanitized phase/result evidence. Do not manually deactivate that containment, edit ledger/payment/order history, or delete restore/safety-backup evidence to make the system appear healthy; establish the actual state and use the reviewed safety-backup/forward-recovery decision.
+
+The final target-like generated-backup restore rehearsal remains the Phase 0.8 acceptance gate; implementation/unit/integration tests do not substitute for that later Outcome-F evidence.
 
 ## Update and rollback
 

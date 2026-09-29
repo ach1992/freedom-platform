@@ -22,7 +22,7 @@ final readonly class RestoreRuntimeConfiguration
             throw new InvalidArgumentException('Restore process timeout configuration is invalid.');
         }
 
-        if ($quiesceSeconds < 0 || $quiesceSeconds > 3600) {
+        if ($quiesceSeconds < 1 || $quiesceSeconds > 3600) {
             throw new InvalidArgumentException('Restore quiescence configuration is invalid.');
         }
     }

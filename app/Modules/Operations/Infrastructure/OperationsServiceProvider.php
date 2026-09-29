@@ -22,6 +22,7 @@ use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\QueueWorkerHeartbeatReporter;
 use App\Modules\Operations\Application\RestoreManager;
 use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
+use App\Modules\Operations\Application\RuntimeDeploymentInvariants;
 use App\Modules\Operations\Application\RuntimeHealthProbe;
 use App\Modules\Operations\Application\WorkerHeartbeatService;
 use App\Shared\Application\Clock;
@@ -202,6 +203,8 @@ final class OperationsServiceProvider extends ServiceProvider
                 return new LaravelRestoreMaintenanceCoordinator(
                     $application->make(MaintenanceMode::class),
                     $application->make(Kernel::class),
+                    $application->make(RuntimeDeploymentInvariants::class),
+                    base_path('deploy/supervisor/freedom-platform.conf'),
                     $restore->quiesceSeconds,
                 );
             },
