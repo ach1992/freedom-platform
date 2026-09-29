@@ -7,5 +7,8 @@ namespace App\Modules\Operations\Application\Contracts;
 interface RestorePayloadRestorer
 {
     /** @param array<string, string> $entries */
+    public function preflight(array $entries): void;
+
+    /** @param array<string, string> $entries */
     public function restore(array $entries, string $restoreRunId): void;
 }

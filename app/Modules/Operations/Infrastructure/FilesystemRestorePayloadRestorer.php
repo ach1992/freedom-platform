@@ -129,7 +129,7 @@ final readonly class FilesystemRestorePayloadRestorer implements RestorePayloadR
     }
 
     /** @param array<string, string> $entries */
-    private function validateEntries(array $entries): void
+    public function preflight(array $entries): void
     {
         if (! isset($entries['database/database.sql'])) {
             throw new RuntimeException('The restore bundle database payload is missing.');
