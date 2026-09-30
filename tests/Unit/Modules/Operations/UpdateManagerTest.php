@@ -8,10 +8,12 @@ use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
 use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
+use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
 use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
 use App\Modules\Operations\Application\Contracts\UpdateSafetyInspector;
 use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Modules\Operations\Application\Contracts\VerifiedPreUpdateBackupProvider;
+use App\Modules\Operations\Application\RestoreRunResult;
 use App\Modules\Operations\Application\UpdateManager;
 use App\Modules\Operations\Application\UpdateRuntimeConfiguration;
 use App\Modules\Operations\Application\VerifiedPreUpdateBackup;
@@ -180,6 +182,38 @@ final class UpdateManagerTest extends TestCase
         self::assertSame('restore_required', $report['status'] ?? null);
         self::assertSame('migration_failed', $report['failure_code'] ?? null);
         self::assertTrue($report['containment_retained'] ?? false);
+    }
+
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 QUA-001 */
+    public function test_restore_required_report_is_recovered_only_by_exact_update_run_handoff(): void
+    {
+        $fixture = $this->fixture();
+        $fixture->executor->failMigrate = true;
+        $manager = $this->manager($fixture);
+
+        $failed = $manager->run('/controlled/release.tar', str_repeat('c', 64), true, '1.1.0');
+        self::assertSame('restore_required', $failed->status);
+        self::assertSame('1.0.0', $fixture->workspace->loadReport($failed->updateRunId)['previous_application_version'] ?? null);
+
+        try {
+            $manager->recover($failed->updateRunId, true, 'wrong-run');
+            self::fail('Recovery apply must require confirmation of the exact protected update run.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'Controlled update recovery confirmation does not match the exact update run.',
+                $exception->getMessage(),
+            );
+        }
+        self::assertSame([], $fixture->recovery->runs);
+
+        $result = $manager->recover($failed->updateRunId, true, $failed->updateRunId);
+
+        self::assertSame('restore_recovered', $result->status);
+        self::assertSame($failed->updateRunId, $result->updateRunId);
+        self::assertSame('1.1.0', $result->releaseId);
+        self::assertSame('1.0.0', $result->previousRelease);
+        self::assertFalse($result->restoreRequired);
+        self::assertSame([[$failed->updateRunId, true]], $fixture->recovery->runs);
     }
 
     /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
@@ -401,6 +435,7 @@ final class UpdateManagerTest extends TestCase
             $fixture->releases,
             $fixture->maintenance,
             $fixture->fence,
+            $fixture->recovery,
             new FixedUpdateClock,
             new FixedUpdateRandom,
         );
@@ -439,6 +474,7 @@ final class UpdateManagerTest extends TestCase
         $releases = new FakeReleaseActivator($events, $workspace);
         $maintenance = new FakeUpdateMaintenanceCoordinator($events);
         $fence = new FakeUpdateMutationFence($events);
+        $recovery = new FakeUpdateRecoveryRestore($events);
 
         return new UpdateManagerFixture(
             $events,
@@ -451,6 +487,7 @@ final class UpdateManagerTest extends TestCase
             $releases,
             $maintenance,
             $fence,
+            $recovery,
         );
     }
 
@@ -484,6 +521,7 @@ final readonly class UpdateManagerFixture
         public FakeReleaseActivator $releases,
         public FakeUpdateMaintenanceCoordinator $maintenance,
         public FakeUpdateMutationFence $fence,
+        public FakeUpdateRecoveryRestore $recovery,
     ) {}
 }
 
@@ -560,6 +598,17 @@ final class FakeUpdateWorkspace implements UpdateWorkspace
         }
 
         $this->reports[] = $report;
+    }
+
+    public function loadReport(string $updateRunId): array
+    {
+        foreach (array_reverse($this->reports) as $report) {
+            if (($report['update_run_id'] ?? null) === $updateRunId) {
+                return $report;
+            }
+        }
+
+        throw new RuntimeException('test-only-missing-update-report');
     }
 
     public function createStaging(string $updateRunId, string $releaseId): string
@@ -791,6 +840,11 @@ final class FakeReleaseActivator implements ReleaseActivator
         return '/tmp/fake-deployment/releases/'.$releaseId;
     }
 
+    public function resolve(string $releaseId): string
+    {
+        return '/tmp/fake-deployment/releases/'.$releaseId;
+    }
+
     public function activate(string $releaseId, bool $automaticRollbackSafe = true): array
     {
         $this->events->add('release.activate');
@@ -832,6 +886,12 @@ final class FakeUpdateMaintenanceCoordinator implements RestoreMaintenanceCoordi
         $this->retained = true;
     }
 
+    public function adopt(string $restoreRunId): void
+    {
+        $this->events->add('maintenance.adopt');
+        $this->retained = true;
+    }
+
     public function refreshRuntime(string $restoreRunId): void
     {
         $this->events->add('maintenance.refresh');
@@ -866,6 +926,29 @@ final class FakeUpdateMaintenanceCoordinator implements RestoreMaintenanceCoordi
             'scheduler_fence_held' => true,
             'workers_quiesced' => true,
         ];
+    }
+}
+
+final class FakeUpdateRecoveryRestore implements UpdateRecoveryRestore
+{
+    /** @var list<array{string,bool}> */
+    public array $runs = [];
+
+    public string $status = 'completed';
+
+    public function __construct(private readonly UpdateEventLog $events) {}
+
+    public function recoverUpdate(string $updateRunId, bool $apply = false): RestoreRunResult
+    {
+        $this->events->add('restore.recover_update');
+        $this->runs[] = [$updateRunId, $apply];
+
+        return new RestoreRunResult(
+            '20260930T010001Z-0202020202020202',
+            $apply ? $this->status : 'dry_run_completed',
+            'backup-001',
+            null,
+        );
     }
 }
 
