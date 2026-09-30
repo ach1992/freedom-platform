@@ -86,7 +86,7 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         }
     }
 
-    /** @return array<string, string> */
+    /** @return array<string, string|null> */
     public function workerBootIds(): array
     {
         $expectedWorkers = $this->expectedWorkerIds();
@@ -97,15 +97,19 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         $rows = $this->workerRows($expectedWorkers);
         $bootIds = [];
         foreach ($rows as $row) {
-            if (! is_string($row->worker_id ?? null)
-                || ! in_array($row->worker_id, $expectedWorkers, true)
-                || ! is_string($row->boot_id ?? null)
-                || preg_match('/\\A[0-9a-f]{32}\\z/', $row->boot_id) !== 1
+            $workerId = $row->worker_id ?? null;
+            $bootId = $row->boot_id ?? null;
+
+            if (! is_string($workerId)
+                || ! in_array($workerId, $expectedWorkers, true)
+                || ($bootId !== null
+                    && (! is_string($bootId)
+                        || preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1))
             ) {
                 continue;
             }
 
-            $bootIds[$row->worker_id] = $row->boot_id;
+            $bootIds[$workerId] = is_string($bootId) ? $bootId : null;
         }
 
         $actualWorkers = array_keys($bootIds);
@@ -119,7 +123,7 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
     }
 
     /**
-     * @param  array<string, string>  $previousBootIds
+     * @param  array<string, string|null>  $previousBootIds
      *
      * @requirement UPD-001 RUN-003 OPS-003 QUA-001
      */
@@ -143,8 +147,9 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         }
         foreach ($previousBootIds as $workerId => $bootId) {
             if (! is_string($workerId)
-                || ! is_string($bootId)
-                || preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1
+                || ($bootId !== null
+                    && (! is_string($bootId)
+                        || preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1))
             ) {
                 throw new RuntimeException('The previous worker boot evidence is invalid.');
             }
