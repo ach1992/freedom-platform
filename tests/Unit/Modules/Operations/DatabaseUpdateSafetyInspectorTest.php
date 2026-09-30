@@ -201,6 +201,28 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
         $baseline = $baselineInspector->workerBootIds();
         self::assertCount(count($workers), $baseline);
 
+        $missingBaselineRows = $this->workerRows(
+            $workers,
+            '1.0.0',
+            str_repeat('a', 32),
+            '2026-09-30 00:59:59.000000',
+        );
+        array_pop($missingBaselineRows);
+        $missingBaselineInspector = new DatabaseUpdateSafetyInspector(
+            $this->databaseForWorkers($missingBaselineRows),
+            base_path('database/migrations'),
+            base_path('deploy/supervisor/freedom-platform.conf'),
+        );
+        try {
+            $missingBaselineInspector->workerBootIds();
+            self::fail('The pre-restart worker generation baseline must cover every reviewed process.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'The reviewed worker boot-generation baseline is incomplete.',
+                $exception->getMessage(),
+            );
+        }
+
         $freshInspector = new DatabaseUpdateSafetyInspector(
             $this->databaseForWorkers($this->workerRows(
                 $workers,
@@ -217,6 +239,22 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
             $baseline,
         );
         self::addToAssertionCount(1);
+
+        $partialBaseline = $baseline;
+        array_pop($partialBaseline);
+        try {
+            $freshInspector->assertWorkersRestartedAfter(
+                '2026-09-30 01:00:00.000000',
+                '1.1.0',
+                $partialBaseline,
+            );
+            self::fail('Worker restart proof must reject an incomplete previous-generation baseline.');
+        } catch (RuntimeException $exception) {
+            self::assertSame(
+                'The previous worker boot-generation baseline is incomplete.',
+                $exception->getMessage(),
+            );
+        }
 
         foreach ([
             'wrong release' => $this->workerRows(
