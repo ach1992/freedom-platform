@@ -230,8 +230,14 @@ final readonly class UpdateManager
                     $this->executor->verifyRelease($releasePath, $package);
 
                     $phase = 'worker_reload';
+                    $workerBootIds = $this->safety->workerBootIds();
+                    $workerRestartAfter = $this->databaseTimestamp();
                     $this->maintenance->refreshRuntime($updateRunId);
-                    $this->safety->assertWorkersRestartedAfter($activatedAfter);
+                    $this->safety->assertWorkersRestartedAfter(
+                        $workerRestartAfter,
+                        $package->releaseId,
+                        $workerBootIds,
+                    );
 
                     if ($this->workspace->currentReleaseId() !== $package->releaseId
                         || ! $this->schemaMatches($package->toSchemaSha256, $this->safety->currentSchemaSha256())
@@ -525,8 +531,14 @@ final readonly class UpdateManager
 
                 $previousPath = $this->configuration->deploymentRoot.'/releases/'.$previousRelease;
                 $this->executor->verifyRelease($previousPath);
+                $workerBootIds = $this->safety->workerBootIds();
+                $workerRestartAfter = $this->databaseTimestamp();
                 $this->maintenance->refreshRuntime($updateRunId);
-                $this->safety->assertWorkersRestartedAfter($rollbackStartedAt);
+                $this->safety->assertWorkersRestartedAfter(
+                    $workerRestartAfter,
+                    $previousRelease,
+                    $workerBootIds,
+                );
                 $this->executor->verifyRelease($previousPath);
 
                 $this->workspace->storeInstalledIdentity([
@@ -673,8 +685,6 @@ final readonly class UpdateManager
             && $package->previousCodeCompatibleWith($currentSchema)
         ) {
             try {
-                $restartAfter = $this->databaseTimestamp();
-
                 if ($currentRelease === $package->releaseId) {
                     $this->releases->rollbackTo($previousRelease);
                     $currentRelease = $this->workspace->currentReleaseId();
@@ -684,8 +694,14 @@ final readonly class UpdateManager
                 if ($currentRelease === $previousRelease) {
                     $previousPath = $this->configuration->deploymentRoot.'/releases/'.$previousRelease;
                     $this->executor->verifyRelease($previousPath);
+                    $workerBootIds = $this->safety->workerBootIds();
+                    $workerRestartAfter = $this->databaseTimestamp();
                     $this->maintenance->refreshRuntime($updateRunId);
-                    $this->safety->assertWorkersRestartedAfter($restartAfter);
+                    $this->safety->assertWorkersRestartedAfter(
+                        $workerRestartAfter,
+                        $previousRelease,
+                        $workerBootIds,
+                    );
                     $this->executor->verifyRelease($previousPath);
 
                     if (! $this->schemaMatches(
