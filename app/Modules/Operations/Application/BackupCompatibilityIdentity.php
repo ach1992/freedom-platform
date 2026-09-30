@@ -41,6 +41,39 @@ final readonly class BackupCompatibilityIdentity
         }
     }
 
+    public function assertCompatibleWithRelease(
+        ResolvedBackup $backup,
+        string $applicationVersion,
+        string $releasePath,
+    ): void {
+        $release = realpath($releasePath);
+        if ($release === false
+            || ! is_dir($release)
+            || is_link($releasePath)
+            || $applicationVersion === ''
+            || strlen($applicationVersion) > 64
+        ) {
+            throw new RuntimeException('The predecessor release compatibility authority is unavailable.');
+        }
+
+        $identity = [
+            'application_version' => $applicationVersion,
+            'php_version' => PHP_VERSION,
+            'database_driver' => $this->databaseDriver,
+            'composer_lock_sha256' => $this->fileHash($release.'/composer.lock'),
+            'migrations_sha256' => $this->migrationsHash($release.'/database/migrations'),
+        ];
+
+        if (! hash_equals($identity['application_version'], $backup->applicationVersion)
+            || ! hash_equals($identity['database_driver'], $backup->databaseDriver)
+            || ! hash_equals($identity['composer_lock_sha256'], $backup->composerLockSha256)
+            || ! hash_equals($identity['migrations_sha256'], $backup->migrationsSha256)
+            || ! $this->phpRuntimeCompatible($identity['php_version'], $backup->phpVersion)
+        ) {
+            throw new RuntimeException('The backup is not compatible with the exact predecessor release.');
+        }
+    }
+
     private function phpRuntimeCompatible(string $current, string $backup): bool
     {
         $currentParts = explode('.', $current);
