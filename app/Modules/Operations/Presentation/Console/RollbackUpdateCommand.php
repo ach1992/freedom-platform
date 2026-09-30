@@ -56,9 +56,9 @@ final class RollbackUpdateCommand extends Command
 
         if ($result->restoreRequired && $result->preUpdateBackupId !== null) {
             $payload['controlled_restore_command'] = sprintf(
-                'php artisan operations:restore %s --apply --confirm=%s --json',
-                $result->preUpdateBackupId,
-                $result->preUpdateBackupId,
+                'php artisan operations:update:recover %s --apply --confirm=%s --json',
+                $result->updateRunId,
+                $result->updateRunId,
             );
         }
 
@@ -70,7 +70,7 @@ final class RollbackUpdateCommand extends Command
 
         $this->line('Controlled rollback status: '.$result->status);
         if ($result->restoreRequired) {
-            $this->warn('Code rollback is schema-incompatible; use the verified pre-update backup through controlled Restore.');
+            $this->warn('Code rollback is schema-incompatible; use the controlled update-recovery handoff for the exact protected rollback report.');
         }
     }
 
