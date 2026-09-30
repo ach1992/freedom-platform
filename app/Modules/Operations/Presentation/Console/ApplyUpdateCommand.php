@@ -66,9 +66,9 @@ final class ApplyUpdateCommand extends Command
 
         if ($result->restoreRequired && $result->preUpdateBackupId !== null) {
             $payload['controlled_restore_command'] = sprintf(
-                'php artisan operations:restore %s --apply --confirm=%s --json',
-                $result->preUpdateBackupId,
-                $result->preUpdateBackupId,
+                'php artisan operations:update:recover %s --apply --confirm=%s --json',
+                $result->updateRunId,
+                $result->updateRunId,
             );
         }
 
@@ -81,7 +81,7 @@ final class ApplyUpdateCommand extends Command
         $this->line('Controlled update status: '.$result->status);
         $this->line('Update run: '.$result->updateRunId);
         if ($result->restoreRequired) {
-            $this->warn('Safe code rollback is not sufficient; use the existing controlled Restore authority.');
+            $this->warn('Safe code rollback is not sufficient; use the controlled update-recovery handoff into the existing Restore authority.');
         }
     }
 
