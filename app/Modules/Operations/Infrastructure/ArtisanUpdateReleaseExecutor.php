@@ -67,6 +67,7 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
 
         $this->process([
             $this->configuration->composerBinary,
+            '--no-plugins',
             'validate',
             '--strict',
             '--no-check-publish',
@@ -75,6 +76,7 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
 
         $this->process([
             $this->configuration->composerBinary,
+            '--no-plugins',
             'install',
             '--no-dev',
             '--prefer-dist',
@@ -86,6 +88,7 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
 
         $this->process([
             $this->configuration->composerBinary,
+            '--no-plugins',
             'check-platform-reqs',
             '--no-dev',
             '--no-interaction',
@@ -202,6 +205,7 @@ final readonly class ArtisanUpdateReleaseExecutor implements UpdateReleaseExecut
 
         $this->process([
             $this->configuration->composerBinary,
+            '--no-plugins',
             'check-platform-reqs',
             '--no-dev',
             '--no-interaction',
