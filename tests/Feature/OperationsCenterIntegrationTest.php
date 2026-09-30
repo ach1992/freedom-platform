@@ -374,13 +374,13 @@ final class OperationsCenterIntegrationTest extends TestCase
         $administratorId = $this->ownerAdministrator();
         $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
 
-        $backup = $this->createMock(BackupRepository::class);
+        $backup = $this->createStub(BackupRepository::class);
         $backup->method('operationalStatus')->willReturn([
             'completed_count' => 2,
             'latest_bytes' => 4096,
             'latest_completed_at' => '2026-09-30T08:00:00+00:00',
         ]);
-        $update = $this->createMock(UpdateWorkspace::class);
+        $update = $this->createStub(UpdateWorkspace::class);
         $update->method('operationalStatus')->willReturn([
             'current_release_id' => 'release-20260930',
             'application_version' => '0.8.0',
@@ -388,7 +388,7 @@ final class OperationsCenterIntegrationTest extends TestCase
             'latest_failure_code' => 'preflight_failed',
             'latest_completed_at' => '2026-09-30T08:01:00+00:00',
         ]);
-        $restore = $this->createMock(RestoreWorkspace::class);
+        $restore = $this->createStub(RestoreWorkspace::class);
         $restore->method('operationalStatus')->willReturn([
             'latest_status' => 'completed',
             'latest_failure_code' => null,
