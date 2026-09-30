@@ -194,8 +194,9 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         }
     }
 
-    /** @param list<string> $expectedWorkers
-     * @return list<object{worker_id:mixed,release_version:mixed,boot_id:mixed,last_seen_at:mixed}>
+    /**
+     * @param  list<string>  $expectedWorkers
+     * @return list<\stdClass>
      */
     private function workerRows(array $expectedWorkers): array
     {
