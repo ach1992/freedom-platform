@@ -50,12 +50,24 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
             $releaseId = $report['release_id'] ?? null;
             $mutationStarted = ($report['mutation_started'] ?? null) === true;
             $activationStarted = ($report['activation_started'] ?? null) === true;
+            $operation = $report['operation'] ?? null;
+            $currentReleaseId = $this->currentReleaseId();
+            $releaseIsCurrent = is_string($currentReleaseId)
+                && is_string($releaseId)
+                && hash_equals($currentReleaseId, $releaseId);
+            $operationStateIsRecoverable = match ($operation) {
+                'update' => ! $releaseIsCurrent,
+                'rollback' => $releaseIsCurrent
+                    && ($report['staging_path'] ?? null) === null
+                    && ($report['release_published'] ?? false) === false,
+                default => false,
+            };
 
             if (! is_string($releaseId)
                 || ! $this->validReleaseId($releaseId)
                 || $mutationStarted
                 || $activationStarted
-                || hash_equals((string) ($this->currentReleaseId() ?? ''), $releaseId)
+                || ! $operationStateIsRecoverable
             ) {
                 throw new RuntimeException('A previous update has unresolved mutation state and requires operator recovery.');
             }
