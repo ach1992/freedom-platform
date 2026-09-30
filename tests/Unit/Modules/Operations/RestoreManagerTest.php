@@ -463,6 +463,144 @@ final class RestoreManagerTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 SEC-001 QUA-001 */
+    public function test_update_recovery_adopts_retained_containment_restores_exact_backup_and_reopens_only_after_predecessor_proofs(): void
+    {
+        $fixture = $this->fixture('update-recovery');
+
+        try {
+            $sourceId = $this->sourceBackup($fixture);
+            $source = (new FilesystemBackupRepository($fixture['root']))->completedBackup($sourceId);
+            $events = new RestoreEventLog;
+            $runId = '20260929T025900Z-aaaaaaaaaaaaaaaa';
+            $previousRelease = 'test-predecessor';
+            $previousPath = $this->predecessorRelease($fixture, $previousRelease);
+            $workspace = new RestoreTestUpdateWorkspace($events);
+            $workspace->current = 'candidate-release';
+            $workspace->reports[$runId] = [
+                'version' => 1,
+                'update_run_id' => $runId,
+                'operation' => 'update',
+                'status' => 'restore_required',
+                'report_finalized' => true,
+                'restore_required' => true,
+                'release_id' => 'candidate-release',
+                'previous_release' => $previousRelease,
+                'previous_application_version' => 'test-release',
+                'pre_update_backup_id' => $source->backupId,
+                'pre_update_backup_completed_at' => $source->completedAt,
+                'maintenance_retained' => true,
+                'scheduler_mutation_fence_retained' => true,
+                'worker_quiescence_retained' => true,
+                'containment_retained' => true,
+            ];
+            $releases = new RestoreTestReleaseActivator(
+                $events,
+                $workspace,
+                [$previousRelease => $previousPath],
+            );
+            $safety = new RestoreTestUpdateSafetyInspector($events, $source->migrationsSha256);
+            $executor = new RestoreTestUpdateReleaseExecutor($events);
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                updateWorkspace: $workspace,
+                releaseActivator: $releases,
+                updateSafety: $safety,
+                updateExecutor: $executor,
+            );
+
+            $result = $manager->recoverUpdate($runId, true);
+
+            self::assertSame('completed', $result->status);
+            self::assertSame($sourceId, $result->sourceBackupId);
+            self::assertSame($previousRelease, $workspace->current);
+            self::assertSame($previousRelease, $workspace->identity['release_id'] ?? null);
+            self::assertSame($source->migrationsSha256, $workspace->identity['schema_sha256'] ?? null);
+            self::assertSame('restore_recovered', $workspace->reports[$runId]['status'] ?? null);
+            self::assertFalse($workspace->reports[$runId]['restore_required'] ?? true);
+            self::assertFalse($workspace->reports[$runId]['containment_retained'] ?? true);
+            self::assertSame([
+                'payload_preflight',
+                'maintenance_adopt',
+                'safety_backup_capture',
+                'payload_preflight',
+                'database_restore',
+                'payload_restore',
+                'release_rollback',
+                'update_schema_verify',
+                'update_release_verify:'.$previousRelease,
+                'worker_boot_snapshot',
+                'runtime_refresh',
+                'worker_attest:'.$previousRelease,
+                'update_release_verify:'.$previousRelease,
+                'post_restore_verify:'.$previousRelease,
+                'update_identity',
+                'maintenance_leave',
+            ], $events->events);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 QUA-001 */
+    public function test_update_recovery_failed_containment_adoption_never_crosses_restore_or_release_mutation_boundary(): void
+    {
+        $fixture = $this->fixture('update-recovery-adoption-failure');
+
+        try {
+            $sourceId = $this->sourceBackup($fixture);
+            $source = (new FilesystemBackupRepository($fixture['root']))->completedBackup($sourceId);
+            $events = new RestoreEventLog;
+            $runId = '20260929T025901Z-bbbbbbbbbbbbbbbb';
+            $previousRelease = 'test-predecessor';
+            $previousPath = $this->predecessorRelease($fixture, $previousRelease);
+            $workspace = new RestoreTestUpdateWorkspace($events);
+            $workspace->reports[$runId] = [
+                'version' => 1,
+                'update_run_id' => $runId,
+                'operation' => 'update',
+                'status' => 'restore_required',
+                'report_finalized' => true,
+                'restore_required' => true,
+                'release_id' => 'candidate-release',
+                'previous_release' => $previousRelease,
+                'previous_application_version' => 'test-release',
+                'pre_update_backup_id' => $source->backupId,
+                'pre_update_backup_completed_at' => $source->completedAt,
+                'maintenance_retained' => true,
+                'scheduler_mutation_fence_retained' => true,
+                'worker_quiescence_retained' => true,
+                'containment_retained' => true,
+            ];
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                adoptFailure: true,
+                updateWorkspace: $workspace,
+                releaseActivator: new RestoreTestReleaseActivator(
+                    $events,
+                    $workspace,
+                    [$previousRelease => $previousPath],
+                ),
+                updateSafety: new RestoreTestUpdateSafetyInspector($events, $source->migrationsSha256),
+                updateExecutor: new RestoreTestUpdateReleaseExecutor($events),
+            );
+
+            $this->expectRestoreFailure(fn () => $manager->recoverUpdate($runId, true));
+
+            self::assertSame(['payload_preflight', 'maintenance_adopt'], $events->events);
+            self::assertSame('candidate-release', $workspace->current);
+            self::assertNull($workspace->identity);
+            self::assertSame('restore_recovery_adoption_failed', $workspace->reports[$runId]['status'] ?? null);
+            self::assertTrue($workspace->reports[$runId]['restore_required'] ?? false);
+            self::assertTrue($workspace->reports[$runId]['containment_retained'] ?? false);
+            self::assertFalse($workspace->reports[$runId]['recovery_containment_adoption_proven'] ?? true);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
     /**
      * @param  array{base:string,root:string,environment:string,private:string}  $fixture
      */
@@ -580,6 +718,33 @@ final class RestoreManagerTest extends TestCase
             database_path('migrations'),
             'mysql',
         );
+    }
+
+    /**
+     * @param array{base:string,root:string,environment:string,private:string} $fixture
+     */
+    private function predecessorRelease(array $fixture, string $releaseId): string
+    {
+        $path = $fixture['base'].'/deployment/releases/'.$releaseId;
+        if (! mkdir($path.'/database/migrations', 0700, true) && ! is_dir($path.'/database/migrations')) {
+            self::fail('Could not create predecessor release fixture.');
+        }
+        if (! copy(base_path('composer.lock'), $path.'/composer.lock')) {
+            self::fail('Could not copy predecessor composer.lock fixture.');
+        }
+
+        $migrations = glob(database_path('migrations/*.php'));
+        self::assertIsArray($migrations);
+        foreach ($migrations as $migration) {
+            if (! copy($migration, $path.'/database/migrations/'.basename($migration))) {
+                self::fail('Could not copy predecessor migration fixture.');
+            }
+        }
+
+        $resolved = realpath($path);
+        self::assertIsString($resolved);
+
+        return $resolved;
     }
 
     /**
