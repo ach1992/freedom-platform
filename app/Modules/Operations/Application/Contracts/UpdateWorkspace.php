@@ -38,7 +38,9 @@ interface UpdateWorkspace
      *     application_version:string|null,
      *     latest_status:string|null,
      *     latest_failure_code:string|null,
-     *     latest_completed_at:string|null
+     *     latest_completed_at:string|null,
+     *     report_inventory_complete:bool,
+     *     inspected_entries:int
      * }
      */
     public function operationalStatus(): array;

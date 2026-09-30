@@ -318,29 +318,55 @@ final readonly class OperationsCenterService
         $facts = [];
         $backupEnabled = config('operations.backup.enabled') === true;
 
-        try {
-            $backup = $this->backups->operationalStatus();
-            $facts[] = new OperationsCenterFact(
-                'backup',
-                'backup.runtime',
-                $backupEnabled ? ($backup['completed_count'] > 0 ? 'observed' : 'unknown') : 'empty',
-                $backupEnabled ? 1 : 0,
-                $backupEnabled
-                    ? ($backup['completed_count'] > 0 ? 'completed_evidence='.$backup['completed_count'] : 'enabled_without_completed_backup')
-                    : 'disabled',
-                $this->date($backup['latest_completed_at']),
-            );
-            $facts[] = new OperationsCenterFact(
-                'backup',
-                'backup.completed',
-                $backup['completed_count'] === 0 ? 'empty' : 'observed',
-                $backup['completed_count'],
-                $backup['latest_bytes'] === null ? null : 'latest_bytes='.$backup['latest_bytes'],
-                $this->date($backup['latest_completed_at']),
-            );
-        } catch (Throwable) {
-            $facts[] = new OperationsCenterFact('backup', 'backup.runtime', 'degraded', 0, 'status_unavailable');
-            $facts[] = new OperationsCenterFact('backup', 'backup.completed', 'unknown', 0, 'status_unavailable');
+        if (! $backupEnabled) {
+            $facts[] = new OperationsCenterFact('backup', 'backup.runtime', 'empty', 0, 'disabled');
+            $facts[] = new OperationsCenterFact('backup', 'backup.completed', 'empty', 0, 'disabled');
+        } else {
+            try {
+                $backup = $this->backups->operationalStatus();
+                $inspectionComplete = $backup['inspection_complete'];
+                $completedCount = $backup['completed_count'];
+                $inspectedEntries = $backup['inspected_entries'];
+
+                $runtimeDetail = $inspectionComplete
+                    ? ($completedCount > 0 ? 'completed_evidence='.$completedCount : 'enabled_without_completed_backup')
+                    : 'observed_completed_evidence='.$completedCount
+                        .';inspected_entries='.$inspectedEntries
+                        .';inspection_truncated=1';
+
+                $completedDetail = [];
+                if ($backup['latest_bytes'] !== null) {
+                    $completedDetail[] = 'latest_observed_bytes='.$backup['latest_bytes'];
+                }
+                if (! $inspectionComplete) {
+                    $completedDetail[] = 'inspected_entries='.$inspectedEntries;
+                    $completedDetail[] = 'inspection_truncated=1';
+                }
+
+                $facts[] = new OperationsCenterFact(
+                    'backup',
+                    'backup.runtime',
+                    $inspectionComplete
+                        ? ($completedCount > 0 ? 'observed' : 'unknown')
+                        : 'unknown',
+                    1,
+                    mb_substr($runtimeDetail, 0, 191),
+                    $this->date($backup['latest_completed_at']),
+                );
+                $facts[] = new OperationsCenterFact(
+                    'backup',
+                    'backup.completed',
+                    $inspectionComplete
+                        ? ($completedCount === 0 ? 'empty' : 'observed')
+                        : 'unknown',
+                    $completedCount,
+                    $completedDetail === [] ? null : mb_substr(implode(';', $completedDetail), 0, 191),
+                    $this->date($backup['latest_completed_at']),
+                );
+            } catch (Throwable) {
+                $facts[] = new OperationsCenterFact('backup', 'backup.runtime', 'degraded', 0, 'status_unavailable');
+                $facts[] = new OperationsCenterFact('backup', 'backup.completed', 'unknown', 0, 'status_unavailable');
+            }
         }
 
         try {
@@ -357,12 +383,26 @@ final readonly class OperationsCenterService
                 $release === null ? 0 : 1,
                 $releaseDetail === null ? null : mb_substr($releaseDetail, 0, 191),
             );
+
+            $updateInventoryComplete = $update['report_inventory_complete'];
+            $updateDetail = $this->operationDetail($update['latest_status'], $update['latest_failure_code']);
+            if (! $updateInventoryComplete) {
+                $updateDetail = mb_substr(
+                    $updateDetail
+                        .';inspected_entries='.$update['inspected_entries']
+                        .';inspection_truncated=1',
+                    0,
+                    191,
+                );
+            }
             $facts[] = new OperationsCenterFact(
                 'update',
                 'update.latest',
-                $this->operationState($update['latest_status'], $update['latest_failure_code']),
+                $updateInventoryComplete
+                    ? $this->operationState($update['latest_status'], $update['latest_failure_code'])
+                    : 'unknown',
                 $update['latest_status'] === null ? 0 : 1,
-                $this->operationDetail($update['latest_status'], $update['latest_failure_code']),
+                $updateDetail,
                 $this->date($update['latest_completed_at']),
             );
         } catch (Throwable) {
@@ -372,12 +412,25 @@ final readonly class OperationsCenterService
 
         try {
             $restore = $this->restores->operationalStatus();
+            $restoreInventoryComplete = $restore['report_inventory_complete'];
+            $restoreDetail = $this->operationDetail($restore['latest_status'], $restore['latest_failure_code']);
+            if (! $restoreInventoryComplete) {
+                $restoreDetail = mb_substr(
+                    $restoreDetail
+                        .';inspected_entries='.$restore['inspected_entries']
+                        .';inspection_truncated=1',
+                    0,
+                    191,
+                );
+            }
             $facts[] = new OperationsCenterFact(
                 'restore',
                 'restore.latest',
-                $this->operationState($restore['latest_status'], $restore['latest_failure_code']),
+                $restoreInventoryComplete
+                    ? $this->operationState($restore['latest_status'], $restore['latest_failure_code'])
+                    : 'unknown',
                 $restore['latest_status'] === null ? 0 : 1,
-                $this->operationDetail($restore['latest_status'], $restore['latest_failure_code']),
+                $restoreDetail,
                 $this->date($restore['latest_completed_at']),
             );
         } catch (Throwable) {
