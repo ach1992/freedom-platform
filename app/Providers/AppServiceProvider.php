@@ -65,6 +65,12 @@ use App\Modules\Provisioning\Application\TelegramOwnedServiceProjectionService;
 use App\Modules\Provisioning\Application\TelegramOwnedServiceReconfigurationService;
 use App\Modules\Provisioning\Application\TelegramServiceAutoRenewPolicyService;
 use App\Modules\Provisioning\Application\TelegramServiceNotificationPreferenceService;
+use App\Modules\Reporting\Application\Contracts\ReportingBroadcastMetricsSource;
+use App\Modules\Reporting\Application\Contracts\ReportingExportDeliveryGateway;
+use App\Modules\Reporting\Application\Contracts\ReportingSupportMetricsSource;
+use App\Modules\Reporting\Application\Contracts\ReportingTextDeliveryGateway;
+use App\Modules\Reporting\Application\ReportingTelegramExportPresentationSource;
+use App\Modules\Support\Application\SupportReportingMetricsSource;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorServiceOperations;
@@ -96,6 +102,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceDeliveryResen
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceLifecycleExecutor;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceReconfigurationManager;
+use App\Modules\Telegram\Application\Contracts\TelegramReportingExportPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramServiceAutoRenewPolicyManager;
 use App\Modules\Telegram\Application\Contracts\TelegramServiceNotificationPreferenceManager;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjection;
@@ -106,6 +113,9 @@ use App\Modules\Telegram\Application\TelegramBackupDeliveryQueue;
 use App\Modules\Telegram\Application\TelegramChannelMembershipEvaluator;
 use App\Modules\Telegram\Application\TelegramChannelMembershipRuleResolver;
 use App\Modules\Telegram\Application\TelegramMembershipConfigurationFence;
+use App\Modules\Telegram\Application\TelegramReportingBroadcastMetricsSource;
+use App\Modules\Telegram\Application\TelegramReportingExportDeliveryGateway;
+use App\Modules\Telegram\Application\TelegramReportingTextDeliveryGateway;
 use App\Modules\Wallet\Application\Contracts\PurchaseWalletRefundAuthority;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Client\Factory as HttpFactory;
@@ -120,6 +130,11 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(TelegramBackupArtifactPresentationSource::class, BackupTelegramArtifactPresentationSource::class);
+        $this->app->bind(TelegramReportingExportPresentationSource::class, ReportingTelegramExportPresentationSource::class);
+        $this->app->bind(ReportingBroadcastMetricsSource::class, TelegramReportingBroadcastMetricsSource::class);
+        $this->app->bind(ReportingSupportMetricsSource::class, SupportReportingMetricsSource::class);
+        $this->app->bind(ReportingExportDeliveryGateway::class, TelegramReportingExportDeliveryGateway::class);
+        $this->app->bind(ReportingTextDeliveryGateway::class, TelegramReportingTextDeliveryGateway::class);
         $this->app->bind(BackupTelegramDeliveryQueue::class, TelegramBackupDeliveryQueue::class);
         $this->app->bind(BackupTelegramOwnerDestinationResolver::class, DatabaseBackupTelegramOwnerDestinationResolver::class);
         $this->app->bind(CustomerIdentityProfileWriter::class, CustomerIdentityProfilePersistence::class);

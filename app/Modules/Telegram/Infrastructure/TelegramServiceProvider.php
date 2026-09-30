@@ -27,6 +27,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramReportingExportPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
@@ -410,6 +411,9 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramAlternativePaymentReview::class),
                 $application->bound(TelegramBackupArtifactPresentationSource::class)
                     ? $application->make(TelegramBackupArtifactPresentationSource::class)
+                    : null,
+                $application->bound(TelegramReportingExportPresentationSource::class)
+                    ? $application->make(TelegramReportingExportPresentationSource::class)
                     : null,
             ),
         );

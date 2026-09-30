@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Reporting\Application;
 
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
+use App\Modules\Reporting\Application\Contracts\ReportingBroadcastMetricsSource;
+use App\Modules\Reporting\Application\Contracts\ReportingSupportMetricsSource;
 use App\Shared\Application\Clock;
 use DateTimeZone;
 use Illuminate\Database\DatabaseManager;
@@ -15,6 +17,8 @@ final readonly class DatabaseReportingSnapshotService
 {
     public function __construct(
         private DatabaseManager $database,
+        private ReportingBroadcastMetricsSource $broadcasts,
+        private ReportingSupportMetricsSource $support,
         private AdministratorUserPermissionAuthorizer $authorizer,
         private ReportingAudit $audit,
         private Clock $clock,
@@ -63,21 +67,41 @@ final readonly class DatabaseReportingSnapshotService
     {
         $metrics = [];
 
-        $metrics[] = $this->metric('users', 'users.created', 'Users created', $this->count('users', 'created_at', $range), 'count');
-        foreach ($this->groupedCount('users', 'account_type', 'created_at', $range) as $dimension => $count) {
+        $metrics[] = $this->metric('users', 'users.created', 'Users created', $this->count($this->database->connection()->table('users'), 'created_at', $range), 'count');
+        foreach ($this->groupedCount(
+            $this->database->connection()->table('users')
+                ->select('account_type')
+                ->selectRaw('COUNT(*) AS aggregate')
+                ->groupBy('account_type')
+                ->orderBy('account_type')
+                ->limit(100),
+            'account_type',
+            'created_at',
+            $range,
+        ) as $dimension => $count) {
             $metrics[] = $this->metric('users', 'users.created_by_account_type', 'Users created by account type', $count, 'count', $dimension);
         }
 
-        $metrics[] = $this->metric('orders', 'orders.created', 'Orders created', $this->count('orders', 'created_at', $range), 'count');
-        foreach ($this->groupedCount('order_state_histories', 'to_state', 'created_at', $range) as $dimension => $count) {
+        $metrics[] = $this->metric('orders', 'orders.created', 'Orders created', $this->count($this->database->connection()->table('orders'), 'created_at', $range), 'count');
+        foreach ($this->groupedCount(
+            $this->database->connection()->table('order_state_histories')
+                ->select('to_state')
+                ->selectRaw('COUNT(*) AS aggregate')
+                ->groupBy('to_state')
+                ->orderBy('to_state')
+                ->limit(100),
+            'to_state',
+            'created_at',
+            $range,
+        ) as $dimension => $count) {
             $metrics[] = $this->metric('orders', 'orders.state_transitions', 'Order state transitions', $count, 'count', $dimension);
         }
 
-        $capturedCount = $this->count('purchase_settlements', 'settled_at', $range);
-        $capturedIrr = $this->sum('purchase_settlements', 'amount_irr', 'settled_at', $range);
+        $capturedCount = $this->count($this->database->connection()->table('purchase_settlements'), 'settled_at', $range);
+        $capturedIrr = $this->sum($this->database->connection()->table('purchase_settlements'), 'amount_irr', 'settled_at', $range);
         $discountIrr = $this->discounts($range);
-        $refundCount = $this->count('purchase_refunds', 'refunded_at', $range);
-        $refundIrr = $this->sum('purchase_refunds', 'amount_irr', 'refunded_at', $range);
+        $refundCount = $this->count($this->database->connection()->table('purchase_refunds'), 'refunded_at', $range);
+        $refundIrr = $this->sum($this->database->connection()->table('purchase_refunds'), 'amount_irr', 'refunded_at', $range);
         $adjustmentIrr = $this->walletAdjustments($range);
 
         $metrics[] = $this->metric('financial', 'sales.captured_count', 'Captured purchases', $capturedCount, 'count');
@@ -96,24 +120,21 @@ final readonly class DatabaseReportingSnapshotService
             $metrics[] = $metric;
         }
 
-        $metrics[] = $this->metric('services', 'services.created', 'Service subscriptions created', $this->count('service_subscriptions', 'created_at', $range), 'count');
-        $metrics[] = $this->metric('agents', 'agents.approved', 'Agents approved', $this->count('agent_profiles', 'approved_at', $range), 'count');
+        $metrics[] = $this->metric('services', 'services.created', 'Service subscriptions created', $this->count($this->database->connection()->table('service_subscriptions'), 'created_at', $range), 'count');
+        $metrics[] = $this->metric('agents', 'agents.approved', 'Agents approved', $this->count($this->database->connection()->table('agent_profiles'), 'approved_at', $range), 'count');
 
-        $metrics[] = $this->metric('tickets', 'tickets.created', 'Support tickets created', $this->count('support_tickets', 'created_at', $range), 'count');
-        foreach ($this->groupedCount('support_ticket_state_histories', 'to_state', 'created_at', $range) as $dimension => $count) {
-            $metrics[] = $this->metric('tickets', 'tickets.state_transitions', 'Ticket state transitions', $count, 'count', $dimension);
+        foreach ($this->support->metrics($range) as $metric) {
+            $metrics[] = $metric;
         }
 
-        $metrics[] = $this->metric('referrals', 'referrals.accrued_count', 'Referral reward accruals', $this->count('referral_reward_accruals', 'created_at', $range), 'count');
-        $metrics[] = $this->metric('referrals', 'referrals.accrued_irr', 'Referral reward accrual amount', $this->sum('referral_reward_accruals', 'reward_amount_irr', 'created_at', $range), 'IRR');
+        $metrics[] = $this->metric('referrals', 'referrals.accrued_count', 'Referral reward accruals', $this->count($this->database->connection()->table('referral_reward_accruals'), 'created_at', $range), 'count');
+        $metrics[] = $this->metric('referrals', 'referrals.accrued_irr', 'Referral reward accrual amount', $this->sum($this->database->connection()->table('referral_reward_accruals'), 'reward_amount_irr', 'created_at', $range), 'IRR');
 
-        $metrics[] = $this->metric('broadcasts', 'broadcasts.campaigns_created', 'Broadcast campaigns created', $this->count('broadcast_campaigns', 'created_at', $range), 'count');
-        $metrics[] = $this->metric('broadcasts', 'broadcasts.recipients_sent', 'Broadcast recipients sent', $this->countNotNull('broadcast_recipients', 'sent_at', $range), 'count');
-        foreach ($this->broadcastFailureEvents($range) as $dimension => $count) {
-            $metrics[] = $this->metric('broadcasts', 'broadcasts.delivery_failure_events', 'Broadcast delivery failure events', $count, 'count', $dimension);
+        foreach ($this->broadcasts->metrics($range) as $metric) {
+            $metrics[] = $metric;
         }
 
-        $metrics[] = $this->metric('operations', 'failures.failed_jobs', 'Failed queue jobs', $this->count('failed_jobs', 'failed_at', $range), 'count');
+        $metrics[] = $this->metric('operations', 'failures.failed_jobs', 'Failed queue jobs', $this->count($this->database->connection()->table('failed_jobs'), 'failed_at', $range), 'count');
         foreach ($this->provisioningFailureEvents($range) as $dimension => $count) {
             $metrics[] = $this->metric('operations', 'failures.provisioning_events', 'Provisioning failure/review events', $count, 'count', $dimension);
         }
@@ -239,27 +260,6 @@ final readonly class DatabaseReportingSnapshotService
     }
 
     /** @return array<string,int> */
-    private function broadcastFailureEvents(ReportDateRange $range): array
-    {
-        $query = $this->database->connection()->table('broadcast_recipient_messages')
-            ->select('state')
-            ->selectRaw('COUNT(*) AS aggregate')
-            ->whereIn('state', ['retryable', 'failed', 'uncertain'])
-            ->whereNotNull('provider_boundary_finished_at')
-            ->groupBy('state')
-            ->orderBy('state');
-        $this->applyRange($query, 'provider_boundary_finished_at', $range);
-
-        $result = [];
-        /** @var object{state:string,aggregate:int|string} $row */
-        foreach ($query->get() as $row) {
-            $result[$row->state] = $this->toInt($row->aggregate);
-        }
-
-        return $result;
-    }
-
-    /** @return array<string,int> */
     private function provisioningFailureEvents(ReportDateRange $range): array
     {
         $query = $this->database->connection()->table('provisioning_operation_histories')
@@ -279,39 +279,23 @@ final readonly class DatabaseReportingSnapshotService
         return $result;
     }
 
-    private function count(string $table, string $timeColumn, ReportDateRange $range): int
+    private function count(Builder $query, string $timeColumn, ReportDateRange $range): int
     {
-        $query = $this->database->connection()->table($table);
         $this->applyRange($query, $timeColumn, $range);
 
         return $this->toInt($query->count());
     }
 
-    private function countNotNull(string $table, string $timeColumn, ReportDateRange $range): int
+    private function sum(Builder $query, string $valueColumn, string $timeColumn, ReportDateRange $range): int
     {
-        $query = $this->database->connection()->table($table)->whereNotNull($timeColumn);
-        $this->applyRange($query, $timeColumn, $range);
-
-        return $this->toInt($query->count());
-    }
-
-    private function sum(string $table, string $valueColumn, string $timeColumn, ReportDateRange $range): int
-    {
-        $query = $this->database->connection()->table($table);
         $this->applyRange($query, $timeColumn, $range);
 
         return $this->toInt($query->sum($valueColumn));
     }
 
     /** @return array<string,int> */
-    private function groupedCount(string $table, string $dimensionColumn, string $timeColumn, ReportDateRange $range): array
+    private function groupedCount(Builder $query, string $dimensionColumn, string $timeColumn, ReportDateRange $range): array
     {
-        $query = $this->database->connection()->table($table)
-            ->select($dimensionColumn)
-            ->selectRaw('COUNT(*) AS aggregate')
-            ->groupBy($dimensionColumn)
-            ->orderBy($dimensionColumn)
-            ->limit(100);
         $this->applyRange($query, $timeColumn, $range);
 
         $result = [];

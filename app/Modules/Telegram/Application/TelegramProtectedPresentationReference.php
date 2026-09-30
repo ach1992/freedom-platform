@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use DateTimeImmutable;
 use DomainException;
 use LogicException;
 use Stringable;
@@ -20,6 +21,8 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
 
     private const PREFIX_V5 = '[PROTECTED_TELEGRAM_REFERENCE:v5:';
 
+    private const PREFIX_V6 = '[PROTECTED_TELEGRAM_REFERENCE:v6:';
+
     private const PURPOSE_CARD_TO_CARD_DESTINATION = 'card_to_card_destination';
 
     private const PURPOSE_MEMBERSHIP_JOIN_PROMPT = 'membership_join_prompt';
@@ -29,6 +32,8 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
     private const PURPOSE_PAYMENT_REVIEW_EVIDENCE = 'payment_review_evidence';
 
     private const PURPOSE_BACKUP_EXPORT = 'backup_export';
+
+    private const PURPOSE_REPORT_EXPORT = 'report_export';
 
     private function __construct(
         public string $purpose,
@@ -43,6 +48,10 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         public ?int $partCount = null,
         public ?int $contentBytes = null,
         public ?string $contentSha256 = null,
+        public ?string $format = null,
+        public ?int $rangeStartEpoch = null,
+        public ?int $rangeEndEpoch = null,
+        public ?string $period = null,
     ) {}
 
     public static function cardToCardDestination(string $reservationPublicId, string $locale): self
@@ -156,6 +165,45 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         );
     }
 
+    public static function reportExport(
+        string $format,
+        string $period,
+        ?DateTimeImmutable $startsAtUtc,
+        DateTimeImmutable $endsBeforeUtc,
+        string $locale,
+    ): self {
+        self::assertLocale($locale);
+        if (! in_array($format, ['csv', 'xlsx'], true)
+            || preg_match('/\A[a-z0-9_]{1,32}\z/', $period) !== 1
+        ) {
+            throw new DomainException('Protected Telegram report-export reference is invalid.');
+        }
+
+        $startEpoch = $startsAtUtc?->getTimestamp();
+        $endEpoch = $endsBeforeUtc->getTimestamp();
+        if ($endEpoch < 1 || ($startEpoch !== null && ($startEpoch < 0 || $startEpoch >= $endEpoch))) {
+            throw new DomainException('Protected Telegram report-export range is invalid.');
+        }
+
+        $identity = implode(':', [
+            $format,
+            $period,
+            $startEpoch === null ? '-' : (string) $startEpoch,
+            (string) $endEpoch,
+            $locale,
+        ]);
+
+        return new self(
+            self::PURPOSE_REPORT_EXPORT,
+            hash('sha256', $identity),
+            $locale,
+            format: $format,
+            rangeStartEpoch: $startEpoch,
+            rangeEndEpoch: $endEpoch,
+            period: $period,
+        );
+    }
+
     public static function restore(string $value): self
     {
         if (preg_match(
@@ -211,6 +259,20 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
             );
         }
 
+        if (preg_match(
+            '/\A\[PROTECTED_TELEGRAM_REFERENCE:v6:report_export:(csv|xlsx):([a-z0-9_]{1,32}):(-|[0-9]+):([1-9][0-9]*):(fa|en)\]\z/',
+            $value,
+            $matches,
+        ) === 1) {
+            return self::reportExport(
+                $matches[1],
+                $matches[2],
+                $matches[3] === '-' ? null : new DateTimeImmutable('@'.$matches[3]),
+                new DateTimeImmutable('@'.$matches[4]),
+                $matches[5],
+            );
+        }
+
         throw new DomainException('Stored protected Telegram reference is invalid.');
     }
 
@@ -237,6 +299,11 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
     public function isBackupExport(): bool
     {
         return $this->purpose === self::PURPOSE_BACKUP_EXPORT;
+    }
+
+    public function isReportExport(): bool
+    {
+        return $this->purpose === self::PURPOSE_REPORT_EXPORT;
     }
 
     public function paymentReviewKind(): string
@@ -279,6 +346,25 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
         ];
     }
 
+    /** @return array{format:string,period:string,start_epoch:int|null,end_epoch:int} */
+    public function reportExportIdentity(): array
+    {
+        if (! $this->isReportExport()
+            || $this->format === null
+            || $this->rangeEndEpoch === null
+            || $this->period === null
+        ) {
+            throw new LogicException('Protected Telegram report-export identity is unavailable.');
+        }
+
+        return [
+            'format' => $this->format,
+            'period' => $this->period,
+            'start_epoch' => $this->rangeStartEpoch,
+            'end_epoch' => $this->rangeEndEpoch,
+        ];
+    }
+
     public function durableText(): string
     {
         if ($this->isCardToCardDestination()) {
@@ -304,6 +390,14 @@ final readonly class TelegramProtectedPresentationReference implements Stringabl
 
             return self::PREFIX_V5.$this->purpose.':'.$this->publicId.':'.$identity['item'].':'
                 .$identity['index'].':'.$identity['count'].':'.$identity['bytes'].':'.$identity['sha256'].']';
+        }
+
+        if ($this->isReportExport()) {
+            $identity = $this->reportExportIdentity();
+
+            return self::PREFIX_V6.$this->purpose.':'.$identity['format'].':'.$identity['period'].':'
+                .($identity['start_epoch'] === null ? '-' : (string) $identity['start_epoch']).':'
+                .$identity['end_epoch'].':'.$this->locale.']';
         }
 
         throw new LogicException('Protected Telegram reference is incomplete.');

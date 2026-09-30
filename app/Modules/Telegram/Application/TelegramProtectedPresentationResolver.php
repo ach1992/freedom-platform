@@ -9,6 +9,7 @@ use App\Modules\Support\Application\SupportTicketAttachmentService;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
+use App\Modules\Telegram\Application\Contracts\TelegramReportingExportPresentationSource;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use RuntimeException;
@@ -24,6 +25,7 @@ final readonly class TelegramProtectedPresentationResolver
         private ?TelegramPrivateMediaDeliveryResolver $privateMedia = null,
         private ?TelegramAlternativePaymentReview $paymentReviews = null,
         private ?TelegramBackupArtifactPresentationSource $backupArtifacts = null,
+        private ?TelegramReportingExportPresentationSource $reportExports = null,
     ) {}
 
     public function resolveForSelf(
@@ -50,6 +52,14 @@ final readonly class TelegramProtectedPresentationResolver
 
             return $this->backupArtifacts->resolveForOwner($userId, $reference);
         }
+        if ($reference->isReportExport()) {
+            if ($this->reportExports === null) {
+                throw new RuntimeException('Protected Telegram report-export resolver is unavailable.');
+            }
+
+            return $this->reportExports->resolveForAdministratorSelf($userId, $reference);
+        }
+
         if ($reference->isPaymentReviewEvidence()) {
             return $this->paymentReviewEvidenceForSelf($userId, $reference);
         }
