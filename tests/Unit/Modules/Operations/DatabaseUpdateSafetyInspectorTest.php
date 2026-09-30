@@ -201,6 +201,20 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
         $baseline = $baselineInspector->workerBootIds();
         self::assertCount(count($workers), $baseline);
 
+        $legacyBaselineInspector = new DatabaseUpdateSafetyInspector(
+            $this->databaseForWorkers($this->workerRows(
+                $workers,
+                '1.0.0',
+                null,
+                '2026-09-30 00:59:59.000000',
+            )),
+            base_path('database/migrations'),
+            base_path('deploy/supervisor/freedom-platform.conf'),
+        );
+        $legacyBaseline = $legacyBaselineInspector->workerBootIds();
+        self::assertCount(count($workers), $legacyBaseline);
+        self::assertSame(array_fill_keys($workers, null), $legacyBaseline);
+
         $missingBaselineRows = $this->workerRows(
             $workers,
             '1.0.0',
@@ -238,7 +252,12 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
             '1.1.0',
             $baseline,
         );
-        self::addToAssertionCount(1);
+        $freshInspector->assertWorkersRestartedAfter(
+            '2026-09-30 01:00:00.000000',
+            '1.1.0',
+            $legacyBaseline,
+        );
+        self::addToAssertionCount(2);
 
         $partialBaseline = $baseline;
         array_pop($partialBaseline);
@@ -352,7 +371,7 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
         return $query;
     }
 
-    /** @param list<array{worker_id:string,release_version:string,boot_id:string,last_seen_at:string}> $rows */
+    /** @param list<array{worker_id:string,release_version:string,boot_id:string|null,last_seen_at:string}> $rows */
     private function databaseForWorkers(array $rows): DatabaseManager
     {
         $query = $this->createStub(QueryBuilder::class);
@@ -373,12 +392,12 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
 
     /**
      * @param  list<string>  $workers
-     * @return list<array{worker_id:string,release_version:string,boot_id:string,last_seen_at:string}>
+     * @return list<array{worker_id:string,release_version:string,boot_id:string|null,last_seen_at:string}>
      */
     private function workerRows(
         array $workers,
         string $release,
-        string $bootId,
+        ?string $bootId,
         string $lastSeenAt,
     ): array {
         return array_map(
