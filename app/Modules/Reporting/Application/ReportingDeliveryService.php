@@ -40,9 +40,10 @@ final readonly class ReportingDeliveryService implements ReportingScheduledChann
             throw new RuntimeException('Reporting administrator identity changed during authorization.');
         }
         $channelChatId = $this->configuredReportChannelChatId();
+        $telegramRequestKey = $this->channelDeliveryRequestKey($requestKey, $range);
         $existingOperationId = $this->textDelivery->findExisting(
             $channelChatId,
-            $requestKey.':telegram',
+            $telegramRequestKey,
             $correlationId,
         );
         if ($existingOperationId !== null) {
@@ -56,6 +57,7 @@ final readonly class ReportingDeliveryService implements ReportingScheduledChann
             $channelChatId,
             $correlationId,
             $requestKey,
+            $telegramRequestKey,
         ): string {
             $snapshot = $this->reports->generate(
                 $actorUserId,
@@ -66,7 +68,7 @@ final readonly class ReportingDeliveryService implements ReportingScheduledChann
             $operationId = $this->textDelivery->send(
                 $channelChatId,
                 $this->formatter->format($snapshot),
-                $requestKey.':telegram',
+                $telegramRequestKey,
                 $correlationId,
             );
             $this->audit->recordDelivery(
@@ -140,6 +142,16 @@ final readonly class ReportingDeliveryService implements ReportingScheduledChann
 
             return $operationId;
         }, 3);
+    }
+
+    private function channelDeliveryRequestKey(string $requestKey, ReportDateRange $range): string
+    {
+        return 'report-channel:'.hash('sha256', implode("\0", [
+            $requestKey,
+            $range->code,
+            $range->databaseStart() ?? '-',
+            $range->databaseEndExclusive(),
+        ]));
     }
 
     private function configuredReportChannelChatId(): int

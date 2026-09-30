@@ -14,6 +14,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Tests\TestCase;
 
 /** @requirement REP-001 REP-002 REP-003 ACL-001 ACL-002 DAT-002 DAT-003 SEC-002 OPS-003 */
@@ -65,6 +66,24 @@ final class ReportingDeliveryIntegrationTest extends TestCase
         self::assertSame($channelOperation, $replayedChannelOperation);
         self::assertSame(1, $textGateway->sendCalls);
         self::assertSame(2, $textGateway->findCalls);
+
+        $conflictingRange = new ReportDateRange(
+            'delivery_test',
+            $range->startsAtUtc?->sub(new \DateInterval('PT1H')),
+            $range->endsBeforeUtc,
+        );
+        try {
+            $delivery->deliverToConfiguredChannel(
+                $userId,
+                $conflictingRange,
+                'report-delivery-channel-test',
+                'report-delivery-channel-test-request',
+            );
+            self::fail('A reused reporting request key with a different range must fail closed.');
+        } catch (RuntimeException) {
+            $this->addToAssertionCount(1);
+        }
+        self::assertSame(1, $textGateway->sendCalls);
 
         $exportOperation = $delivery->queueExportForAdministratorChat(
             $userId,
@@ -165,7 +184,8 @@ final class FakeReportingTextDeliveryGateway implements ReportingTextDeliveryGat
 
     public ?string $text = null;
 
-    public ?string $existingOperationId = null;
+    /** @var array<string, string> */
+    public array $existingOperationIds = [];
 
     public int $sendCalls = 0;
 
@@ -180,7 +200,7 @@ final class FakeReportingTextDeliveryGateway implements ReportingTextDeliveryGat
     {
         $this->findCalls++;
 
-        return $this->existingOperationId;
+        return $this->existingOperationIds[$requestKey] ?? null;
     }
 
     public function send(int $recipientChatId, string $text, string $requestKey, string $correlationId): string
@@ -188,7 +208,7 @@ final class FakeReportingTextDeliveryGateway implements ReportingTextDeliveryGat
         $this->sendCalls++;
         $this->recipientChatId = $recipientChatId;
         $this->text = $text;
-        $this->existingOperationId = $this->operationId;
+        $this->existingOperationIds[$requestKey] = $this->operationId;
 
         return $this->operationId;
     }
