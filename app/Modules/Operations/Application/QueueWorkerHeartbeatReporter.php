@@ -23,6 +23,7 @@ final class QueueWorkerHeartbeatReporter
         private readonly string $workerId,
         private readonly string $queueGroup,
         private readonly ?string $releaseVersion,
+        private readonly ?string $bootId,
         private readonly int $intervalSeconds,
     ) {}
 
@@ -44,6 +45,7 @@ final class QueueWorkerHeartbeatReporter
             $this->workerId,
             $queue === null || trim($queue) === '' ? $this->queueGroup : $queue,
             $this->releaseVersion,
+            $this->bootId,
         );
         $this->lastRecordedAt = $now;
 
