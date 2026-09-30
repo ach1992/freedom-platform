@@ -93,6 +93,25 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
         $this->atomicJsonWrite($path, $report);
     }
 
+    /** @return array<string, mixed> */
+    public function loadReport(string $updateRunId): array
+    {
+        $this->assertRunId($updateRunId);
+        $path = $this->reportsDirectory($this->root()).'/update-'.$updateRunId.'.json';
+        if (! is_file($path) || is_link($path)) {
+            throw new RuntimeException('The protected update report is unavailable or unsafe.');
+        }
+
+        $report = $this->readJson($path, 'The protected update report is invalid.');
+        if (($report['version'] ?? null) !== self::REPORT_VERSION
+            || ($report['update_run_id'] ?? null) !== $updateRunId
+        ) {
+            throw new RuntimeException('The protected update report identity is invalid.');
+        }
+
+        return $report;
+    }
+
     /** @requirement UPD-001 RUN-002 SEC-008 QUA-001 */
     public function createStaging(string $updateRunId, string $releaseId): string
     {
