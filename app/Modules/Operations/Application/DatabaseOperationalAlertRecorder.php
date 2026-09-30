@@ -125,12 +125,12 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 return;
             }
 
-            /** @var object{id:string,occurrence_count:int|string,activation_sequence:int|string,resolved_at:?string}|null $existing */
+            /** @var object{id:string,occurrence_count:int|string,activation_sequence:int|string,acknowledged_at:?string,resolved_at:?string}|null $existing */
             $existing = $connection->table('alerts')
                 ->where('event_name', $eventName)
                 ->where('deduplication_key', $deduplicationKey)
                 ->lockForUpdate()
-                ->first(['id', 'occurrence_count', 'activation_sequence', 'resolved_at']);
+                ->first(['id', 'occurrence_count', 'activation_sequence', 'acknowledged_at', 'resolved_at']);
             if ($existing === null) {
                 throw new RuntimeException('Operational alert deduplication conflict could not be reconciled.');
             }
@@ -154,7 +154,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                     'occurrence_count' => $occurrenceCount,
                     'activation_sequence' => $activationSequence,
                     'last_seen_at' => $now,
-                    'acknowledged_at' => $reopened ? null : $connection->raw('acknowledged_at'),
+                    'acknowledged_at' => $reopened ? null : $existing->acknowledged_at,
                     'resolved_at' => null,
                     'updated_at' => $now,
                 ]);
