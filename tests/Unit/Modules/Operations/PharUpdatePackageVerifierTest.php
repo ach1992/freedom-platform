@@ -43,6 +43,41 @@ final class PharUpdatePackageVerifierTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 RUN-002 RUN-006 SEC-001 SEC-008 QUA-001 */
+    public function test_it_extracts_into_an_empty_pre_created_staging_directory_and_rejects_non_empty_state(): void
+    {
+        $fixture = $this->fixture('pre-created-staging');
+
+        try {
+            [$packagePath, $sha256] = $this->package($fixture);
+            $verifier = new PharUpdatePackageVerifier($fixture.'/packages');
+            $verified = $verifier->verify($packagePath, $sha256);
+
+            $destination = $fixture.'/pre-created-release';
+            mkdir($destination, 0750);
+            $verifier->extract($verified, $destination);
+            self::assertFileExists($destination.'/artisan');
+            self::assertFileExists($destination.'/release-manifest.json');
+
+            $nonEmpty = $fixture.'/non-empty-release';
+            mkdir($nonEmpty, 0750);
+            file_put_contents($nonEmpty.'/foreign.txt', 'foreign');
+
+            try {
+                $verifier->extract($verified, $nonEmpty);
+                self::fail('A non-empty pre-created staging directory must fail closed.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'The pre-created update staging directory is unsafe or not empty.',
+                    $exception->getMessage(),
+                );
+            }
+            self::assertFileExists($nonEmpty.'/foreign.txt');
+        } finally {
+            $this->removeTree($fixture);
+        }
+    }
+
     /** @requirement UPD-001 RUN-002 RUN-006 SEC-001 QUA-001 */
     public function test_final_extracted_payload_verification_detects_post_extraction_tampering(): void
     {

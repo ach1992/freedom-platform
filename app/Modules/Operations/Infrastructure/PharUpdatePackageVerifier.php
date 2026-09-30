@@ -277,7 +277,6 @@ final readonly class PharUpdatePackageVerifier implements UpdatePackageVerifier
         }
 
         if (! str_starts_with($destination, DIRECTORY_SEPARATOR)
-            || file_exists($destination)
             || is_link($destination)
         ) {
             throw new RuntimeException('The update staging destination is invalid.');
@@ -286,7 +285,23 @@ final readonly class PharUpdatePackageVerifier implements UpdatePackageVerifier
         if ($parent === false || ! is_dir($parent) || is_link(dirname($destination))) {
             throw new RuntimeException('The update staging parent is unavailable.');
         }
-        if (! mkdir($destination, 0750) || ! is_dir($destination)) {
+
+        if (file_exists($destination)) {
+            $resolvedDestination = realpath($destination);
+            $entries = scandir($destination);
+            $mode = fileperms($destination);
+            if ($resolvedDestination === false
+                || ! is_dir($resolvedDestination)
+                || dirname($resolvedDestination) !== $parent
+                || ! is_array($entries)
+                || array_values(array_diff($entries, ['.', '..'])) !== []
+                || ! is_int($mode)
+                || ($mode & 0022) !== 0
+                || ! is_writable($resolvedDestination)
+            ) {
+                throw new RuntimeException('The pre-created update staging directory is unsafe or not empty.');
+            }
+        } elseif (! mkdir($destination, 0750) || ! is_dir($destination)) {
             throw new RuntimeException('The update staging directory could not be created.');
         }
 
