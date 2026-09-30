@@ -16,6 +16,7 @@ use RuntimeException;
 final readonly class OperationsCenterActionService
 {
     private const ACTION_DISPATCH_DUE = 'operations.outbox.dispatch_due';
+
     public function __construct(
         private DatabaseManager $database,
         private AdministratorUserPermissionAuthorizer $administrators,
