@@ -93,6 +93,47 @@ final readonly class LaravelRestoreMaintenanceCoordinator implements RestoreMain
         }
     }
 
+    /** @requirement UPD-001 BAK-002 OPS-003 QUA-001 */
+    public function adopt(string $restoreRunId): void
+    {
+        $this->assertRunId($restoreRunId);
+        $this->assertOwned($restoreRunId);
+
+        if (! is_file($this->supervisorTemplatePath)
+            || is_link($this->supervisorTemplatePath)
+            || ! is_readable($this->supervisorTemplatePath)
+        ) {
+            throw new RuntimeException('Restore worker quiescence authority is unavailable.');
+        }
+
+        $supervisorTemplate = file_get_contents($this->supervisorTemplatePath);
+        if (! is_string($supervisorTemplate)
+            || ! $this->deploymentInvariants->restoreQuiescenceCompatible(
+                $this->quiesceSeconds,
+                $supervisorTemplate,
+            )
+        ) {
+            throw new RuntimeException('Restore quiescence is shorter than the reviewed worker timeout boundary.');
+        }
+
+        if (! $this->schedulerMutationLock->held()) {
+            $this->schedulerMutationLock->acquire($this->quiesceSeconds);
+        }
+        if (! $this->schedulerMutationLock->held()) {
+            throw new RuntimeException('Retained Restore Scheduler mutation fence could not be adopted.');
+        }
+
+        if ($this->console->call('queue:restart', ['--no-interaction' => true]) !== 0) {
+            throw new RuntimeException('Retained queue worker containment could not be re-established.');
+        }
+
+        $this->waitForWorkers();
+        $this->assertOwned($restoreRunId);
+        if (! $this->schedulerMutationLock->held()) {
+            throw new RuntimeException('Retained Restore Scheduler mutation fence was lost during adoption.');
+        }
+    }
+
     /** @requirement BAK-002 OPS-003 QUA-001 */
     public function refreshRuntime(string $restoreRunId): void
     {
