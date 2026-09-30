@@ -71,7 +71,7 @@ final class ArtisanUpdateReleaseExecutorTest extends TestCase
     }
 
     /** @requirement UPD-001 RUN-001 RUN-006 SEC-008 QUA-001 */
-    public function test_dependency_install_suppresses_scripts_and_runtime_bootstrap_requires_shared_links(): void
+    public function test_dependency_install_suppresses_plugins_and_scripts_and_runtime_bootstrap_requires_shared_links(): void
     {
         $root = storage_path('framework/testing/update-executor-order-'.bin2hex(random_bytes(4)));
         $release = $root.'/releases/1.1.0';
@@ -130,9 +130,11 @@ final class ArtisanUpdateReleaseExecutorTest extends TestCase
             $executor->prepare($release, $package);
             $beforeLinks = (string) file_get_contents($log);
             self::assertStringContainsString(
-                'install --no-dev --prefer-dist --optimize-autoloader --no-scripts --no-interaction --no-progress',
+                '--no-plugins install --no-dev --prefer-dist --optimize-autoloader --no-scripts --no-interaction --no-progress',
                 $beforeLinks,
             );
+            self::assertStringContainsString('--no-plugins validate --strict --no-check-publish --no-interaction', $beforeLinks);
+            self::assertStringContainsString('--no-plugins check-platform-reqs --no-dev --no-interaction', $beforeLinks);
             self::assertStringNotContainsString('package:discover', $beforeLinks);
 
             try {
