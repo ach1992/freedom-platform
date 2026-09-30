@@ -334,7 +334,7 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
     }
 
     /**
-     * @param list<string> $workers
+     * @param  list<string>  $workers
      * @return list<array{worker_id:string,release_version:string,boot_id:string,last_seen_at:string}>
      */
     private function workerRows(
