@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Reporting\Application\Contracts\ReportingScheduledChannelDelivery;
+use App\Modules\Reporting\Application\Contracts\ReportingTextDeliveryGateway;
 use App\Modules\Reporting\Application\ReportDateRange;
 use App\Modules\Reporting\Application\ReportScheduleFrequency;
 use App\Modules\Reporting\Application\ReportScheduleRunner;
@@ -181,6 +182,69 @@ final class ReportingScheduleIntegrationTest extends TestCase
         ]);
     }
 
+    public function test_runner_disables_schedule_when_view_permission_is_revoked_before_delivery_replay(): void
+    {
+        $userId = $this->quoteUser('customer');
+        $now = now('UTC');
+        $administratorId = (int) DB::table('administrators')->insertGetId([
+            'user_id' => $userId,
+            'status' => 'active',
+            'is_owner' => false,
+            'permission_version' => 1,
+            'last_authenticated_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        foreach (['reports.schedule', 'reports.view', 'reports.deliver'] as $permissionCode) {
+            $permissionId = (int) DB::table('permissions')->where('code', $permissionCode)->value('id');
+            DB::table('administrator_permission_overrides')->insert([
+                'administrator_id' => $administratorId,
+                'permission_id' => $permissionId,
+                'effect' => 'allow',
+                'changed_by_administrator_id' => null,
+                'reason_code' => 'reporting_schedule_view_revoke_test',
+                'reason' => 'Grant reporting permissions for execution-time view revocation test.',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        $publicId = $this->app->make(ReportScheduleService::class)->createChannelSchedule(
+            $userId,
+            'yesterday',
+            ReportScheduleFrequency::DAILY,
+            '08:00',
+            null,
+            null,
+            'report-schedule-view-revoke-create',
+            'report-schedule-view-revoke-create-request',
+        );
+        DB::table('report_schedules')->where('public_id', $publicId)->update([
+            'next_run_at' => now('UTC')->subMinute(),
+            'updated_at' => now('UTC'),
+        ]);
+        $viewPermissionId = (int) DB::table('permissions')->where('code', 'reports.view')->value('id');
+        DB::table('administrator_permission_overrides')
+            ->where('administrator_id', $administratorId)
+            ->where('permission_id', $viewPermissionId)
+            ->update(['effect' => 'deny', 'updated_at' => now('UTC')]);
+
+        $gateway = new ScheduleReportingTextDeliveryGateway;
+        $this->app->instance(ReportingTextDeliveryGateway::class, $gateway);
+
+        $summary = $this->app->make(ReportScheduleRunner::class)->runDue(5);
+        self::assertSame(1, $summary->examined);
+        self::assertSame(1, $summary->disabled);
+        self::assertSame(0, $gateway->findCalls);
+        self::assertSame(0, $gateway->sendCalls);
+        self::assertDatabaseHas('report_schedules', [
+            'public_id' => $publicId,
+            'enabled' => 0,
+            'retry_count' => 0,
+            'last_error_code' => 'permission_revoked',
+        ]);
+    }
+
     public function test_runner_disables_schedule_when_schedule_permission_is_revoked(): void
     {
         $userId = $this->quoteUser('customer');
@@ -275,5 +339,26 @@ final class FakeReportingScheduledChannelDelivery implements ReportingScheduledC
         }
 
         return $this->operationId;
+    }
+}
+
+final class ScheduleReportingTextDeliveryGateway implements ReportingTextDeliveryGateway
+{
+    public int $findCalls = 0;
+
+    public int $sendCalls = 0;
+
+    public function findExisting(int $recipientChatId, string $requestKey, string $correlationId): ?string
+    {
+        $this->findCalls++;
+
+        return null;
+    }
+
+    public function send(int $recipientChatId, string $text, string $requestKey, string $correlationId): string
+    {
+        $this->sendCalls++;
+
+        return strtoupper((string) Str::ulid());
     }
 }
