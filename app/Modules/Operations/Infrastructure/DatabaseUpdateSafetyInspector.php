@@ -111,7 +111,8 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
     }
 
     /**
-     * @param array<string, string> $previousBootIds
+     * @param  array<string, string>  $previousBootIds
+     *
      * @requirement UPD-001 RUN-003 OPS-003 QUA-001
      */
     public function assertWorkersRestartedAfter(
@@ -194,7 +195,7 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
     }
 
     /** @param list<string> $expectedWorkers
-     *  @return list<object{worker_id:mixed,release_version:mixed,boot_id:mixed,last_seen_at:mixed}>
+     * @return list<object{worker_id:mixed,release_version:mixed,boot_id:mixed,last_seen_at:mixed}>
      */
     private function workerRows(array $expectedWorkers): array
     {
