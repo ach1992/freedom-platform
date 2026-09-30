@@ -66,7 +66,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
     }
 
     /**
-     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,schema_before_sha256:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}|null $recovery
+     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}|null $recovery
      */
     private function execute(string $backupId, bool $apply, ?array $recovery): RestoreRunResult
     {
@@ -240,6 +240,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                     $maintenanceRunId,
                     $entries,
                     $recovery,
+                    $source,
                 ): void {
                     $mutationStarted = true;
                     $report['mutation_started'] = true;
@@ -269,7 +270,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
 
                         $recoveryReleasePath = $this->releases->resolve($recovery['previous_release']);
                         $restoredSchema = $this->updateSafety->installedSchemaSha256ForRelease($recoveryReleasePath);
-                        if (! hash_equals($recovery['schema_before_sha256'], $restoredSchema)) {
+                        if (! hash_equals($source->migrationsSha256, $restoredSchema)) {
                             throw new RuntimeException('The restored predecessor schema identity is inconsistent.');
                         }
                         $this->updateExecutor->verifyRelease($recoveryReleasePath);
@@ -307,7 +308,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                             'version' => 1,
                             'release_id' => $recovery['previous_release'],
                             'application_version' => $recovery['previous_application_version'],
-                            'schema_sha256' => $recovery['schema_before_sha256'],
+                            'schema_sha256' => $source->migrationsSha256,
                             'recovered_from_release_attempt' => $recovery['failed_release'],
                             'pre_update_backup_id' => $recovery['backup_id'],
                             'pre_update_backup_completed_at' => $recovery['backup_completed_at'],
@@ -318,7 +319,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                         $authoritative['restore_required'] = true;
                         $authoritative['recovery_restore_run_id'] = $restoreRunId;
                         $authoritative['recovered_release'] = $recovery['previous_release'];
-                        $authoritative['schema_after_sha256'] = $recovery['schema_before_sha256'];
+                        $authoritative['schema_after_sha256'] = $source->migrationsSha256;
                         $authoritative['maintenance_retained'] = true;
                         $authoritative['scheduler_mutation_fence_retained'] = true;
                         $authoritative['worker_quiescence_retained'] = true;
