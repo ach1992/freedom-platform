@@ -12,6 +12,7 @@ final class DatabaseSeeder extends Seeder
     {
         $this->call([
             IdentityAccessFoundationSeeder::class,
+            ReportingAccessFoundationSeeder::class,
             AdministratorSearchAccessFoundationSeeder::class,
             OrderAccessFoundationSeeder::class,
             UsdtAccessFoundationSeeder::class,
