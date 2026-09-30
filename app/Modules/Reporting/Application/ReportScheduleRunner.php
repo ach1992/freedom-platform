@@ -185,13 +185,13 @@ final readonly class ReportScheduleRunner
             }
 
             $range = $this->ranges->resolveAt($claim['period'], $dueAt);
-            $operationId = $this->delivery->deliverToConfiguredChannel(
-                $claim['actor_user_id'],
-                $range,
-                $correlationId,
-                $requestKey,
-            );
-            $this->database->connection()->transaction(function () use ($claim, $dueAt, $operationId, $correlationId, $requestKey): void {
+            $this->database->connection()->transaction(function () use ($claim, $dueAt, $range, $correlationId, $requestKey): void {
+                $operationId = $this->delivery->deliverToConfiguredChannel(
+                    $claim['actor_user_id'],
+                    $range,
+                    $correlationId,
+                    $requestKey,
+                );
                 $this->audit->recordScheduleExecution(
                     $claim['created_by_administrator_id'],
                     $claim['public_id'],

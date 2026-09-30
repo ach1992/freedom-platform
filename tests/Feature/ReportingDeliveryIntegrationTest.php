@@ -56,6 +56,16 @@ final class ReportingDeliveryIntegrationTest extends TestCase
         self::assertNotNull($textGateway->text);
         self::assertStringContainsString('Report — delivery_test', $textGateway->text);
 
+        $replayedChannelOperation = $delivery->deliverToConfiguredChannel(
+            $userId,
+            $range,
+            'report-delivery-channel-test',
+            'report-delivery-channel-test-request',
+        );
+        self::assertSame($channelOperation, $replayedChannelOperation);
+        self::assertSame(1, $textGateway->sendCalls);
+        self::assertSame(2, $textGateway->findCalls);
+
         $exportOperation = $delivery->queueExportForAdministratorChat(
             $userId,
             123456789,
@@ -69,6 +79,18 @@ final class ReportingDeliveryIntegrationTest extends TestCase
         self::assertSame(123456789, $exportGateway->recipientChatId);
         self::assertSame('xlsx', $exportGateway->format);
         self::assertSame('fa', $exportGateway->locale);
+
+        $replayedExportOperation = $delivery->queueExportForAdministratorChat(
+            $userId,
+            123456789,
+            $range,
+            'xlsx',
+            'fa',
+            'report-delivery-export-test',
+            'report-delivery-export-test-request',
+        );
+        self::assertSame($exportOperation, $replayedExportOperation);
+        self::assertSame(2, $exportGateway->queueCalls);
 
         self::assertSame(1, DB::table('audit_logs')->where('action', 'report.view')->count());
         self::assertSame(2, DB::table('audit_logs')->where('action', 'report.deliver')->count());
@@ -143,15 +165,30 @@ final class FakeReportingTextDeliveryGateway implements ReportingTextDeliveryGat
 
     public ?string $text = null;
 
+    public ?string $existingOperationId = null;
+
+    public int $sendCalls = 0;
+
+    public int $findCalls = 0;
+
     public function __construct()
     {
         $this->operationId = strtoupper((string) Str::ulid());
     }
 
+    public function findExisting(int $recipientChatId, string $requestKey, string $correlationId): ?string
+    {
+        $this->findCalls++;
+
+        return $this->existingOperationId;
+    }
+
     public function send(int $recipientChatId, string $text, string $requestKey, string $correlationId): string
     {
+        $this->sendCalls++;
         $this->recipientChatId = $recipientChatId;
         $this->text = $text;
+        $this->existingOperationId = $this->operationId;
 
         return $this->operationId;
     }
@@ -167,6 +204,8 @@ final class FakeReportingExportDeliveryGateway implements ReportingExportDeliver
 
     public ?string $locale = null;
 
+    public int $queueCalls = 0;
+
     public function __construct()
     {
         $this->operationId = strtoupper((string) Str::ulid());
@@ -180,6 +219,7 @@ final class FakeReportingExportDeliveryGateway implements ReportingExportDeliver
         string $requestKey,
         string $correlationId,
     ): string {
+        $this->queueCalls++;
         $this->recipientChatId = $recipientChatId;
         $this->format = $format;
         $this->locale = $locale;

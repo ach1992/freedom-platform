@@ -16,6 +16,22 @@ final readonly class TelegramReportingTextDeliveryGateway implements ReportingTe
         private TelegramDeliveryQueueService $delivery,
     ) {}
 
+    public function findExisting(
+        int $recipientChatId,
+        string $requestKey,
+        string $correlationId,
+    ): ?string {
+        if ($recipientChatId === 0) {
+            throw new DomainException('Reporting Telegram destination must be non-zero.');
+        }
+
+        return $this->delivery->findExistingSendByRequestKey(
+            $recipientChatId,
+            $requestKey,
+            $correlationId,
+        )?->publicId;
+    }
+
     /** @requirement REP-001 REP-002 REP-003 DAT-003 SEC-002 OPS-003 */
     public function send(
         int $recipientChatId,

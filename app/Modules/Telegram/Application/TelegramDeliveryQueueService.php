@@ -52,6 +52,31 @@ final readonly class TelegramDeliveryQueueService
         private TelegramDeliveryConfidentialPresentationService $confidentialPresentations,
     ) {}
 
+    public function findExistingSendByRequestKey(
+        int $recipientChatId,
+        string $requestKey,
+        string $correlationId,
+    ): ?TelegramDeliveryOperationReceipt {
+        $requestKeyHash = $this->requestKeyHash($requestKey);
+        $this->assertToken($correlationId, 'Telegram delivery correlation ID', 8, 64);
+        $botId = $this->runtime->botId();
+        $this->assertBotId($botId);
+        $existing = $this->operationByRequestHash($this->database->connection(), $requestKeyHash, false);
+        if ($existing === null) {
+            return null;
+        }
+        if ((string) $existing->action !== TelegramDeliveryAction::Send->value
+            || (int) $existing->recipient_chat_id !== $recipientChatId
+            || $existing->target_message_id !== null
+            || (string) $existing->correlation_id !== $correlationId
+            || (string) $existing->bot_id !== $botId
+        ) {
+            throw new DomainException('Telegram delivery request key was reused with conflicting routing semantics.');
+        }
+
+        return $this->receipt($existing, true);
+    }
+
     /** @requirement ARCH-003 ARCH-004 DAT-003 SEC-002 SEC-008 OPS-003 QUA-001 QUA-004 QUA-007 */
     public function queue(
         TelegramDeliveryAction $action,

@@ -6,7 +6,9 @@ namespace App\Modules\Reporting\Application;
 
 use App\Shared\Application\Clock;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
 use InvalidArgumentException;
+use RuntimeException;
 
 final readonly class ReportingAudit
 {
@@ -144,20 +146,58 @@ final readonly class ReportingAudit
             throw new InvalidArgumentException('Reporting audit identity is invalid.');
         }
 
-        $this->database->connection()->table('audit_logs')->insert([
-            'actor_type' => 'administrator',
-            'actor_id' => (string) $administratorId,
-            'action' => $action,
-            'target_type' => 'reporting',
-            'target_id' => $targetId,
-            'before_safe_data' => null,
-            'after_safe_data' => json_encode($safeData, JSON_THROW_ON_ERROR),
-            'reason_code' => $reasonCode,
-            'reason' => $reason,
-            'correlation_id' => $correlationId,
-            'request_fingerprint' => hash('sha256', $action."\0".$requestKey),
-            'created_at' => $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
-        ]);
+        $requestFingerprint = hash('sha256', $action."\0".$requestKey);
+        $safeJson = json_encode($safeData, JSON_THROW_ON_ERROR);
+        try {
+            $this->database->connection()->table('audit_logs')->insert([
+                'actor_type' => 'administrator',
+                'actor_id' => (string) $administratorId,
+                'action' => $action,
+                'target_type' => 'reporting',
+                'target_id' => $targetId,
+                'before_safe_data' => null,
+                'after_safe_data' => $safeJson,
+                'reason_code' => $reasonCode,
+                'reason' => $reason,
+                'correlation_id' => $correlationId,
+                'request_fingerprint' => $requestFingerprint,
+                'created_at' => $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u'),
+            ]);
+
+            return;
+        } catch (QueryException $exception) {
+            if (! $this->isDuplicateKey($exception)) {
+                throw $exception;
+            }
+        }
+
+        /** @var object{actor_type:string,actor_id:string,action:string,target_type:string,target_id:string,after_safe_data:string,reason_code:string,reason:string,correlation_id:string}|null $existing */
+        $existing = $this->database->connection()->table('audit_logs')
+            ->where('action', $action)
+            ->where('request_fingerprint', $requestFingerprint)
+            ->first([
+                'actor_type', 'actor_id', 'action', 'target_type', 'target_id', 'after_safe_data',
+                'reason_code', 'reason', 'correlation_id',
+            ]);
+        if ($existing === null
+            || $existing->actor_type !== 'administrator'
+            || $existing->actor_id !== (string) $administratorId
+            || $existing->action !== $action
+            || $existing->target_type !== 'reporting'
+            || $existing->target_id !== $targetId
+            || $existing->reason_code !== $reasonCode
+            || $existing->reason !== $reason
+            || $existing->correlation_id !== $correlationId
+            || json_decode($existing->after_safe_data, true, 512, JSON_THROW_ON_ERROR) !== $safeData
+        ) {
+            throw new RuntimeException('Reporting audit request key was replayed with conflicting semantics.');
+        }
+    }
+
+    private function isDuplicateKey(QueryException $exception): bool
+    {
+        return (string) ($exception->errorInfo[0] ?? '') === '23000'
+            && (int) ($exception->errorInfo[1] ?? 0) === 1062;
     }
 
     private function validateContext(int $administratorId, string $correlationId, string $requestKey): void
