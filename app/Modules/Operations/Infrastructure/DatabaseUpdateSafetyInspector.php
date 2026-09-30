@@ -204,7 +204,14 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
             ->get(['worker_id', 'release_version', 'boot_id', 'last_seen_at'])
             ->all();
 
-        return array_values(array_filter($rows, 'is_object'));
+        $objects = [];
+        foreach ($rows as $row) {
+            if (is_object($row)) {
+                $objects[] = $row;
+            }
+        }
+
+        return $objects;
     }
 
     private function installedSchemaSha256(string $migrationsDirectory, string $mismatchMessage): string
