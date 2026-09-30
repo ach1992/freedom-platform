@@ -866,6 +866,178 @@ final readonly class RestoreTestPostVerifier implements RestorePostRestoreVerifi
     }
 }
 
+final class RestoreTestUpdateWorkspace implements UpdateWorkspace
+{
+    public string $current = 'candidate-release';
+
+    /** @var array<string, array<string, mixed>> */
+    public array $reports = [];
+
+    /** @var array<string, mixed>|null */
+    public ?array $identity = null;
+
+    public function __construct(private readonly RestoreEventLog $events) {}
+
+    public function recoverInterruptedPreMutationRuns(): void {}
+
+    public function storeReport(string $updateRunId, array $report): void
+    {
+        $this->reports[$updateRunId] = $report;
+    }
+
+    public function loadReport(string $updateRunId): array
+    {
+        $report = $this->reports[$updateRunId] ?? null;
+        if (! is_array($report)) {
+            throw new RuntimeException('test-only missing protected update report');
+        }
+
+        return $report;
+    }
+
+    public function createStaging(string $updateRunId, string $releaseId): string
+    {
+        throw new RuntimeException('test-only unexpected staging');
+    }
+
+    public function publishRelease(string $stagingPath, string $releaseId): string
+    {
+        throw new RuntimeException('test-only unexpected publish');
+    }
+
+    public function sealPublishedRelease(string $releaseId): void {}
+
+    public function discardStaging(string $stagingPath): void {}
+
+    public function discardInactiveRelease(string $releaseId): void {}
+
+    public function currentReleaseId(): ?string
+    {
+        return $this->current;
+    }
+
+    public function installedIdentity(): ?array
+    {
+        return $this->identity;
+    }
+
+    public function storeInstalledIdentity(array $identity): void
+    {
+        $this->events->events[] = 'update_identity';
+        $this->identity = $identity;
+    }
+
+    public function pruneReleases(array $protectedReleaseIds, int $retention): void {}
+}
+
+final readonly class RestoreTestReleaseActivator implements ReleaseActivator
+{
+    /** @param array<string, string> $releasePaths */
+    public function __construct(
+        private RestoreEventLog $events,
+        private RestoreTestUpdateWorkspace $workspace,
+        private array $releasePaths,
+    ) {}
+
+    public function prepare(string $releaseId): string
+    {
+        return $this->resolve($releaseId);
+    }
+
+    public function resolve(string $releaseId): string
+    {
+        $path = $this->releasePaths[$releaseId] ?? null;
+        if (! is_string($path) || $path === '') {
+            throw new RuntimeException('test-only unknown release');
+        }
+
+        return $path;
+    }
+
+    public function activate(string $releaseId, bool $automaticRollbackSafe = true): array
+    {
+        $previous = $this->workspace->current;
+        $this->workspace->current = $releaseId;
+
+        return ['status' => 'activated', 'release' => $releaseId, 'previous_release' => $previous];
+    }
+
+    public function rollbackTo(string $releaseId): array
+    {
+        $this->events->events[] = 'release_rollback';
+        $previous = $this->workspace->current;
+        $this->workspace->current = $releaseId;
+
+        return ['status' => 'rolled_back', 'release' => $releaseId, 'previous_release' => $previous];
+    }
+}
+
+final class RestoreTestUpdateSafetyInspector implements UpdateSafetyInspector
+{
+    public function __construct(
+        private readonly RestoreEventLog $events,
+        public string $schema,
+    ) {}
+
+    public function currentSchemaSha256(): string
+    {
+        return $this->schema;
+    }
+
+    public function installedSchemaSha256ForRelease(string $releasePath): string
+    {
+        $this->events->events[] = 'update_schema_verify';
+
+        return $this->schema;
+    }
+
+    public function releaseSchemaSha256(string $releasePath): string
+    {
+        return $this->schema;
+    }
+
+    public function assertNoUnsafeWork(): void {}
+
+    public function workerBootIds(): array
+    {
+        $this->events->events[] = 'worker_boot_snapshot';
+
+        return ['freedom-platform-critical_00' => str_repeat('a', 32)];
+    }
+
+    public function assertWorkersRestartedAfter(
+        string $restartedAfter,
+        string $expectedReleaseId,
+        array $previousBootIds,
+    ): void {
+        if ($previousBootIds === []) {
+            throw new RuntimeException('test-only missing previous boot generation');
+        }
+        $this->events->events[] = 'worker_attest:'.$expectedReleaseId;
+    }
+}
+
+final readonly class RestoreTestUpdateReleaseExecutor implements UpdateReleaseExecutor
+{
+    public function __construct(private RestoreEventLog $events) {}
+
+    public function assertPrerequisites(VerifiedUpdatePackage $package): void {}
+
+    public function prepare(string $releasePath, VerifiedUpdatePackage $package): void {}
+
+    public function prepareRuntime(string $releasePath): void {}
+
+    public function migrate(string $releasePath): void
+    {
+        throw new RuntimeException('test-only unexpected update migration');
+    }
+
+    public function verifyRelease(string $releasePath, ?VerifiedUpdatePackage $package = null): void
+    {
+        $this->events->events[] = 'update_release_verify:'.basename($releasePath);
+    }
+}
+
 final readonly class RestoreFixedClock implements Clock
 {
     public function __construct(private string $now) {}
