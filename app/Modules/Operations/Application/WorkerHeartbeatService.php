@@ -20,10 +20,16 @@ final readonly class WorkerHeartbeatService
         private Clock $clock,
     ) {}
 
-    public function record(string $workerId, string $queue, ?string $releaseVersion = null): void
-    {
+    public function record(
+        string $workerId,
+        string $queue,
+        ?string $releaseVersion = null,
+        ?string $bootId = null,
+    ): void {
         $workerId = trim($workerId);
         $queue = trim($queue);
+        $releaseVersion = $releaseVersion === null ? null : trim($releaseVersion);
+        $bootId = $bootId === null ? null : strtolower(trim($bootId));
 
         if ($workerId === '' || mb_strlen($workerId) > 191) {
             throw new InvalidArgumentException('Worker ID must contain between 1 and 191 characters.');
@@ -31,6 +37,16 @@ final readonly class WorkerHeartbeatService
 
         if ($queue === '' || mb_strlen($queue) > 191) {
             throw new InvalidArgumentException('Queue name must contain between 1 and 191 characters.');
+        }
+
+        if ($releaseVersion !== null
+            && ($releaseVersion === '' || strlen($releaseVersion) > 64 || preg_match('/[\\x00-\\x1F\\x7F]/', $releaseVersion) === 1)
+        ) {
+            throw new InvalidArgumentException('Worker release identity must contain between 1 and 64 safe characters.');
+        }
+
+        if ($bootId !== null && preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1) {
+            throw new InvalidArgumentException('Worker boot identity must be 32 lowercase hexadecimal characters.');
         }
 
         $now = $this->clock->now();
@@ -42,6 +58,7 @@ final readonly class WorkerHeartbeatService
                 'queue' => $queue,
                 'host_hash' => hash('sha256', gethostname() ?: 'unknown'),
                 'release_version' => $releaseVersion,
+                'boot_id' => $bootId,
                 'last_seen_at' => $timestamp,
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,
