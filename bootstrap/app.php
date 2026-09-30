@@ -11,6 +11,7 @@ use App\Modules\Operations\Presentation\Console\ApplyUpdateCommand;
 use App\Modules\Operations\Presentation\Console\CheckOutboxContractRetirementCommand;
 use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
 use App\Modules\Operations\Presentation\Console\CreateBackupCommand;
+use App\Modules\Operations\Presentation\Console\DeliverOperationalAlertsCommand;
 use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\QueueBackupTelegramExportCommand;
@@ -60,6 +61,7 @@ return Application::configure(basePath: dirname(__DIR__))
         CheckOutboxContractRetirementCommand::class,
         CheckWorkerHeartbeatsCommand::class,
         CreateBackupCommand::class,
+        DeliverOperationalAlertsCommand::class,
         QueueBackupTelegramExportCommand::class,
         RecalculateCustomerTiersCommand::class,
         ConfigureTelegramWebhookCommand::class,
