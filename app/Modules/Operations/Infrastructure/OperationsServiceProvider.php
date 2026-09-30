@@ -27,6 +27,7 @@ use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
 use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
+use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
 use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
 use App\Modules\Operations\Application\Contracts\UpdateSafetyInspector;
 use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
@@ -308,6 +309,10 @@ final class OperationsServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(RestoreManager::class);
+        $this->app->singleton(
+            UpdateRecoveryRestore::class,
+            fn (Application $application): UpdateRecoveryRestore => $application->make(RestoreManager::class),
+        );
 
         $this->app->singleton(
             BackupManager::class,
