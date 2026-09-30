@@ -90,7 +90,7 @@ final class DeliverOperationalAlertsCommand extends Command
         return $summary->failed > 0 ? self::FAILURE : self::SUCCESS;
     }
 
-    /** @return array<string,int> */
+    /** @return array<string, int> */
     private function metrics(OperationalAlertDeliveryRunSummary $summary): array
     {
         return [
@@ -102,7 +102,7 @@ final class DeliverOperationalAlertsCommand extends Command
         ];
     }
 
-    /** @param array<string,int> $metrics */
+    /** @param array<string, int> $metrics */
     private function finishRun(
         ScheduledTaskRunRecorder $runs,
         Clock $clock,

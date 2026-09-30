@@ -101,7 +101,7 @@ final class CheckWorkerHeartbeatsCommand extends Command
         return $staleWorkerIds === [] ? self::SUCCESS : self::FAILURE;
     }
 
-    /** @param array<string,int> $metrics */
+    /** @param array<string, int> $metrics */
     private function finishRun(
         ScheduledTaskRunRecorder $runs,
         Clock $clock,

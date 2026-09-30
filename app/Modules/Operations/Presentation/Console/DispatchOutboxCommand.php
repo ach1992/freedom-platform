@@ -93,7 +93,7 @@ final class DispatchOutboxCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @return array<string,int> */
+    /** @return array<string, int> */
     private function metrics(OutboxRuntimeResult $result): array
     {
         return [
@@ -107,7 +107,7 @@ final class DispatchOutboxCommand extends Command
         ];
     }
 
-    /** @param array<string,int> $metrics */
+    /** @param array<string, int> $metrics */
     private function finishRun(
         ScheduledTaskRunRecorder $runs,
         Clock $clock,

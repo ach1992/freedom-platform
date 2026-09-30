@@ -15,6 +15,7 @@ use Database\Seeders\OperationsAccessFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -237,6 +238,24 @@ final class OperationsCenterIntegrationTest extends TestCase
         $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
         $now = now('UTC');
 
+        $missingRunHistory = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        self::assertSame('unknown', $missingRunHistory->fact('scheduler.run_history')?->state);
+        self::assertSame('empty', $missingRunHistory->fact('scheduler.stale_running_runs')?->state);
+
+        DB::table('scheduled_task_runs')->insert([
+            'task_name' => 'operations.test-stale-run',
+            'run_id' => (string) Str::uuid(),
+            'state' => 'running',
+            'started_at' => $now->copy()->subHours(2),
+            'finished_at' => null,
+            'duration_ms' => null,
+            'metrics' => null,
+            'error_class' => null,
+            'error_code' => null,
+            'created_at' => $now->copy()->subHours(2),
+            'updated_at' => $now->copy()->subHours(2),
+        ]);
+
         DB::table('panel_connections')->insert([
             'code' => 'operations-sensitive-panel',
             'provider_type' => 'xui',
@@ -279,6 +298,9 @@ final class OperationsCenterIntegrationTest extends TestCase
         self::assertNotNull($snapshot->fact('panels.provider.xui'));
         self::assertNotNull($snapshot->fact('providers.sms_health'));
         self::assertSame('unknown', $snapshot->fact('providers.sms_health')?->state);
+        self::assertSame('observed', $snapshot->fact('scheduler.run_history')?->state);
+        self::assertSame('degraded', $snapshot->fact('scheduler.stale_running_runs')?->state);
+        self::assertSame(1, $snapshot->fact('scheduler.stale_running_runs')?->value);
         self::assertSame('manual_review', $snapshot->fact('alerts.delivery_failed')?->state);
         self::assertSame(1, $snapshot->fact('alerts.delivery_failed')?->value);
         self::assertLessThanOrEqual(200, count($snapshot->facts));

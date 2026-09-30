@@ -268,24 +268,40 @@ final readonly class OperationsCenterService
     /** @return list<OperationsCenterFact> */
     private function scheduledRunFacts(DateTimeImmutable $now): array
     {
-        $cutoff = $now->sub(new DateInterval('P1D'))->format('Y-m-d H:i:s.u');
-        $failed = (int) $this->database->connection()->table('scheduled_task_runs')
-            ->where('started_at', '>=', $cutoff)
+        $connection = $this->database->connection();
+        $failedCutoff = $now->sub(new DateInterval('P1D'))->format('Y-m-d H:i:s.u');
+        $staleCutoff = $now->sub(new DateInterval('PT1H'))->format('Y-m-d H:i:s.u');
+        $historyCount = (int) $connection->table('scheduled_task_runs')->count();
+        $failed = (int) $connection->table('scheduled_task_runs')
+            ->where('started_at', '>=', $failedCutoff)
             ->where('state', 'failed')
             ->count();
-        $running = (int) $this->database->connection()->table('scheduled_task_runs')
+        $running = (int) $connection->table('scheduled_task_runs')
             ->where('state', 'running')
             ->count();
-        $latest = $this->database->connection()->table('scheduled_task_runs')->max('started_at');
+        $staleRunning = (int) $connection->table('scheduled_task_runs')
+            ->where('state', 'running')
+            ->where('started_at', '<', $staleCutoff)
+            ->count();
+        $latest = $connection->table('scheduled_task_runs')->max('started_at');
+        $latestObserved = $this->date($latest);
 
         return [
+            new OperationsCenterFact(
+                'scheduler',
+                'scheduler.run_history',
+                $historyCount === 0 ? 'unknown' : 'observed',
+                $historyCount,
+                $historyCount === 0 ? 'no_durable_run_evidence' : null,
+                $latestObserved,
+            ),
             new OperationsCenterFact(
                 'scheduler',
                 'scheduler.failed_runs_24h',
                 $failed === 0 ? 'empty' : 'degraded',
                 $failed,
                 null,
-                $this->date($latest),
+                $latestObserved,
             ),
             new OperationsCenterFact(
                 'scheduler',
@@ -293,7 +309,15 @@ final readonly class OperationsCenterService
                 $running === 0 ? 'empty' : 'observed',
                 $running,
                 null,
-                $this->date($latest),
+                $latestObserved,
+            ),
+            new OperationsCenterFact(
+                'scheduler',
+                'scheduler.stale_running_runs',
+                $staleRunning === 0 ? 'empty' : 'degraded',
+                $staleRunning,
+                'stale_after_seconds=3600',
+                $latestObserved,
             ),
         ];
     }
