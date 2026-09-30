@@ -3,10 +3,19 @@
 declare(strict_types=1);
 
 $backupEnvironmentPath = base_path('.env');
-if (is_link($backupEnvironmentPath) && readlink($backupEnvironmentPath) === '../../shared/.env') {
+$sharedEnvironmentPath = dirname(base_path(), 2).'/shared/.env';
+if (is_link($backupEnvironmentPath)
+    && readlink($backupEnvironmentPath) === '../../shared/.env'
+    && is_file($sharedEnvironmentPath)
+    && ! is_link($sharedEnvironmentPath)
+) {
     $resolvedBackupEnvironmentPath = realpath($backupEnvironmentPath);
-    if (is_string($resolvedBackupEnvironmentPath)) {
-        $backupEnvironmentPath = $resolvedBackupEnvironmentPath;
+    $resolvedSharedEnvironmentPath = realpath($sharedEnvironmentPath);
+    if (is_string($resolvedBackupEnvironmentPath)
+        && is_string($resolvedSharedEnvironmentPath)
+        && $resolvedBackupEnvironmentPath === $resolvedSharedEnvironmentPath
+    ) {
+        $backupEnvironmentPath = $resolvedSharedEnvironmentPath;
     }
 }
 

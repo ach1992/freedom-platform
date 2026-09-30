@@ -61,6 +61,35 @@ final class DeploymentRuntimeConfigurationTest extends TestCase
         }
     }
 
+    public function test_backup_environment_path_rejects_a_symlinked_shared_environment_target(): void
+    {
+        $originalBasePath = base_path();
+        $fixture = storage_path('framework/testing/operations-config-shared-link-'.bin2hex(random_bytes(4)));
+        $release = $fixture.'/releases/test-release';
+        $shared = $fixture.'/shared';
+        $outside = $fixture.'/outside';
+        mkdir($release, 0700, true);
+        mkdir($shared, 0700, true);
+        mkdir($outside, 0700, true);
+        file_put_contents($outside.'/.env', "APP_ENV=testing\n");
+        symlink('../outside/.env', $shared.'/.env');
+        symlink('../../shared/.env', $release.'/.env');
+
+        try {
+            $this->app->setBasePath($release);
+            /** @var array<string, mixed> $operations */
+            $operations = require $originalBasePath.'/config/operations.php';
+
+            self::assertSame(
+                $release.'/.env',
+                $operations['backup']['config_files']['environment'],
+            );
+        } finally {
+            $this->app->setBasePath($originalBasePath);
+            $this->removeTree($fixture);
+        }
+    }
+
     public function test_supervisor_template_assigns_unique_heartbeat_identity_to_every_worker_group(): void
     {
         $configuration = (string) file_get_contents(base_path('deploy/supervisor/freedom-platform.conf'));
