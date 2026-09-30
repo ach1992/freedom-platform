@@ -98,6 +98,7 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         $bootIds = [];
         foreach ($rows as $row) {
             if (! is_string($row->worker_id ?? null)
+                || ! in_array($row->worker_id, $expectedWorkers, true)
                 || ! is_string($row->boot_id ?? null)
                 || preg_match('/\\A[0-9a-f]{32}\\z/', $row->boot_id) !== 1
             ) {
@@ -105,6 +106,13 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
             }
 
             $bootIds[$row->worker_id] = $row->boot_id;
+        }
+
+        $actualWorkers = array_keys($bootIds);
+        sort($actualWorkers, SORT_STRING);
+        sort($expectedWorkers, SORT_STRING);
+        if ($actualWorkers !== $expectedWorkers) {
+            throw new RuntimeException('The reviewed worker boot-generation baseline is incomplete.');
         }
 
         return $bootIds;
@@ -145,6 +153,13 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         $expectedWorkers = $this->expectedWorkerIds();
         if ($expectedWorkers === []) {
             throw new RuntimeException('The reviewed worker runtime topology is unavailable.');
+        }
+
+        $baselineWorkers = array_keys($previousBootIds);
+        sort($baselineWorkers, SORT_STRING);
+        sort($expectedWorkers, SORT_STRING);
+        if ($baselineWorkers !== $expectedWorkers) {
+            throw new RuntimeException('The previous worker boot-generation baseline is incomplete.');
         }
 
         $actual = [];
