@@ -35,6 +35,7 @@ use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /** @requirement REP-001 REP-002 REP-003 ACL-001 ACL-002 DAT-002 DAT-003 SEC-002 */
@@ -58,6 +59,16 @@ final class ReportingSnapshotIntegrationTest extends TestCase
 
     public function test_owner_report_reconciles_captured_sales_refund_adjustment_and_wallet_liability(): void
     {
+        $serviceSettlement = $this->createPurchaseOrderSettlement('reporting-service');
+        $serviceOrder = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+            $serviceSettlement->settlementPublicId,
+            $this->purchaseOrderCorrelation('create-reporting-service'),
+        );
+        $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+            $serviceOrder->orderPublicId,
+            $this->purchaseOrderCorrelation('queue-reporting-service'),
+        );
+
         $settlement = $this->createPurchaseOrderSettlement('reporting');
         $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
             $settlement->settlementPublicId,
@@ -100,18 +111,13 @@ final class ReportingSnapshotIntegrationTest extends TestCase
             'Correct reporting fixture balance.',
             $this->accessContext($ownerAdministratorId, 'reporting-correction-preview'),
             'order',
-            (string) DB::table('orders')->value('public_id'),
+            $order->orderPublicId,
         );
         $this->app->make(WalletCorrectionService::class)->execute(
             $preview->previewId,
             $preview->confirmationToken,
             null,
             $this->accessContext($ownerAdministratorId, 'reporting-correction-execute'),
-        );
-
-        $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
-            $order->orderPublicId,
-            $this->purchaseOrderCorrelation('queue-reporting'),
         );
 
         $ownerUserId = (int) DB::table('administrators')->where('id', $ownerAdministratorId)->value('user_id');
@@ -127,14 +133,17 @@ final class ReportingSnapshotIntegrationTest extends TestCase
             'reporting-integration-request',
         );
 
-        self::assertSame($settlement->amount->amount(), $this->metric($snapshot, 'sales.captured_irr'));
+        $capturedTotal = $settlement->amount->amount() + $serviceSettlement->amount->amount();
+        self::assertSame(2, $this->metric($snapshot, 'sales.captured_count'));
+        self::assertSame($capturedTotal, $this->metric($snapshot, 'sales.captured_irr'));
         self::assertSame(0, $this->metric($snapshot, 'sales.discount_irr'));
-        self::assertSame($settlement->amount->amount(), $this->metric($snapshot, 'sales.gross_irr'));
+        self::assertSame($capturedTotal, $this->metric($snapshot, 'sales.gross_irr'));
         self::assertSame($refundAmount, $this->metric($snapshot, 'sales.refund_irr'));
-        self::assertSame($settlement->amount->amount() - $refundAmount, $this->metric($snapshot, 'sales.net_irr'));
+        self::assertSame($capturedTotal - $refundAmount, $this->metric($snapshot, 'sales.net_irr'));
         self::assertSame(25_000, $this->metric($snapshot, 'wallet.exact_adjustment_irr'));
         self::assertSame(125_000, $this->metric($snapshot, 'wallet.liability_irr'));
         self::assertSame(1, $this->metric($snapshot, 'gateways.captured_count', 'order_gateway_reporting'));
+        self::assertSame(1, $this->metric($snapshot, 'gateways.captured_count', 'order_gateway_reporting-service'));
         self::assertSame(1, $this->metric($snapshot, 'services.created'));
         self::assertSame(1, $this->metric($snapshot, 'services.current_inventory_by_lifecycle_state', 'active'));
         self::assertSame(1, DB::table('audit_logs')->where('action', 'report.view')->count());
@@ -260,6 +269,17 @@ final class ReportingSnapshotIntegrationTest extends TestCase
             'updated_at' => $now,
         ]);
 
+        DB::table('users')->insert([
+            'public_id' => (string) Str::ulid(),
+            'account_type' => 'administrator',
+            'account_status' => 'active',
+            'locale' => 'fa',
+            'first_seen_at' => $now,
+            'last_seen_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
         $identitySnapshot = $service->generate(
             $userId,
             $range,
@@ -269,6 +289,7 @@ final class ReportingSnapshotIntegrationTest extends TestCase
         self::assertNotEmpty($identitySnapshot->metrics);
         foreach ($identitySnapshot->metrics as $metric) {
             self::assertStringStartsWith('users.', $metric->code);
+            self::assertNotSame('administrator', $metric->dimension);
         }
         self::assertSame(2, DB::table('audit_logs')->where('action', 'report.view')->count());
     }

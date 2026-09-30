@@ -71,9 +71,10 @@ final readonly class DatabaseReportingSnapshotService
         $metrics = [];
 
         if ($this->visibility->allowsMetricCode($actorUserId, 'users.created')) {
-            $metrics[] = $this->metric('users', 'users.created', 'Users created', $this->count($this->database->connection()->table('users'), 'created_at', $range), 'count');
+            $metrics[] = $this->metric('users', 'users.created', 'Users created', $this->count($this->database->connection()->table('users')->whereIn('account_type', ['customer', 'agent']), 'created_at', $range), 'count');
             foreach ($this->groupedCount(
                 $this->database->connection()->table('users')
+                    ->whereIn('account_type', ['customer', 'agent'])
                     ->select('account_type')
                     ->selectRaw('COUNT(*) AS aggregate')
                     ->groupBy('account_type')
