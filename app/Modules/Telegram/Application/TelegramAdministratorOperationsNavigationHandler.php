@@ -226,8 +226,8 @@ final readonly class TelegramAdministratorOperationsNavigationHandler
 
                 return;
             }
-        } catch (AuthorizationException) {
-            throw;
+        } catch (AuthorizationException $exception) {
+            throw $exception;
         } catch (Throwable) {
             $this->showAlert($action, $alertId, 'operation_unavailable');
 
