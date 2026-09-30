@@ -18,7 +18,7 @@ return [
         'Reporting' => ['AccessControl'],
         'Provisioning' => ['AccessControl', 'Agents', 'Catalog', 'Orders', 'Panels', 'Payments', 'Telegram', 'Wallet'],
         'Support' => ['AccessControl', 'Reporting', 'Shared'],
-        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Operations', 'Promotions', 'Reporting', 'Support', 'Wallet'],
+        'Telegram' => ['AccessControl', 'Agents', 'Customers', 'Identity', 'Localization', 'Promotions', 'Reporting', 'Support', 'Wallet'],
         'Wallet' => ['AccessControl'],
     ],
     // Exact dependency-inversion seams where an owning module implements a
@@ -50,6 +50,14 @@ return [
         'app/Modules/Telegram/Application/DatabaseBackupTelegramOwnerDestinationResolver.php|App\\Modules\\Operations\\Application\\Contracts\\BackupTelegramOwnerDestinationResolver',
         'app/Modules/Telegram/Application/TelegramBackupDeliveryQueue.php|App\\Modules\\Operations\\Application\\Contracts\\BackupTelegramDeliveryQueue',
         'app/Modules/Telegram/Application/TelegramOperationalAlertDeliveryGateway.php|App\\Modules\\Operations\\Application\\Contracts\\OperationalAlertDeliveryGateway',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationalAlertLifecycleService',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationalAlertQueryService',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationsCenterActionService',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationsCenterFact',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationsCenterService',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationsCenterSnapshot',
+        'app/Modules/Telegram/Application/TelegramAdministratorOperationsNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationsPermissions',
+        'app/Modules/Telegram/Application/TelegramNavigationHandler.php|App\\Modules\\Operations\\Application\\OperationsPermissions',
     ],
     'domain_dependency_exceptions' => [
         'app/Modules/Catalog/Domain/CustomPlanPolicyDefinition.php|Customers\\Domain',
