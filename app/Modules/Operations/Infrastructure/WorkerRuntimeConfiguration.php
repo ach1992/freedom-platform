@@ -15,13 +15,14 @@ final readonly class WorkerRuntimeConfiguration
         public string $workerId,
         public string $queueGroup,
         public ?string $releaseVersion,
+        public ?string $bootId,
         public int $intervalSeconds,
     ) {}
 
     /**
      * Resolve per-process Supervisor values after Laravel config has been cached.
      *
-     * @param  array{enabled: mixed, worker_id: mixed, queue_group: mixed, release_version: mixed, interval_seconds: mixed}  $fallback
+     * @param  array{enabled: mixed, worker_id: mixed, queue_group: mixed, release_version: mixed, boot_id: mixed, interval_seconds: mixed}  $fallback
      * @param  (Closure(string): (string|false))|null  $environment
      */
     public static function resolve(array $fallback, ?Closure $environment = null): self
@@ -41,8 +42,12 @@ final readonly class WorkerRuntimeConfiguration
             $fallback['queue_group'],
         );
         $releaseVersion = self::nullableString(
-            $environment('APP_VERSION'),
+            $environment('WORKER_RELEASE_ID'),
             $fallback['release_version'],
+        );
+        $bootId = self::nullableString(
+            $environment('WORKER_BOOT_ID'),
+            $fallback['boot_id'],
         );
         $intervalSeconds = self::positiveInteger(
             $environment('WORKER_HEARTBEAT_INTERVAL_SECONDS'),
@@ -58,11 +63,24 @@ final readonly class WorkerRuntimeConfiguration
             throw new RuntimeException('An enabled queue worker heartbeat requires a queue group.');
         }
 
+        if ($enabled
+            && ($releaseVersion === null
+                || preg_match('/\\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\z/', $releaseVersion) !== 1
+                || str_contains($releaseVersion, '..'))
+        ) {
+            throw new RuntimeException('An enabled queue worker heartbeat requires the exact physical release ID.');
+        }
+
+        if ($enabled && ($bootId === null || preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1)) {
+            throw new RuntimeException('An enabled queue worker heartbeat requires a valid boot ID.');
+        }
+
         return new self(
             enabled: $enabled,
             workerId: $workerId,
             queueGroup: $queueGroup,
             releaseVersion: $releaseVersion,
+            bootId: $bootId,
             intervalSeconds: $intervalSeconds,
         );
     }
