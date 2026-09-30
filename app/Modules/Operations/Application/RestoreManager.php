@@ -81,6 +81,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
         $maintenanceEntered = false;
         $mutationStarted = false;
         $resumeCompleted = false;
+        $recoveryReportingFailed = false;
         $safetyBackupId = null;
         $report = [
             'version' => 1,
@@ -236,7 +237,9 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                     &$mutationStarted,
                     &$report,
                     $restoreRunId,
+                    $maintenanceRunId,
                     $entries,
+                    $recovery,
                 ): void {
                     $mutationStarted = true;
                     $report['mutation_started'] = true;
@@ -251,15 +254,79 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                     $this->payloadRestorer->restore($entries, $restoreRunId);
                     $this->markPhase($report, 'private_config_restore_completed');
 
+                    $recoveryReleasePath = null;
+                    $workerBootIds = [];
+                    $workerRestartAfter = null;
+                    if ($recovery !== null) {
+                        $phase = 'release_recovery';
+                        $this->workspace->storeReport($restoreRunId, $report);
+                        $switch = $this->releases->rollbackTo($recovery['previous_release']);
+                        if (! in_array($switch['status'], ['rolled_back', 'already_active'], true)
+                            || $this->updateWorkspace->currentReleaseId() !== $recovery['previous_release']
+                        ) {
+                            throw new RuntimeException('The predecessor release could not be reactivated after Restore.');
+                        }
+
+                        $recoveryReleasePath = $this->releases->resolve($recovery['previous_release']);
+                        $restoredSchema = $this->updateSafety->installedSchemaSha256ForRelease($recoveryReleasePath);
+                        if (! hash_equals($recovery['schema_before_sha256'], $restoredSchema)) {
+                            throw new RuntimeException('The restored predecessor schema identity is inconsistent.');
+                        }
+                        $this->updateExecutor->verifyRelease($recoveryReleasePath);
+                        $workerBootIds = $this->updateSafety->workerBootIds();
+                        $workerRestartAfter = $this->databaseTimestamp();
+                        $this->markPhase($report, 'predecessor_release_restored');
+                    }
+
                     $phase = 'runtime_refresh';
                     $this->workspace->storeReport($restoreRunId, $report);
-                    $this->maintenance->refreshRuntime($restoreRunId);
+                    $this->maintenance->refreshRuntime($maintenanceRunId);
+                    if ($recovery !== null) {
+                        if (! is_string($workerRestartAfter) || ! is_string($recoveryReleasePath)) {
+                            throw new RuntimeException('Update recovery worker restart evidence is incomplete.');
+                        }
+                        $this->updateSafety->assertWorkersRestartedAfter(
+                            $workerRestartAfter,
+                            $recovery['previous_release'],
+                            $workerBootIds,
+                        );
+                        $this->updateExecutor->verifyRelease($recoveryReleasePath);
+                    }
                     $this->markPhase($report, 'restored_runtime_refreshed');
 
                     $phase = 'post_restore_verification';
                     $this->workspace->storeReport($restoreRunId, $report);
-                    $report['verification'] = $this->postRestoreVerifier->verify();
+                    $report['verification'] = $this->postRestoreVerifier->verify($recoveryReleasePath);
                     $this->markPhase($report, 'post_restore_verification_completed');
+
+                    if ($recovery !== null) {
+                        $phase = 'update_identity_reconciliation';
+                        $authoritative = $this->updateWorkspace->loadReport($recovery['update_run_id']);
+                        $this->assertRecoveryReportMatches($authoritative, $recovery);
+                        $this->updateWorkspace->storeInstalledIdentity([
+                            'version' => 1,
+                            'release_id' => $recovery['previous_release'],
+                            'application_version' => $recovery['previous_application_version'],
+                            'schema_sha256' => $recovery['schema_before_sha256'],
+                            'recovered_from_release_attempt' => $recovery['failed_release'],
+                            'pre_update_backup_id' => $recovery['backup_id'],
+                            'pre_update_backup_completed_at' => $recovery['backup_completed_at'],
+                            'activated_at' => $this->timestamp(),
+                        ]);
+                        $authoritative['status'] = 'restore_recovery_resume_pending';
+                        $authoritative['report_finalized'] = false;
+                        $authoritative['restore_required'] = true;
+                        $authoritative['recovery_restore_run_id'] = $restoreRunId;
+                        $authoritative['recovered_release'] = $recovery['previous_release'];
+                        $authoritative['schema_after_sha256'] = $recovery['schema_before_sha256'];
+                        $authoritative['maintenance_retained'] = true;
+                        $authoritative['scheduler_mutation_fence_retained'] = true;
+                        $authoritative['worker_quiescence_retained'] = true;
+                        $authoritative['containment_retained'] = true;
+                        $authoritative['recovery_resume_pending_at'] = $this->timestamp();
+                        $this->updateWorkspace->storeReport($recovery['update_run_id'], $authoritative);
+                        $this->markPhase($report, 'update_identity_reconciled');
+                    }
                 },
                 true,
                 $this->backupConfiguration->priorityLockWaitSeconds * 1000,
@@ -275,7 +342,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
             $this->workspace->storeReport($restoreRunId, $report);
 
             $phase = 'resume';
-            $this->maintenance->leave($restoreRunId);
+            $this->maintenance->leave($maintenanceRunId);
             $resumeCompleted = true;
             $maintenanceEntered = false;
             $report['maintenance_retained'] = false;
@@ -283,6 +350,27 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
             $report['worker_quiescence_retained'] = false;
             $report['containment_retained'] = false;
             $this->markPhase($report, 'maintenance_released');
+
+            if ($recovery !== null) {
+                try {
+                    $authoritative = $this->updateWorkspace->loadReport($recovery['update_run_id']);
+                    $this->assertRecoveryReportMatches($authoritative, $recovery);
+                    $authoritative['status'] = 'restore_recovered';
+                    $authoritative['restore_required'] = false;
+                    $authoritative['report_finalized'] = true;
+                    $authoritative['recovery_restore_run_id'] = $restoreRunId;
+                    $authoritative['recovered_release'] = $recovery['previous_release'];
+                    $authoritative['maintenance_retained'] = false;
+                    $authoritative['scheduler_mutation_fence_retained'] = false;
+                    $authoritative['worker_quiescence_retained'] = false;
+                    $authoritative['containment_retained'] = false;
+                    $authoritative['recovery_completed_at'] = $this->timestamp();
+                    $authoritative['completed_at'] = $this->timestamp();
+                    $this->updateWorkspace->storeReport($recovery['update_run_id'], $authoritative);
+                } catch (Throwable) {
+                    $recoveryReportingFailed = true;
+                }
+            }
 
             $phase = 'final_report';
             $report['status'] = 'completed';
@@ -292,6 +380,15 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
             try {
                 $this->workspace->storeReport($restoreRunId, $report);
             } catch (Throwable) {
+                return new RestoreRunResult(
+                    $restoreRunId,
+                    'completed_reporting_failed',
+                    $source->backupId,
+                    $safetyBackupId,
+                );
+            }
+
+            if ($recoveryReportingFailed) {
                 return new RestoreRunResult(
                     $restoreRunId,
                     'completed_reporting_failed',
