@@ -12,6 +12,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
+use App\Modules\Reporting\Application\ReportingPermissions;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorServiceOperations;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
@@ -993,6 +994,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             && ! $this->administratorSearchAvailableFor($action->userId)
             && ! $this->administratorAccess->availableForUser($action->userId)
             && ! $this->administratorUsers->allowsUser($action->userId, TelegramAlternativePaymentReview::PERMISSION)
+            && ! $this->administratorUsers->allowsUser($action->userId, ReportingPermissions::VIEW)
             && ! $this->administratorUsers->allowsUser($action->userId, TelegramBroadcastCampaignService::PERMISSION)
             && ! $this->administratorUsers->allowsUser($action->userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)) {
             $this->returnHome($action);
@@ -1199,6 +1201,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
     ): void {
         $rows = [];
 
+        $administrationButtons = [];
         if ($this->administratorAccess->availableForUser($action->userId)) {
             $access = $this->callbacks->issue(
                 $action->sessionPublicId,
@@ -1207,11 +1210,29 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 [],
                 'nav-admin-access:'.$requestKey,
             );
-            $rows[] = [new TelegramInlineCallbackButton(
+            $administrationButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.admin.buttons.access', $locale),
                 $access->publicId,
                 TelegramInlineButtonStyle::Primary,
-            )];
+            );
+        }
+
+        if ($this->administratorUsers->allowsUser($action->userId, ReportingPermissions::VIEW)) {
+            $reporting = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdministratorReportingNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-reporting:'.$requestKey,
+            );
+            $administrationButtons[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram_reporting.entry_button', $locale),
+                $reporting->publicId,
+                TelegramInlineButtonStyle::Primary,
+            );
+        }
+        if ($administrationButtons !== []) {
+            $rows[] = $administrationButtons;
         }
 
         if ($this->administratorUsers->allowsUser(
@@ -4482,6 +4503,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             || $this->administratorCustomerTargets->availableFor($userId)
             || $this->administratorSearchAvailableFor($userId)
             || $this->administratorAccess->availableForUser($userId)
+            || $this->administratorUsers->allowsUser($userId, ReportingPermissions::VIEW)
             || $this->administratorUsers->allowsUser($userId, TelegramBroadcastCampaignService::PERMISSION)
             || $this->administratorUsers->allowsUser($userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)
             || $this->administratorUsers->allowsUser($userId, TelegramMenuConfigurationMutationExecutor::MANAGE_PERMISSION)

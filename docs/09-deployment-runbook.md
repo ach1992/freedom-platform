@@ -129,6 +129,10 @@ Use the repository's guarded atomic release-switch implementation when available
 - worker timeouts remain below retry-after bounds;
 - worker/scheduler health is observable without exposing secrets.
 
+- permission-aware report-channel delivery requires `REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID` to resolve to the intended Telegram channel/chat; `0` or an unset value keeps channel delivery and new schedules unavailable rather than guessing a destination;
+- scheduled reports remain owned by the same Laravel Scheduler through `reporting:run-schedules --limit=5 --json` (registered every minute with overlap/one-server fencing). Do not create per-report Cron entries. Per-schedule leases and stable occurrence request keys preserve retry/idempotency, while each execution re-checks schedule/view/delivery permissions before queueing through the existing Telegram Outbox;
+- create/disable report schedules through the reviewed reporting Application/Telegram surfaces; do not edit `report_schedules` directly to bypass permission, lease, audit, or next-run invariants.
+
 ## Backups
 
 Production backups must be consistent, authenticated-encrypted, checksummed/manifested, stored outside the public root, retained according to policy, and periodically restored in an isolated target-like environment.

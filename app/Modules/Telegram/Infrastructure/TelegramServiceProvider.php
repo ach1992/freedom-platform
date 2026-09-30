@@ -27,6 +27,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramMutationTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramNowPaymentsNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaFetcher;
 use App\Modules\Telegram\Application\Contracts\TelegramPrivateMediaMessageSender;
+use App\Modules\Telegram\Application\Contracts\TelegramReportingExportPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\Contracts\TelegramSharedRateLimiter;
 use App\Modules\Telegram\Application\Contracts\TelegramSourceMessageSender;
@@ -38,6 +39,7 @@ use App\Modules\Telegram\Application\TelegramAdminCustomerNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorAccessNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectMessageService;
 use App\Modules\Telegram\Application\TelegramAdministratorDirectSourceMessageService;
+use App\Modules\Telegram\Application\TelegramAdministratorReportingNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorSearchNavigationHandler;
 use App\Modules\Telegram\Application\TelegramAdministratorSearchService;
 use App\Modules\Telegram\Application\TelegramAdministratorServiceOperationsNavigationHandler;
@@ -196,6 +198,7 @@ final class TelegramServiceProvider extends ServiceProvider
         );
         $this->app->singleton(TelegramNavigationHandler::class);
         $this->app->singleton(TelegramAdministratorAccessNavigationHandler::class);
+        $this->app->singleton(TelegramAdministratorReportingNavigationHandler::class);
         $this->app->singleton(TelegramAlternativePaymentReviewNavigationHandler::class);
         $this->app->singleton(TelegramAdministratorSearchNavigationHandler::class);
         $this->app->singleton(TelegramAdminCustomerNavigationHandler::class);
@@ -410,6 +413,9 @@ final class TelegramServiceProvider extends ServiceProvider
                 $application->make(TelegramAlternativePaymentReview::class),
                 $application->bound(TelegramBackupArtifactPresentationSource::class)
                     ? $application->make(TelegramBackupArtifactPresentationSource::class)
+                    : null,
+                $application->bound(TelegramReportingExportPresentationSource::class)
+                    ? $application->make(TelegramReportingExportPresentationSource::class)
                     : null,
             ),
         );

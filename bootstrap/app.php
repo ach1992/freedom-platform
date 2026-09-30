@@ -25,6 +25,7 @@ use App\Modules\Promotions\Presentation\Console\ProcessReferralRewardsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceAutoRenewalsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceNotificationsCommand;
 use App\Modules\Provisioning\Presentation\Console\ProcessServiceSynchronizationsCommand;
+use App\Modules\Reporting\Presentation\Console\RunReportSchedulesCommand;
 use App\Modules\Support\Presentation\Console\ScanSupportAlertsCommand;
 use App\Modules\Telegram\Presentation\Console\ApplyTelegramUpdateRetentionCommand;
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
@@ -72,6 +73,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ProcessServiceSynchronizationsCommand::class,
         ScanSupportAlertsCommand::class,
         ProcessReferralRewardsCommand::class,
+        RunReportSchedulesCommand::class,
         RecordWorkerHeartbeatCommand::class,
         RecoverUpdateCommand::class,
         RestoreBackupCommand::class,
