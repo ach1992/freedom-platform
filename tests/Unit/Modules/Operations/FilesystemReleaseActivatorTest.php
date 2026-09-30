@@ -219,6 +219,25 @@ final class FilesystemReleaseActivatorTest extends TestCase
     }
 
     /** @requirement UPD-001 RUN-002 QUA-001 */
+    public function test_resolve_proves_existing_release_without_mutating_shared_links_or_current(): void
+    {
+        $root = $this->deployment('resolve-only');
+        $candidate = $this->release($root, '1.0.0');
+        $activator = $this->activator($root, new RecordingReleaseHealthVerifier);
+
+        try {
+            $resolved = $activator->resolve('1.0.0');
+
+            self::assertSame($candidate, $resolved);
+            self::assertFileDoesNotExist($root.'/current');
+            self::assertFalse(is_link($candidate.'/.env'));
+            self::assertFalse(is_link($candidate.'/storage'));
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 QUA-001 */
     public function test_prepare_reuses_release_authority_for_shared_links_without_switching_current(): void
     {
         $root = $this->deployment('prepare-only');
