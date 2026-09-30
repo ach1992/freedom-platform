@@ -69,6 +69,42 @@ final class ArtisanRestoreRuntimeHealthVerifierTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 BAK-002 OPS-001 SEC-001 QUA-001 */
+    public function test_update_recovery_attests_the_exact_predecessor_release_runtime(): void
+    {
+        $directory = $this->directory('exact-release');
+        $binary = $this->fakeBinary($directory);
+        $release = $directory.'/release-1.0.0';
+        mkdir($release, 0700, true);
+        file_put_contents($release.'/artisan', "<?php\n");
+        chmod($release.'/artisan', 0600);
+
+        try {
+            (new ArtisanRestoreRuntimeHealthVerifier(
+                $binary,
+                base_path('artisan'),
+                $directory,
+                30,
+            ))->verify(str_repeat('d', 64), $release);
+
+            $arguments = json_decode(
+                (string) file_get_contents($release.'/health-args.json'),
+                true,
+                flags: JSON_THROW_ON_ERROR,
+            );
+            self::assertSame([
+                $release.'/artisan',
+                'operations:restore-runtime-attest',
+                '--expected-authority-fingerprint='.str_repeat('d', 64),
+                '--json',
+                '--no-ansi',
+                '--no-interaction',
+            ], $arguments);
+        } finally {
+            $this->removeTree($directory);
+        }
+    }
+
     /** @requirement BAK-002 OPS-001 SEC-001 QUA-001 */
     public function test_child_dotenv_cannot_use_parent_database_or_redis_credentials(): void
     {
