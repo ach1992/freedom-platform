@@ -75,6 +75,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
         }
 
         $restoreRunId = $this->restoreRunId();
+        $maintenanceRunId = $recovery['update_run_id'] ?? $restoreRunId;
         $workspacePath = $this->workspace->create($restoreRunId);
         $phase = 'resolve';
         $maintenanceEntered = false;
@@ -84,7 +85,11 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
         $report = [
             'version' => 1,
             'restore_run_id' => $restoreRunId,
-            'mode' => $apply ? 'apply' : 'dry_run',
+            'mode' => $recovery === null
+                ? ($apply ? 'apply' : 'dry_run')
+                : ($apply ? 'update_recovery_apply' : 'update_recovery_dry_run'),
+            'source_update_run_id' => $recovery['update_run_id'] ?? null,
+            'target_release_id' => $recovery['previous_release'] ?? null,
             'status' => 'running',
             'report_finalized' => false,
             'source_backup_id' => $backupId,
@@ -115,7 +120,21 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
             $this->markPhase($report, 'resolved');
 
             $phase = 'compatibility';
-            $this->compatibility->assertCompatible($source);
+            if ($recovery === null) {
+                $this->compatibility->assertCompatible($source);
+            } else {
+                if (! hash_equals($recovery['backup_id'], $source->backupId)
+                    || ! hash_equals($recovery['backup_completed_at'], $source->completedAt)
+                ) {
+                    throw new RuntimeException('The update recovery backup no longer matches the protected report.');
+                }
+                $predecessorPath = $this->releases->resolve($recovery['previous_release']);
+                $this->compatibility->assertCompatibleWithRelease(
+                    $source,
+                    $recovery['previous_application_version'],
+                    $predecessorPath,
+                );
+            }
 
             $cipher = $this->cipherFactory->create($this->backupConfiguration->encryptionKey());
             if (! hash_equals($cipher->algorithm(), $source->encryptionAlgorithm)
@@ -162,7 +181,11 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
             }
 
             $phase = 'maintenance';
-            $this->maintenance->enter($restoreRunId);
+            if ($recovery !== null && $recovery['adopt_containment']) {
+                $this->maintenance->adopt($maintenanceRunId);
+            } else {
+                $this->maintenance->enter($maintenanceRunId);
+            }
             $maintenanceEntered = true;
             $report['maintenance_retained'] = true;
             $report['scheduler_mutation_fence_retained'] = true;
