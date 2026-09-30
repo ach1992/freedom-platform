@@ -159,7 +159,7 @@ final readonly class OperationalAlertDeliveryRunner
     /** @param DeliveryClaim $claim */
     private function queueClaim(array $claim): bool
     {
-        $this->database->connection()->transaction(function (Connection $connection) use ($claim): void {
+        return $this->database->connection()->transaction(function (Connection $connection) use ($claim): bool {
             /** @var object{severity:string,event_name:string,correlation_id:string,occurrence_count:int|string,resolved_at:?string}|null $alert */
             $alert = $connection->table('alerts')
                 ->where('id', $claim['alert_id'])
