@@ -11,6 +11,9 @@ interface UpdateWorkspace
     /** @param array<string, mixed> $report */
     public function storeReport(string $updateRunId, array $report): void;
 
+    /** @return array<string, mixed> */
+    public function loadReport(string $updateRunId): array;
+
     public function createStaging(string $updateRunId, string $releaseId): string;
 
     public function publishRelease(string $stagingPath, string $releaseId): string;
