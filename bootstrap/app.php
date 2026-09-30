@@ -15,6 +15,7 @@ use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\QueueBackupTelegramExportCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
+use App\Modules\Operations\Presentation\Console\RecoverUpdateCommand;
 use App\Modules\Operations\Presentation\Console\RestoreBackupCommand;
 use App\Modules\Operations\Presentation\Console\RestoreRuntimeAttestCommand;
 use App\Modules\Operations\Presentation\Console\RollbackUpdateCommand;
@@ -72,6 +73,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ScanSupportAlertsCommand::class,
         ProcessReferralRewardsCommand::class,
         RecordWorkerHeartbeatCommand::class,
+        RecoverUpdateCommand::class,
         RestoreBackupCommand::class,
         RestoreRuntimeAttestCommand::class,
         RollbackUpdateCommand::class,
