@@ -21,14 +21,26 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
     ) {}
 
     /** @return array<string, int|bool|string> */
-    public function verify(): array
+    public function verify(?string $releasePath = null): array
     {
         $connectionName = $this->database->getDefaultConnection();
         $this->database->purge($connectionName);
         $connection = $this->database->connection($connectionName);
         $connection->selectOne('SELECT 1 AS ready');
 
-        $expectedMigrations = $this->expectedMigrations();
+        $migrationsDirectory = $this->migrationsDirectory;
+        if ($releasePath !== null) {
+            if (! str_starts_with($releasePath, DIRECTORY_SEPARATOR)
+                || is_link($releasePath)
+                || ($resolvedRelease = realpath($releasePath)) === false
+                || ! is_dir($resolvedRelease)
+            ) {
+                throw new RuntimeException('The exact restored release path is unavailable.');
+            }
+            $migrationsDirectory = $resolvedRelease.'/database/migrations';
+        }
+
+        $expectedMigrations = $this->expectedMigrations($migrationsDirectory);
         $restoredMigrations = $connection->table('migrations')->pluck('migration')->all();
         $restoredMigrations = array_values(array_filter($restoredMigrations, 'is_string'));
         sort($restoredMigrations, SORT_STRING);
@@ -46,7 +58,7 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
         }
 
         $expectedAuthorityFingerprint = $this->criticalAuthority->fingerprint();
-        $this->runtimeHealth->verify($expectedAuthorityFingerprint);
+        $this->runtimeHealth->verify($expectedAuthorityFingerprint, $releasePath);
 
         return [
             'schema_migrations' => count($restoredMigrations),
@@ -58,10 +70,10 @@ final readonly class DatabaseRestorePostVerifier implements RestorePostRestoreVe
     }
 
     /** @return list<string> */
-    private function expectedMigrations(): array
+    private function expectedMigrations(string $migrationsDirectory): array
     {
-        $root = realpath($this->migrationsDirectory);
-        if ($root === false || ! is_dir($root) || is_link($this->migrationsDirectory)) {
+        $root = realpath($migrationsDirectory);
+        if ($root === false || ! is_dir($root) || is_link($migrationsDirectory)) {
             throw new RuntimeException('The migration verification directory is unavailable.');
         }
 
