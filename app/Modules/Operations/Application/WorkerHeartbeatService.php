@@ -16,11 +16,21 @@ use InvalidArgumentException;
  */
 final readonly class WorkerHeartbeatService
 {
+    private DatabaseManager $database;
+
+    private Clock $clock;
+
+    private OperationalAlertRecorder $alerts;
+
     public function __construct(
-        private DatabaseManager $database,
-        private Clock $clock,
-        private OperationalAlertRecorder $alerts,
-    ) {}
+        DatabaseManager $database,
+        Clock $clock,
+        ?OperationalAlertRecorder $alerts = null,
+    ) {
+        $this->database = $database;
+        $this->clock = $clock;
+        $this->alerts = $alerts ?? new DatabaseOperationalAlertRecorder($database, $clock);
+    }
 
     public function record(
         string $workerId,
