@@ -23,6 +23,7 @@ final class WorkerHeartbeatCommandTest extends TestCase
             'worker-id' => 'payments-01',
             '--queue' => 'critical-payments',
             '--release' => '0.2.0-test',
+            '--boot' => str_repeat('a', 32),
         ]);
 
         self::assertSame(0, $exitCode);
@@ -30,6 +31,7 @@ final class WorkerHeartbeatCommandTest extends TestCase
             'worker_id' => 'payments-01',
             'queue' => 'critical-payments',
             'release_version' => '0.2.0-test',
+            'boot_id' => str_repeat('a', 32),
         ]);
     }
 
