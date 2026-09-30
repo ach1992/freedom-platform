@@ -6,6 +6,7 @@ namespace App\Modules\Operations\Application;
 
 use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
+use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
 use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
 use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
 use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
@@ -30,6 +31,7 @@ final readonly class UpdateManager
         private ReleaseActivator $releases,
         private RestoreMaintenanceCoordinator $maintenance,
         private UpdateMutationFence $mutationFence,
+        private UpdateRecoveryRestore $recoveryRestore,
         private Clock $clock,
         private RandomGenerator $random,
     ) {}
@@ -65,6 +67,7 @@ final readonly class UpdateManager
         $report['schema_before_sha256'] = $schemaBefore;
         $report['schema_target_sha256'] = $package->toSchemaSha256;
         $report['rollback_code_compatible_after'] = $package->previousCodeCompatibleWith($package->toSchemaSha256);
+        $report['previous_application_version'] = $package->fromApplicationVersion;
 
         if (! $apply) {
             $report['status'] = 'dry_run_completed';
@@ -396,6 +399,47 @@ final readonly class UpdateManager
         }
     }
 
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 SEC-001 QUA-001 */
+    public function recover(
+        string $updateRunId,
+        bool $apply = false,
+        ?string $confirmation = null,
+    ): UpdateRunResult {
+        if (preg_match('/\\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\\z/', $updateRunId) !== 1) {
+            throw new RuntimeException('The controlled update recovery run identifier is invalid.');
+        }
+        if ($apply && ! $this->configuration->enabled) {
+            throw new RuntimeException('Controlled update execution is disabled by configuration.');
+        }
+        if ($apply && (! is_string($confirmation) || ! hash_equals($updateRunId, $confirmation))) {
+            throw new RuntimeException('Controlled update recovery confirmation does not match the exact update run.');
+        }
+
+        $source = $this->workspace->loadReport($updateRunId);
+        $failedRelease = $this->reportStringField($source, 'release_id');
+        $previousRelease = $this->reportStringField($source, 'previous_release');
+        $backupId = $this->reportStringField($source, 'pre_update_backup_id');
+        $backupCompletedAt = $this->reportStringField($source, 'pre_update_backup_completed_at');
+
+        $restore = $this->recoveryRestore->recoverUpdate($updateRunId, $apply);
+        $status = match ($restore->status) {
+            'dry_run_completed' => 'restore_recovery_dry_run_completed',
+            'completed' => 'restore_recovered',
+            'completed_reporting_failed' => 'restore_recovered_reporting_failed',
+            default => throw new RuntimeException('Controlled update recovery returned an unexpected Restore status.'),
+        };
+
+        return new UpdateRunResult(
+            $updateRunId,
+            $status,
+            $failedRelease,
+            $previousRelease,
+            $backupId,
+            $backupCompletedAt,
+            $status === 'restore_recovery_dry_run_completed',
+        );
+    }
+
     /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 QUA-001 */
     public function rollback(bool $apply = false, ?string $confirmation = null): UpdateRunResult
     {
@@ -436,6 +480,7 @@ final readonly class UpdateManager
         $report['pre_update_backup_id'] = $backupId;
         $report['pre_update_backup_completed_at'] = $backupCompletedAt;
         $report['potential_data_loss_window_started_at'] = $backupCompletedAt;
+        $report['previous_application_version'] = $previousApplicationVersion;
 
         if (! $compatible) {
             $report['status'] = 'rollback_incompatible_restore_required';
@@ -793,6 +838,7 @@ final readonly class UpdateManager
             'report_finalized' => false,
             'release_id' => $releaseId,
             'previous_release' => $previousRelease,
+            'previous_application_version' => null,
             'package_sha256' => null,
             'manifest_sha256' => null,
             'schema_before_sha256' => null,
@@ -852,6 +898,17 @@ final readonly class UpdateManager
         $value = $identity[$field] ?? null;
         if (! is_string($value) || $value === '') {
             throw new RuntimeException('The installed release rollback identity is incomplete.');
+        }
+
+        return $value;
+    }
+
+    /** @param array<string, mixed> $report */
+    private function reportStringField(array $report, string $field): string
+    {
+        $value = $report[$field] ?? null;
+        if (! is_string($value) || $value === '') {
+            throw new RuntimeException('The protected update recovery report is incomplete.');
         }
 
         return $value;
