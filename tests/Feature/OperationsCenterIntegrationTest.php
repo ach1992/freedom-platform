@@ -230,6 +230,29 @@ final class OperationsCenterIntegrationTest extends TestCase
         self::assertSame(1, $fakeOutbox->calls);
         self::assertSame(1, $result->examined);
         self::assertSame(1, DB::table('audit_logs')->where('action', 'operations.outbox.dispatch_due')->count());
+
+        $replayed = $actions->dispatchDueOutbox(
+            $ownerUserId,
+            25,
+            'operations.test.dispatch-owner',
+            'operations-test-dispatch-owner-request',
+        );
+        self::assertSame(1, $fakeOutbox->calls);
+        self::assertSame($result->toArray(), $replayed->toArray());
+        self::assertSame(1, DB::table('audit_logs')->where('action', 'operations.outbox.dispatch_due')->count());
+
+        try {
+            $actions->dispatchDueOutbox(
+                $ownerUserId,
+                24,
+                'operations.test.dispatch-owner',
+                'operations-test-dispatch-owner-request',
+            );
+            self::fail('Conflicting Operations Center action replay must fail closed.');
+        } catch (RuntimeException) {
+            $this->addToAssertionCount(1);
+        }
+        self::assertSame(1, $fakeOutbox->calls);
     }
 
     public function test_snapshot_is_permission_gated_bounded_and_does_not_surface_panel_secrets(): void
