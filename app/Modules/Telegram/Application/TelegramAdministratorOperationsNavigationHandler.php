@@ -247,8 +247,8 @@ final readonly class TelegramAdministratorOperationsNavigationHandler
                 $action->requestKey.':operations-dispatch-outbox',
             );
             $this->showSnapshot($action, 'dispatch_completed');
-        } catch (AuthorizationException) {
-            throw;
+        } catch (AuthorizationException $exception) {
+            throw $exception;
         } catch (Throwable) {
             $this->showSnapshot($action, 'operation_unavailable');
         }
