@@ -66,7 +66,7 @@ return new class extends Migration
         });
 
         DB::statement("ALTER TABLE operational_alert_events ADD CONSTRAINT operational_alert_events_type_chk CHECK (event_type IN ('acknowledged','resolved'))");
-        DB::statement("ALTER TABLE operational_alert_events ADD CONSTRAINT operational_alert_events_hash_chk CHECK (CHAR_LENGTH(request_key_hash) = 64)");
+        DB::statement('ALTER TABLE operational_alert_events ADD CONSTRAINT operational_alert_events_hash_chk CHECK (CHAR_LENGTH(request_key_hash) = 64)');
         DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_audience_chk CHECK (audience IN ('report_channel','owner'))");
         DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_state_chk CHECK (state IN ('pending','retry','leased','queued','failed'))");
         DB::statement('ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_activation_chk CHECK (activation_sequence >= 1)');
@@ -81,7 +81,7 @@ return new class extends Migration
         if (DB::table('operational_alert_events')->exists()
             || DB::table('operational_alert_deliveries')->exists()
         ) {
-            throw new \RuntimeException('Cannot roll back operational alert authority while durable evidence exists.');
+            throw new RuntimeException('Cannot roll back operational alert authority while durable evidence exists.');
         }
 
         DB::unprepared('DROP TRIGGER IF EXISTS operational_alert_events_update_guard');
