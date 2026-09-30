@@ -66,7 +66,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
     }
 
     /**
-     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}|null $recovery
+     * @param  array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}|null  $recovery
      */
     private function execute(string $backupId, bool $apply, ?array $recovery): RestoreRunResult
     {
@@ -490,7 +490,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
     }
 
     /**
-     * @param array<string, mixed> $report
+     * @param  array<string, mixed>  $report
      * @return array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}
      */
     private function recoveryContext(array $report, string $updateRunId): array
@@ -550,8 +550,8 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
     }
 
     /**
-     * @param array<string, mixed> $report
-     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool} $recovery
+     * @param  array<string, mixed>  $report
+     * @param  array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}  $recovery
      */
     private function assertRecoveryReportMatches(array $report, array $recovery): void
     {
@@ -571,7 +571,7 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
     }
 
     /**
-     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool} $recovery
+     * @param  array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}  $recovery
      */
     private function recordUpdateRecoveryFailure(
         array $recovery,
