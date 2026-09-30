@@ -410,8 +410,16 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                 $report['scheduler_mutation_fence_retained'] = false;
                 $report['worker_quiescence_retained'] = false;
                 $report['containment_retained'] = false;
+            } elseif ($recovery !== null && $maintenanceEntered) {
+                $containment = $this->retainContainment($maintenanceRunId);
+                $maintenanceEntered = $containment['maintenance_owned'];
+                $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
+                $report['worker_quiescence_retained'] = $containment['workers_quiesced'];
+                $report['containment_retained'] = $containment['maintenance_owned']
+                    && $containment['scheduler_fence_held']
+                    && $containment['workers_quiesced'];
             } elseif ($mutationStarted) {
-                $containment = $this->retainContainment($restoreRunId);
+                $containment = $this->retainContainment($maintenanceRunId);
                 $maintenanceEntered = $containment['maintenance_owned'];
                 $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
                 $report['worker_quiescence_retained'] = $containment['workers_quiesced'];
@@ -420,13 +428,13 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                     && $containment['workers_quiesced'];
             } elseif ($maintenanceEntered) {
                 try {
-                    $this->maintenance->leave($restoreRunId);
+                    $this->maintenance->leave($maintenanceRunId);
                     $maintenanceEntered = false;
                     $report['scheduler_mutation_fence_retained'] = false;
                     $report['worker_quiescence_retained'] = false;
                     $report['containment_retained'] = false;
                 } catch (Throwable) {
-                    $containment = $this->retainContainment($restoreRunId);
+                    $containment = $this->retainContainment($maintenanceRunId);
                     $maintenanceEntered = $containment['maintenance_owned'];
                     $report['scheduler_mutation_fence_retained'] = $containment['scheduler_fence_held'];
                     $report['worker_quiescence_retained'] = $containment['workers_quiesced'];
@@ -457,6 +465,18 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
                 $this->workspace->storeReport($restoreRunId, $report);
             } catch (Throwable) {
                 // The command still fails closed if protected reporting itself is unavailable.
+            }
+
+            if ($recovery !== null && ! $resumeCompleted) {
+                $this->recordUpdateRecoveryFailure(
+                    $recovery,
+                    $restoreRunId,
+                    $phase,
+                    $maintenanceEntered,
+                    $report['scheduler_mutation_fence_retained'] === true,
+                    $report['worker_quiescence_retained'] === true,
+                    $report['containment_retained'] === true,
+                );
             }
 
             throw new RuntimeException(
