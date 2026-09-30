@@ -6,7 +6,6 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use RuntimeException;
 
 return new class extends Migration
 {
@@ -82,7 +81,7 @@ return new class extends Migration
         if (DB::table('operational_alert_events')->exists()
             || DB::table('operational_alert_deliveries')->exists()
         ) {
-            throw new RuntimeException('Cannot roll back operational alert authority while durable evidence exists.');
+            throw new \RuntimeException('Cannot roll back operational alert authority while durable evidence exists.');
         }
 
         DB::unprepared('DROP TRIGGER IF EXISTS operational_alert_events_update_guard');
