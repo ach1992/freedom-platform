@@ -10,7 +10,7 @@ return [
         'Identity' => ['AccessControl'],
         'Installer' => ['Operations'],
         'Localization' => ['AccessControl'],
-        'Operations' => ['Payments'],
+        'Operations' => ['AccessControl', 'Payments'],
         'Orders' => ['AccessControl', 'Agents', 'Telegram'],
         'Panels' => ['AccessControl'],
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
