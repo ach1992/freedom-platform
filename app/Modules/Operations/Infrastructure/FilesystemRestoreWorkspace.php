@@ -206,7 +206,7 @@ final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
         return $reports;
     }
 
-    private function safeOperationalToken    private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string
+    private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string
     {
         if ($value === null && $nullable) {
             return null;
