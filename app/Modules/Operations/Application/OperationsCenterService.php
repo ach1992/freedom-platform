@@ -406,7 +406,7 @@ final readonly class OperationsCenterService
         return 'observed';
     }
 
-    private function operationDetail(?string $status, ?string $failureCode): ?string
+    private function operationDetail(?string $status, ?string $failureCode): string
     {
         if ($status === null) {
             return 'no_durable_report';
