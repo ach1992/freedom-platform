@@ -221,3 +221,14 @@ Schedule::command('operations:backup', [
     ->onOneServer()
     ->runInBackground()
     ->when($backupEnabled);
+
+Schedule::command('reporting:run-schedules', [
+    '--limit' => 5,
+    '--json' => true,
+])
+    ->name('reporting.run-schedules')
+    ->everyMinute()
+    // Per-schedule leases and stable Telegram request keys provide durable retry/idempotency.
+    // This bounded Scheduler lock prevents concurrent scans while recovering promptly after crashes.
+    ->withoutOverlapping(10)
+    ->onOneServer();

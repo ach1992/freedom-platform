@@ -121,6 +121,9 @@ Target layout:
 
 Only `current/public` is web-exposed. CLI and LSPHP PHP 8.4 runtimes are independently verified. One Scheduler Cron drives scheduled work; supervised workers process isolated queues.
 
+
+Phase 0.8 reporting is one permission-aware Application boundary over canonical domain authorities, not a replicated reporting store. `reports.view` only opens the reporting surface; each metric is additionally intersected with the existing permission for its source domain, and the aggregate snapshot intentionally excludes restricted customer/payment secrets. CSV/XLSX serialization applies the reporting masker and spreadsheet-injection fence. Interactive summaries use confidential Telegram presentation, report-channel summaries use the reviewed aggregate-text Outbox gateway, and document exports persist only a protected range/format reference so the file is regenerated with current authorization at the provider boundary. Configurable `report_schedules` are scanned by `reporting:run-schedules` inside the same Laravel Scheduler; leases plus stable per-occurrence Telegram request keys make crash retry idempotent without per-report Cron entries.
+
 Runtime readiness is a fail-closed deployment contract, not only a reachability probe. The shared `RuntimeHealthProbe` verifies the supported MariaDB family/version/server identity and connection charset/collation/strict-mode assumptions, authenticated Redis for active queue/cache dependencies, Redis queue `after_commit`, and `retry_after` above every reviewed Supervisor worker timeout. The guarded release-switch invokes the same `health:check --critical` path after activation so deployment postflight cannot drift into a separate shell-only rule set.
 
 ## Source of implementation truth

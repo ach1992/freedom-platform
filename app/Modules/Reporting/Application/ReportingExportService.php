@@ -13,6 +13,7 @@ final readonly class ReportingExportService
         private AdministratorUserPermissionAuthorizer $authorizer,
         private DatabaseReportingSnapshotService $reports,
         private ReportExporter $exporter,
+        private ReportValueMasker $masker,
         private ReportingAudit $audit,
     ) {}
 
@@ -36,9 +37,10 @@ final readonly class ReportingExportService
             $requestKey.':view',
         );
         $basename = 'report-'.preg_replace('/[^a-z0-9_-]+/i', '-', $range->code).'-'.$range->endsBeforeUtc->format('Ymd-His');
+        $dataset = $this->masker->maskDataset($snapshot->exportDataset());
         $file = $format === 'csv'
-            ? $this->exporter->csv($snapshot->exportDataset(), $basename)
-            : $this->exporter->xlsx($snapshot->exportDataset(), $basename);
+            ? $this->exporter->csv($dataset, $basename)
+            : $this->exporter->xlsx($dataset, $basename);
 
         $this->audit->recordExport(
             $administratorId,

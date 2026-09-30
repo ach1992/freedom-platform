@@ -56,5 +56,13 @@ final class ReportExporterTest extends TestCase
         self::assertSame('0x1234********cdef', $masked['wallet_address']);
         self::assertSame('[MASKED_SUBSCRIPTION_LINK]', $masked['subscription_link']);
         self::assertSame('active', $masked['status']);
+
+        $dataset = $masker->maskDataset(new ReportExportDataset(
+            ['phone_number', 'card_number', 'status'],
+            [['09123456789', '6037991234567890', 'active']],
+        ));
+        self::assertSame('091******89', $dataset->rows[0][0]);
+        self::assertSame('6037********7890', $dataset->rows[0][1]);
+        self::assertSame('active', $dataset->rows[0][2]);
     }
 }

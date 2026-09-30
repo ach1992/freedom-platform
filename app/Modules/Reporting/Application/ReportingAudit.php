@@ -87,6 +87,26 @@ final readonly class ReportingAudit
     }
 
     /** @param array<string, bool|int|string|null> $safeData */
+    public function recordScheduleExecution(
+        int $administratorId,
+        string $schedulePublicId,
+        array $safeData,
+        string $correlationId,
+        string $requestKey,
+    ): void {
+        $this->record(
+            $administratorId,
+            'report.schedule_execute',
+            $schedulePublicId,
+            $safeData,
+            'report_schedule_executed',
+            'Permission-aware report schedule execution recorded.',
+            $correlationId,
+            $requestKey,
+        );
+    }
+
+    /** @param array<string, bool|int|string|null> $safeData */
     public function recordSchedule(
         int $administratorId,
         string $schedulePublicId,

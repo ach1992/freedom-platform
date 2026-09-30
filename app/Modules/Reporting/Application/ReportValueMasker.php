@@ -34,6 +34,23 @@ final class ReportValueMasker
         return $row;
     }
 
+    public function maskDataset(ReportExportDataset $dataset): ReportExportDataset
+    {
+        $rows = [];
+        foreach ($dataset->rows as $row) {
+            $masked = [];
+            foreach ($row as $index => $value) {
+                $field = $dataset->headers[$index];
+                $masked[] = is_string($value) && isset(self::SENSITIVE_FIELDS[$field])
+                    ? $this->mask($field, $value)
+                    : $value;
+            }
+            $rows[] = $masked;
+        }
+
+        return new ReportExportDataset($dataset->headers, $rows);
+    }
+
     public function mask(string $field, string $value): string
     {
         if ($value === '') {

@@ -100,6 +100,7 @@ final class ConfidentialTelegramPresentationProvenanceTest extends TestCase
     {
         self::assertSame([
             'app/Modules/Telegram/Application/TelegramAdministratorAccessNavigationHandler.php',
+            'app/Modules/Telegram/Application/TelegramAdministratorReportingNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdministratorServiceOperationsNavigationHandler.php',
             'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',

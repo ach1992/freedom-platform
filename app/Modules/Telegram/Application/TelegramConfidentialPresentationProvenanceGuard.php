@@ -19,6 +19,7 @@ final class TelegramConfidentialPresentationProvenanceGuard
     /** @var list<string> */
     public const REVIEWED_SOURCE_FILES = [
         'app/Modules/Telegram/Application/TelegramAdministratorAccessNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramAdministratorReportingNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorServiceOperationsNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',

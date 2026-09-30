@@ -43,6 +43,7 @@ return [
         'app/Modules/Operations/Application/BackupTelegramArtifactPresentationSource.php|App\\Modules\\Telegram\\Application\\Contracts\\TelegramBackupArtifactPresentationSource',
         'app/Modules/Operations/Application/BackupTelegramArtifactPresentationSource.php|App\\Modules\\Telegram\\Application\\ProtectedTelegramPresentation',
         'app/Modules/Operations/Application/BackupTelegramArtifactPresentationSource.php|App\\Modules\\Telegram\\Application\\TelegramProtectedPresentationReference',
+        'app/Modules/Operations/Application/OperationsReportingScheduledTaskRunRecorder.php|App\Modules\Reporting\Application\Contracts\ReportingScheduledTaskRunRecorder',
         'app/Modules/Reporting/Application/ReportingTelegramExportPresentationSource.php|App\Modules\Telegram\Application\Contracts\TelegramReportingExportPresentationSource',
         'app/Modules/Reporting/Application/ReportingTelegramExportPresentationSource.php|App\Modules\Telegram\Application\ProtectedTelegramPresentation',
         'app/Modules/Reporting/Application/ReportingTelegramExportPresentationSource.php|App\Modules\Telegram\Application\TelegramProtectedPresentationReference',
@@ -65,6 +66,7 @@ return [
     // their protected/reference delivery authority instead.
     'telegram_confidential_presentation_sources' => [
         'app/Modules/Telegram/Application/TelegramAdministratorAccessNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramAdministratorReportingNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorSearchNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdministratorServiceOperationsNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramAdminCustomerNavigationHandler.php',
@@ -677,6 +679,7 @@ return [
         'service_delivery_effects' => 'Provisioning',
         'service_entitlement_grant_authorities' => 'Provisioning',
         'service_entitlement_grant_batches' => 'Provisioning',
+        'report_schedules' => 'Reporting',
         'service_entitlement_grant_items' => 'Provisioning',
         'service_entitlement_grant_notification_bindings' => 'Provisioning',
         'service_imports' => 'Provisioning',

@@ -6,12 +6,13 @@ namespace App\Modules\Reporting\Application;
 
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Reporting\Application\Contracts\ReportingExportDeliveryGateway;
+use App\Modules\Reporting\Application\Contracts\ReportingScheduledChannelDelivery;
 use App\Modules\Reporting\Application\Contracts\ReportingTextDeliveryGateway;
 use DomainException;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use RuntimeException;
 
-final readonly class ReportingDeliveryService
+final readonly class ReportingDeliveryService implements ReportingScheduledChannelDelivery
 {
     public function __construct(
         private AdministratorUserPermissionAuthorizer $authorizer,

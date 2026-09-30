@@ -12,10 +12,13 @@ use App\Modules\Payments\Application\Contracts\PaymentTransactionStatus;
 use App\Modules\Payments\Application\Contracts\ProviderOperationOutcome;
 use App\Modules\Payments\Application\Contracts\VerifiedPaymentEvent;
 use App\Modules\Payments\Application\PurchaseRefundService;
+use App\Modules\Provisioning\Application\InitialProvisioningQueueService;
 use App\Modules\Reporting\Application\DatabaseReportingSnapshotService;
 use App\Modules\Reporting\Application\ReportDateRange;
 use App\Modules\Reporting\Application\ReportMetric;
 use App\Modules\Reporting\Application\ReportSnapshot;
+use App\Modules\Support\Application\SupportTicketCreateRequest;
+use App\Modules\Support\Application\SupportTicketService;
 use App\Modules\Wallet\Application\LedgerEntryDraft;
 use App\Modules\Wallet\Application\LedgerPostingService;
 use App\Modules\Wallet\Application\WalletCorrectionService;
@@ -27,6 +30,7 @@ use Database\Seeders\CatalogAccessFoundationSeeder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\ReportingAccessFoundationSeeder;
+use Database\Seeders\SupportTicketCategorySeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -44,6 +48,7 @@ final class ReportingSnapshotIntegrationTest extends TestCase
         parent::setUp();
         $this->seed(IdentityAccessFoundationSeeder::class);
         $this->seed(ReportingAccessFoundationSeeder::class);
+        $this->seed(SupportTicketCategorySeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
         $this->bootPurchaseOrderClock();
@@ -52,7 +57,7 @@ final class ReportingSnapshotIntegrationTest extends TestCase
     public function test_owner_report_reconciles_captured_sales_refund_adjustment_and_wallet_liability(): void
     {
         $settlement = $this->createPurchaseOrderSettlement('reporting');
-        $this->app->make(PurchaseOrderService::class)->createFromSettlement(
+        $order = $this->app->make(PurchaseOrderService::class)->createFromSettlement(
             $settlement->settlementPublicId,
             $this->purchaseOrderCorrelation('create-reporting'),
         );
@@ -102,6 +107,11 @@ final class ReportingSnapshotIntegrationTest extends TestCase
             $this->accessContext($ownerAdministratorId, 'reporting-correction-execute'),
         );
 
+        $this->app->make(InitialProvisioningQueueService::class)->queueInitial(
+            $order->orderPublicId,
+            $this->purchaseOrderCorrelation('queue-reporting'),
+        );
+
         $ownerUserId = (int) DB::table('administrators')->where('id', $ownerAdministratorId)->value('user_id');
         $range = new ReportDateRange(
             'integration',
@@ -123,8 +133,74 @@ final class ReportingSnapshotIntegrationTest extends TestCase
         self::assertSame(25_000, $this->metric($snapshot, 'wallet.exact_adjustment_irr'));
         self::assertSame(125_000, $this->metric($snapshot, 'wallet.liability_irr'));
         self::assertSame(1, $this->metric($snapshot, 'gateways.captured_count', 'order_gateway_reporting'));
+        self::assertSame(1, $this->metric($snapshot, 'services.created'));
+        self::assertSame(1, $this->metric($snapshot, 'services.current_inventory_by_lifecycle_state', 'active'));
         self::assertSame(1, DB::table('audit_logs')->where('action', 'report.view')->count());
         self::assertSame(64, strlen((string) DB::table('audit_logs')->where('action', 'report.view')->value('request_fingerprint')));
+    }
+
+    public function test_owner_report_keeps_representative_domain_dimensions_and_zero_states_visible(): void
+    {
+        $ownerAdministratorId = $this->ownerAdministrator();
+        $ownerUserId = (int) DB::table('administrators')->where('id', $ownerAdministratorId)->value('user_id');
+        $agentUserId = $this->agentSubject('reporting-dimension-agent');
+        $customerUserId = $this->quoteUser('customer');
+
+        $this->app->make(SupportTicketService::class)->create(new SupportTicketCreateRequest(
+            $customerUserId,
+            'other',
+            'Reporting dimension ticket',
+            'Ticket fixture for reporting dimension acceptance.',
+            'reporting-dimension-ticket',
+        ));
+
+        DB::table('panel_connections')->insert([
+            'code' => 'reporting-dimension-panel',
+            'provider_type' => 'fake',
+            'name_fa' => 'Reporting Fixture',
+            'name_en' => 'Reporting Fixture',
+            'base_url' => 'https://reporting-fixture.example.test',
+            'encrypted_credentials' => 'fixture-ciphertext',
+            'credential_key_version' => 1,
+            'tls_policy' => 'system_ca',
+            'custom_ca_disk' => null,
+            'custom_ca_path' => null,
+            'certificate_pin_sha256' => null,
+            'network_policy' => 'public_only',
+            'state' => 'disabled',
+            'last_test_status' => null,
+            'last_panel_version' => null,
+            'last_capabilities_hash' => null,
+            'last_tested_at' => null,
+            'version' => 1,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
+
+        $snapshot = $this->app->make(DatabaseReportingSnapshotService::class)->generate(
+            $ownerUserId,
+            new ReportDateRange(
+                'domain-dimensions',
+                new \DateTimeImmutable('2020-01-01T00:00:00+00:00'),
+                new \DateTimeImmutable('2030-01-01T00:00:00+00:00'),
+            ),
+            'reporting-domain-dimensions',
+            'reporting-domain-dimensions-request',
+        );
+
+        self::assertGreaterThan(0, $agentUserId);
+        self::assertSame(1, $this->metric($snapshot, 'agents.approved'));
+        self::assertSame(1, $this->metric($snapshot, 'tickets.created'));
+        self::assertSame(1, $this->metric($snapshot, 'panels.current_inventory', 'fake:disabled'));
+
+        // These always-present metrics must remain explicit zeroes rather than disappear silently.
+        self::assertSame(0, $this->metric($snapshot, 'services.created'));
+        self::assertSame(0, $this->metric($snapshot, 'referrals.accrued_count'));
+        self::assertSame(0, $this->metric($snapshot, 'referrals.accrued_irr'));
+        self::assertSame(0, $this->metric($snapshot, 'broadcasts.campaigns_created'));
+        self::assertSame(0, $this->metric($snapshot, 'broadcasts.recipients_sent'));
+        self::assertSame(0, $this->metric($snapshot, 'failures.failed_jobs'));
+        self::assertSame(0, $this->metric($snapshot, 'outbox.pending_with_error'));
     }
 
     public function test_non_owner_without_permission_is_denied_and_explicit_override_allows_view(): void
@@ -168,7 +244,31 @@ final class ReportingSnapshotIntegrationTest extends TestCase
 
         $snapshot = $service->generate($userId, $range, 'report-allowed-correlation', 'report-allowed-request');
         self::assertInstanceOf(ReportSnapshot::class, $snapshot);
-        self::assertSame(1, DB::table('audit_logs')->where('action', 'report.view')->count());
+        self::assertSame([], $snapshot->metrics, 'reports.view alone must not widen domain visibility.');
+
+        $identityPermissionId = (int) DB::table('permissions')->where('code', 'identity.customers.view')->value('id');
+        DB::table('administrator_permission_overrides')->insert([
+            'administrator_id' => $administratorId,
+            'permission_id' => $identityPermissionId,
+            'effect' => 'allow',
+            'changed_by_administrator_id' => null,
+            'reason_code' => 'reporting_domain_visibility_test',
+            'reason' => 'Grant customer visibility only for report-domain intersection test.',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $identitySnapshot = $service->generate(
+            $userId,
+            $range,
+            'report-identity-allowed-correlation',
+            'report-identity-allowed-request',
+        );
+        self::assertNotEmpty($identitySnapshot->metrics);
+        foreach ($identitySnapshot->metrics as $metric) {
+            self::assertStringStartsWith('users.', $metric->code);
+        }
+        self::assertSame(2, DB::table('audit_logs')->where('action', 'report.view')->count());
     }
 
     private function metric(ReportSnapshot $snapshot, string $code, ?string $dimension = null): int

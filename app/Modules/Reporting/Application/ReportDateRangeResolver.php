@@ -23,8 +23,22 @@ final readonly class ReportDateRangeResolver
         ?DateTimeImmutable $customStartUtc = null,
         ?DateTimeImmutable $customEndUtc = null,
     ): ReportDateRange {
+        return $this->resolveAt(
+            $period,
+            $this->clock->now(),
+            $customStartUtc,
+            $customEndUtc,
+        );
+    }
+
+    public function resolveAt(
+        string $period,
+        DateTimeImmutable $nowUtc,
+        ?DateTimeImmutable $customStartUtc = null,
+        ?DateTimeImmutable $customEndUtc = null,
+    ): ReportDateRange {
         $utc = new DateTimeZone('UTC');
-        $nowUtc = $this->clock->now()->setTimezone($utc);
+        $nowUtc = $nowUtc->setTimezone($utc);
         $tehran = new DateTimeZone(self::BUSINESS_TIMEZONE);
         $nowLocal = $nowUtc->setTimezone($tehran);
 

@@ -50,17 +50,27 @@ final readonly class TelegramReportingBroadcastMetricsSource implements Reportin
             ->orderBy('state');
         $this->applyRange($failures, 'provider_boundary_finished_at', $range);
 
+        $failureTotal = 0;
         /** @var object{state:string,aggregate:int|string} $row */
         foreach ($failures->get() as $row) {
+            $count = $this->toInt($row->aggregate);
+            $failureTotal += $count;
             $metrics[] = new ReportMetric(
                 'broadcasts',
                 'broadcasts.delivery_failure_events',
                 'Broadcast delivery failure events',
-                $this->toInt($row->aggregate),
+                $count,
                 'count',
                 $row->state,
             );
         }
+        $metrics[] = new ReportMetric(
+            'broadcasts',
+            'broadcasts.delivery_failure_events_total',
+            'Broadcast delivery failure events total',
+            $failureTotal,
+            'count',
+        );
 
         return $metrics;
     }
