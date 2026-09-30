@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Modules\Operations\Application\OperationalAlertLifecycleService;
 use App\Modules\Operations\Application\OperationsCenterActionService;
 use App\Modules\Operations\Application\OperationsCenterService;
@@ -255,6 +258,158 @@ final class OperationsCenterIntegrationTest extends TestCase
         self::assertSame(1, $fakeOutbox->calls);
     }
 
+    public function test_snapshot_uses_canonical_outbox_claimability_and_hides_failed_job_and_outbox_payloads(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        $now = now('UTC');
+
+        DB::table('failed_jobs')->insert([
+            'uuid' => (string) Str::uuid(),
+            'connection' => 'redis',
+            'queue' => 'default',
+            'payload' => '{"secret":"failed-job-payload-secret"}',
+            'exception' => 'failed-job-exception-secret',
+            'failed_at' => $now->copy()->subMinute(),
+        ]);
+
+        $this->insertOutboxFixture('pending', 'pending', $now->copy()->subMinutes(5), null, null, 'pending-secret-destination');
+        $this->insertOutboxFixture('retry', 'retry', $now->copy()->subMinutes(4), null, null, 'retry-secret-destination');
+        $this->insertOutboxFixture('active-lease', 'leased', $now->copy()->subMinutes(3), $now->copy()->addMinutes(5), null, 'active-lease-secret');
+        $this->insertOutboxFixture('expired-lease', 'leased', $now->copy()->subMinutes(2), $now->copy()->subMinute(), null, 'expired-lease-secret');
+        $this->insertOutboxFixture('review', 'review_required', $now->copy()->subMinute(), null, null, 'review-secret-destination');
+        $this->insertOutboxFixture('processed', 'processed', $now->copy()->subMinutes(10), null, $now->copy()->subMinutes(9), 'processed-secret-destination');
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        self::assertSame('manual_review', $snapshot->fact('queue.failed_jobs')?->state);
+        self::assertSame(1, $snapshot->fact('queue.failed_jobs')?->value);
+        self::assertSame('observed', $snapshot->fact('outbox.due_backlog')?->state);
+        self::assertSame(3, $snapshot->fact('outbox.due_backlog')?->value);
+        self::assertSame('manual_review', $snapshot->fact('outbox.review_required')?->state);
+        self::assertSame(1, $snapshot->fact('outbox.review_required')?->value);
+
+        $safeJson = json_encode(
+            array_map(static fn ($fact): array => $fact->safeArray(), $snapshot->facts),
+            JSON_THROW_ON_ERROR,
+        );
+        foreach ([
+            'failed-job-payload-secret',
+            'failed-job-exception-secret',
+            'pending-secret-destination',
+            'retry-secret-destination',
+            'active-lease-secret',
+            'expired-lease-secret',
+            'review-secret-destination',
+            'processed-secret-destination',
+        ] as $secret) {
+            self::assertStringNotContainsString($secret, $safeJson);
+        }
+    }
+
+    public function test_snapshot_preserves_panel_and_worker_inventory_above_previous_row_bounds(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        $now = now('UTC');
+
+        $panels = [];
+        for ($index = 1; $index <= 125; $index++) {
+            $panels[] = [
+                'code' => 'operations-panel-'.$index,
+                'provider_type' => 'marzban',
+                'name_fa' => 'پنل '.$index,
+                'name_en' => 'Panel '.$index,
+                'base_url' => 'https://panel-'.$index.'.example.test/private',
+                'encrypted_credentials' => 'panel-credential-secret-'.$index,
+                'credential_key_version' => 1,
+                'tls_policy' => 'system_ca',
+                'custom_ca_disk' => null,
+                'custom_ca_path' => null,
+                'certificate_pin_sha256' => null,
+                'network_policy' => 'public_only',
+                'state' => 'disabled',
+                'last_test_status' => 'success',
+                'last_panel_version' => '1.0.0',
+                'last_capabilities_hash' => hash('sha256', 'operations-panel-capabilities-'.$index),
+                'last_tested_at' => $now,
+                'version' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+        DB::table('panel_connections')->insert($panels);
+
+        $workers = [];
+        for ($index = 1; $index <= 150; $index++) {
+            $workers[] = [
+                'worker_id' => 'operations-worker-'.$index,
+                'queue' => 'default',
+                'host_hash' => hash('sha256', 'operations-worker-host-'.$index),
+                'release_version' => 'test',
+                'boot_id' => null,
+                'last_seen_at' => $index <= 100 ? $now : $now->copy()->subHours(2),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+        DB::table('worker_heartbeats')->insert($workers);
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        self::assertSame(125, $snapshot->fact('panels.inventory')?->value);
+        self::assertSame(125, $snapshot->fact('panels.provider.marzban')?->value);
+        self::assertSame(150, $snapshot->fact('workers.heartbeat')?->value);
+        self::assertSame('degraded', $snapshot->fact('workers.heartbeat')?->state);
+        self::assertStringContainsString('fresh=100;stale=50;', (string) $snapshot->fact('workers.heartbeat')?->detail);
+
+        $safeJson = json_encode(
+            array_map(static fn ($fact): array => $fact->safeArray(), $snapshot->facts),
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertStringNotContainsString('panel-credential-secret-', $safeJson);
+        self::assertStringNotContainsString('example.test/private', $safeJson);
+    }
+
+    public function test_snapshot_consumes_durable_backup_update_and_restore_status_authorities(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+
+        $backup = $this->createMock(BackupRepository::class);
+        $backup->method('operationalStatus')->willReturn([
+            'completed_count' => 2,
+            'latest_bytes' => 4096,
+            'latest_completed_at' => '2026-09-30T08:00:00+00:00',
+        ]);
+        $update = $this->createMock(UpdateWorkspace::class);
+        $update->method('operationalStatus')->willReturn([
+            'current_release_id' => 'release-20260930',
+            'application_version' => '0.8.0',
+            'latest_status' => 'failed_pre_mutation',
+            'latest_failure_code' => 'preflight_failed',
+            'latest_completed_at' => '2026-09-30T08:01:00+00:00',
+        ]);
+        $restore = $this->createMock(RestoreWorkspace::class);
+        $restore->method('operationalStatus')->willReturn([
+            'latest_status' => 'completed',
+            'latest_failure_code' => null,
+            'latest_completed_at' => '2026-09-30T08:02:00+00:00',
+        ]);
+        $this->app->instance(BackupRepository::class, $backup);
+        $this->app->instance(UpdateWorkspace::class, $update);
+        $this->app->instance(RestoreWorkspace::class, $restore);
+
+        config()->set('operations.backup.enabled', true);
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+
+        self::assertSame('observed', $snapshot->fact('backup.runtime')?->state);
+        self::assertSame(2, $snapshot->fact('backup.completed')?->value);
+        self::assertSame('release-20260930;app=0.8.0', $snapshot->fact('release.version')?->detail);
+        self::assertSame('degraded', $snapshot->fact('update.latest')?->state);
+        self::assertSame('status=failed_pre_mutation;failure_code=preflight_failed', $snapshot->fact('update.latest')?->detail);
+        self::assertSame('observed', $snapshot->fact('restore.latest')?->state);
+        self::assertSame('status=completed', $snapshot->fact('restore.latest')?->detail);
+    }
+
     public function test_snapshot_is_permission_gated_bounded_and_does_not_surface_panel_secrets(): void
     {
         $administratorId = $this->ownerAdministrator();
@@ -351,6 +506,38 @@ final class OperationsCenterIntegrationTest extends TestCase
         } catch (AuthorizationException) {
             $this->addToAssertionCount(1);
         }
+    }
+
+    private function insertOutboxFixture(
+        string $name,
+        string $state,
+        mixed $availableAt,
+        mixed $leasedUntil,
+        mixed $processedAt,
+        string $secret,
+    ): void {
+        $payload = json_encode(['destination' => $secret, 'body' => 'payload-'.$secret], JSON_THROW_ON_ERROR);
+        DB::table('outbox_messages')->insert([
+            'id' => (string) Str::uuid(),
+            'event_key' => 'operations:test:'.$name,
+            'event_type' => 'operations.test',
+            'aggregate_type' => 'operations_test',
+            'aggregate_id' => $name,
+            'payload' => $payload,
+            'payload_hash' => hash('sha256', $payload),
+            'correlation_id' => 'operations-test-'.$name,
+            'available_at' => $availableAt,
+            'processed_at' => $processedAt,
+            'dispatch_state' => $state,
+            'lease_token' => $state === 'leased' ? 'operations-lease-'.$name : null,
+            'leased_until' => $leasedUntil,
+            'review_reason' => $state === 'review_required' ? 'operations_test_review' : null,
+            'attempts' => $state === 'retry' ? 1 : 0,
+            'last_error_class' => null,
+            'last_error_code' => null,
+            'created_at' => now('UTC'),
+            'updated_at' => now('UTC'),
+        ]);
     }
 }
 
