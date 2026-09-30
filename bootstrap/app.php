@@ -7,6 +7,7 @@ use App\Modules\Installer\Presentation\Console\IssueInstallerTokenCommand;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
+use App\Modules\Operations\Presentation\Console\ApplyUpdateCommand;
 use App\Modules\Operations\Presentation\Console\CheckOutboxContractRetirementCommand;
 use App\Modules\Operations\Presentation\Console\CheckWorkerHeartbeatsCommand;
 use App\Modules\Operations\Presentation\Console\CreateBackupCommand;
@@ -14,8 +15,10 @@ use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\QueueBackupTelegramExportCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
+use App\Modules\Operations\Presentation\Console\RecoverUpdateCommand;
 use App\Modules\Operations\Presentation\Console\RestoreBackupCommand;
 use App\Modules\Operations\Presentation\Console\RestoreRuntimeAttestCommand;
+use App\Modules\Operations\Presentation\Console\RollbackUpdateCommand;
 use App\Modules\Payments\Presentation\Console\AlternativePaymentMaintenanceCommand;
 use App\Modules\Payments\Presentation\Console\PurchasePaymentMaintenanceCommand;
 use App\Modules\Promotions\Presentation\Console\ProcessReferralRewardsCommand;
@@ -52,6 +55,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withCommands([
+        ApplyUpdateCommand::class,
         CheckOutboxContractRetirementCommand::class,
         CheckWorkerHeartbeatsCommand::class,
         CreateBackupCommand::class,
@@ -69,8 +73,10 @@ return Application::configure(basePath: dirname(__DIR__))
         ScanSupportAlertsCommand::class,
         ProcessReferralRewardsCommand::class,
         RecordWorkerHeartbeatCommand::class,
+        RecoverUpdateCommand::class,
         RestoreBackupCommand::class,
         RestoreRuntimeAttestCommand::class,
+        RollbackUpdateCommand::class,
         AlternativePaymentMaintenanceCommand::class,
         PurchasePaymentMaintenanceCommand::class,
         ProcessTelegramBroadcastsCommand::class,

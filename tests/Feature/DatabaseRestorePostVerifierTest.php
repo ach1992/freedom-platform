@@ -65,6 +65,7 @@ final class DatabaseRestorePostVerifierTest extends TestCase
         self::assertSame(0, $result['service_violations']);
         self::assertTrue($result['runtime_health']);
         self::assertSame(str_repeat('a', 64), $runtime->expectedAuthorityFingerprint);
+        self::assertNull($runtime->releasePath);
     }
 
     public function test_valid_awaiting_payment_purchase_order_is_not_a_restore_reconciliation_violation(): void
@@ -314,8 +315,11 @@ final class RecordingRestoreRuntimeHealthVerifier implements RestoreRuntimeHealt
 {
     public ?string $expectedAuthorityFingerprint = null;
 
-    public function verify(string $expectedAuthorityFingerprint): void
+    public ?string $releasePath = null;
+
+    public function verify(string $expectedAuthorityFingerprint, ?string $releasePath = null): void
     {
         $this->expectedAuthorityFingerprint = $expectedAuthorityFingerprint;
+        $this->releasePath = $releasePath;
     }
 }

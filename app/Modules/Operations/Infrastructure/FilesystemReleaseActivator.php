@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\ReleaseHealthVerifier;
 use RuntimeException;
 use Throwable;
 
-final readonly class FilesystemReleaseActivator
+final readonly class FilesystemReleaseActivator implements ReleaseActivator
 {
     /** @requirement RUN-001 RUN-002 RUN-003 INS-001 SEC-010 QUA-011 */
     public function __construct(
@@ -17,26 +18,62 @@ final readonly class FilesystemReleaseActivator
         private string $journalPath,
     ) {}
 
-    /**
-     * @return array{status: 'activated'|'rolled_back'|'already_active', release: string, previous_release: string|null}
-     */
-    public function activate(string $releaseId): array
+    public function prepare(string $releaseId): string
     {
-        return $this->synchronized(fn (): array => $this->switchTo('activate', $releaseId));
+        return $this->synchronized(function () use ($releaseId): string {
+            $root = $this->validatedRoot();
+            $releases = $this->validatedReleasesDirectory($root);
+            $candidate = $this->validatedCandidate($releases, $releaseId);
+            $shared = $this->validatedSharedResources($root);
+            $this->recoverTemporaryLink($root);
+            $this->prepareSharedLinks($candidate, $shared['environment'], $shared['storage']);
+
+            return $candidate;
+        });
+    }
+
+    public function resolve(string $releaseId): string
+    {
+        return $this->synchronized(function () use ($releaseId): string {
+            $root = $this->validatedRoot();
+            $releases = $this->validatedReleasesDirectory($root);
+
+            return $this->validatedCandidate($releases, $releaseId);
+        });
     }
 
     /**
-     * @return array{status: 'activated'|'rolled_back'|'already_active', release: string, previous_release: string|null}
+     * @return array{status: 'activated'|'already_active', release: string, previous_release: string|null}
+     */
+    public function activate(string $releaseId, bool $automaticRollbackSafe = true): array
+    {
+        $result = $this->synchronized(
+            fn (): array => $this->switchTo('activate', $releaseId, $automaticRollbackSafe),
+        );
+        if ($result['status'] === 'rolled_back') {
+            throw new RuntimeException('Release activation returned an invalid action status.');
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array{status: 'rolled_back'|'already_active', release: string, previous_release: string|null}
      */
     public function rollbackTo(string $releaseId): array
     {
-        return $this->synchronized(fn (): array => $this->switchTo('rollback', $releaseId));
+        $result = $this->synchronized(fn (): array => $this->switchTo('rollback', $releaseId, true));
+        if ($result['status'] === 'activated') {
+            throw new RuntimeException('Release rollback returned an invalid action status.');
+        }
+
+        return $result;
     }
 
     /**
      * @return array{status: 'activated'|'rolled_back'|'already_active', release: string, previous_release: string|null}
      */
-    private function switchTo(string $action, string $releaseId): array
+    private function switchTo(string $action, string $releaseId, bool $automaticRollbackSafe): array
     {
         $root = $this->validatedRoot();
         $releases = $this->validatedReleasesDirectory($root);
@@ -75,6 +112,20 @@ final readonly class FilesystemReleaseActivator
         try {
             $this->healthVerifier->verify($candidate);
         } catch (Throwable) {
+            if (! $automaticRollbackSafe) {
+                $this->writeJournal([
+                    'action' => $action,
+                    'release' => $releaseId,
+                    'previous_release' => $previousRelease,
+                    'status' => 'verification_failed_rollback_withheld',
+                    'composer_lock_sha256' => hash_file('sha256', $candidate.'/composer.lock'),
+                ]);
+
+                throw new RuntimeException(
+                    'Release verification failed and automatic rollback was withheld by compatibility policy.',
+                );
+            }
+
             try {
                 $this->restorePrevious($root, $previousRelease);
                 $this->writeJournal([

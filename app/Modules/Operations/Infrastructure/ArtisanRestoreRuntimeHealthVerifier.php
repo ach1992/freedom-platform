@@ -37,9 +37,23 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
     ) {}
 
     /** @requirement BAK-002 OPS-001 SEC-001 QUA-001 */
-    public function verify(string $expectedAuthorityFingerprint): void
+    public function verify(string $expectedAuthorityFingerprint, ?string $releasePath = null): void
     {
-        $this->assertRuntime();
+        $artisanPath = $this->artisanPath;
+        $workingDirectory = $this->workingDirectory;
+        if ($releasePath !== null) {
+            if (! str_starts_with($releasePath, DIRECTORY_SEPARATOR)
+                || is_link($releasePath)
+                || ($resolvedRelease = realpath($releasePath)) === false
+                || ! is_dir($resolvedRelease)
+            ) {
+                throw new RuntimeException('The exact restored release runtime is unavailable.');
+            }
+            $artisanPath = $resolvedRelease.'/artisan';
+            $workingDirectory = $resolvedRelease;
+        }
+
+        $this->assertRuntime($artisanPath, $workingDirectory);
         if (preg_match('/\\A[0-9a-f]{64}\\z/', $expectedAuthorityFingerprint) !== 1) {
             throw new RuntimeException('The expected Restore authority fingerprint is invalid.');
         }
@@ -47,14 +61,14 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
         $process = new Process(
             [
                 $this->phpBinary,
-                $this->artisanPath,
+                $artisanPath,
                 'operations:restore-runtime-attest',
                 '--expected-authority-fingerprint='.$expectedAuthorityFingerprint,
                 '--json',
                 '--no-ansi',
                 '--no-interaction',
             ],
-            $this->workingDirectory,
+            $workingDirectory,
             $this->sanitizedEnvironment(),
             null,
             max(1, $this->timeoutSeconds),
@@ -111,7 +125,7 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
         return $environment;
     }
 
-    private function assertRuntime(): void
+    private function assertRuntime(string $artisanPath, string $workingDirectory): void
     {
         if (! str_starts_with($this->phpBinary, DIRECTORY_SEPARATOR)
             || ! is_file($this->phpBinary)
@@ -120,17 +134,17 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
             throw new RuntimeException('The restore health PHP runtime is unavailable.');
         }
 
-        if (! str_starts_with($this->artisanPath, DIRECTORY_SEPARATOR)
-            || ! is_file($this->artisanPath)
-            || is_link($this->artisanPath)
-            || ! is_readable($this->artisanPath)
+        if (! str_starts_with($artisanPath, DIRECTORY_SEPARATOR)
+            || ! is_file($artisanPath)
+            || is_link($artisanPath)
+            || ! is_readable($artisanPath)
         ) {
             throw new RuntimeException('The restore health entry point is unavailable.');
         }
 
-        if (! str_starts_with($this->workingDirectory, DIRECTORY_SEPARATOR)
-            || ! is_dir($this->workingDirectory)
-            || is_link($this->workingDirectory)
+        if (! str_starts_with($workingDirectory, DIRECTORY_SEPARATOR)
+            || ! is_dir($workingDirectory)
+            || is_link($workingDirectory)
             || $this->timeoutSeconds < 1
         ) {
             throw new RuntimeException('The restore health runtime configuration is invalid.');

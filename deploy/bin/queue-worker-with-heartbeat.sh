@@ -5,8 +5,15 @@ umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 APPLICATION_ROOT=${FREEDOM_PLATFORM_APPLICATION_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd -P)}
+APPLICATION_ROOT=$(CDPATH= cd -- "$APPLICATION_ROOT" && pwd -P)
 PHP_BINARY=${FREEDOM_PLATFORM_PHP_BINARY:-/www/server/php/84/bin/php}
 HEARTBEAT_INTERVAL=${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
+WORKER_RELEASE_ID=${WORKER_RELEASE_ID:-$(basename -- "$APPLICATION_ROOT")}
+if [[ -z "${WORKER_BOOT_ID:-}" ]]; then
+    [[ -r /proc/sys/kernel/random/uuid ]] || fail
+    WORKER_BOOT_ID=$(</proc/sys/kernel/random/uuid)
+    WORKER_BOOT_ID=${WORKER_BOOT_ID//-/}
+fi
 WORKER_PID=''
 HEARTBEAT_PID=''
 
@@ -20,14 +27,21 @@ fail() {
 [[ "${WORKER_HEARTBEAT_ENABLED:-}" == 'true' ]] || fail
 [[ "${WORKER_NAME:-}" =~ ^[A-Za-z0-9._-]{1,191}$ ]] || fail
 [[ "${WORKER_QUEUE_GROUP:-}" =~ ^[A-Za-z0-9._,-]{1,191}$ ]] || fail
+[[ "$WORKER_RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail
+[[ "$WORKER_RELEASE_ID" != *..* ]] || fail
+[[ "$WORKER_BOOT_ID" =~ ^[0-9a-f]{32}$ ]] || fail
 [[ "$HEARTBEAT_INTERVAL" =~ ^[0-9]+$ ]] || fail
 (( HEARTBEAT_INTERVAL >= 1 && HEARTBEAT_INTERVAL <= 300 )) || fail
 (( $# >= 1 )) || fail
+
+export WORKER_RELEASE_ID WORKER_BOOT_ID
 
 record_heartbeat() {
     if ! "$PHP_BINARY" "$APPLICATION_ROOT/artisan" operations:worker-heartbeat \
         "$WORKER_NAME" \
         "--queue=$WORKER_QUEUE_GROUP" \
+        "--release=$WORKER_RELEASE_ID" \
+        "--boot=$WORKER_BOOT_ID" \
         --no-ansi \
         --no-interaction \
         >/dev/null; then

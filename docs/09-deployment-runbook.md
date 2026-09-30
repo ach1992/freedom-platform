@@ -180,11 +180,74 @@ The final target-like generated-backup restore rehearsal remains the Phase 0.8 a
 
 ## Update and rollback
 
-An updater must verify package and compatibility before mutation, quiesce unsafe work, create a verified pre-update backup, stage code separately, apply reviewed migrations, run health/smoke checks, and atomically activate.
+The controlled updater is a CLI/release authority layered on the existing backup, Restore, maintenance/Scheduler/worker and atomic `current` symlink authorities. It does not introduce a second deployment path. `UPDATE_ENABLED=false` is the safe default; setting it to `true` only makes the reviewed apply path technically available and is not production authorization.
 
-Database migrations should use expand/contract compatibility. A code rollback is forbidden when the current schema is incompatible with the previous release.
+Production release configuration must point `UPDATE_DEPLOYMENT_ROOT` at the directory that owns `current`, `releases/` and `shared/`, and `UPDATE_PACKAGE_ROOT` at protected persistent storage outside `current/` and the web root (normally `<root>/shared/update-packages`). The updater must run as `UPDATE_RUN_USER` (normally `www`) and uses only the configured absolute PHP/Composer binaries plus fixed allowlisted arguments. `UPDATE_RELEASE_RETENTION` is bounded to 2–20 and defaults to 3; pruning touches only releases with the controlled `freedom_platform_release_v1` manifest and never the protected current/previous release.
 
-If activation fails, preserve diagnostics, prevent unsafe new effects, and use the guarded rollback/restore path appropriate to the proven schema state. Never run `migrate:rollback` blindly on production.
+### Release-package contract and preflight
+
+A candidate is one regular `.tar` file directly inside `UPDATE_PACKAGE_ROOT`. Obtain the SHA-256 of the complete package through a trusted out-of-band release channel and pass that exact value with `--trusted-sha256`; that complete-package trusted checksum is the accepted signature/trusted-checksum mechanism. The updater verifies it **before** archive parsing, then rejects traversal, duplicate paths, symlink/hardlink/special/PAX-style entries, oversized/unsupported archive shapes and reserved `.env`, `storage/` or `vendor/` payloads.
+
+The archive must contain `release-manifest.json`, `release-checksums.json`, `RELEASE_NOTES.md`, `artisan`, `composer.json`, `composer.lock`, `public/index.php` and the exact migration set. The manifest authority/version is `freedom_platform_release_v1` / `1` and records the release/application version, exact predecessor release/application version, predecessor/target migration identities, PHP range, Laravel major, Composer-lock SHA-256, checksum-list SHA-256, required free bytes and the explicit list of schema identities for which the previous code is rollback-compatible. `release-checksums.json` must exactly cover every payload file. The target schema identity is recomputed from the packaged migration filenames/content; manifest metadata cannot override the package contents.
+
+Run a non-mutating preflight first:
+
+```bash
+php artisan operations:update /absolute/protected/path/release.tar \
+  --trusted-sha256=<trusted-complete-package-sha256> \
+  --json
+```
+
+Dry-run verifies package trust/shape, runtime/dependency prerequisites, disk capacity, exact active release/schema predecessor and absence of unresolved financial/provider work. It does not create the pre-update backup, stage code, run Composer/migrations or switch `current`.
+
+### Controlled apply
+
+A reviewed apply additionally requires `UPDATE_ENABLED=true` and exact release confirmation:
+
+```bash
+php artisan operations:update /absolute/protected/path/release.tar \
+  --trusted-sha256=<trusted-complete-package-sha256> \
+  --apply \
+  --confirm=<release-id> \
+  --json
+```
+
+The apply path creates `BackupKind::PreUpdate` through the existing backup authority and independently decrypts/preflights it through the existing Restore dry-run before staging may proceed. The candidate is extracted to a unique updater-owned staging directory, rechecksummed, and receives locked production Composer dependencies as the reviewed non-root runtime user with both Composer plugins and package scripts disabled. It is then atomically published as a new release identifier; an existing release directory is never overwritten. Only the existing release activator may prepare approved shared `.env`/storage links or switch `current`. After those shared links exist, the updater explicitly runs only the fixed allowlisted `artisan package:discover --ansi --no-interaction` runtime-bootstrap step; package-provided Composer scripts are never allowed to boot Laravel before shared runtime state is ready. Generated `bootstrap/cache/*` runtime artifacts are not accepted from the release package (except the inert `.gitignore` placeholder). After dependency/runtime preparation, every reviewed payload file plus the manifest/checksum metadata is hashed again against the authenticated package contract immediately before immutable sealing; any missing, symlinked or changed reviewed file aborts before mutation. After those links and the packaged schema identity are verified, the updater seals the published release read-only before migration/activation. Code/vendor/config files and directories lose owner write permission while reviewed executable entrypoints retain execute permission; only `bootstrap/cache` remains updater/runtime-writable, while `.env` and `storage` remain the approved shared symlinks. Exact-release pre/postflight also refuses activation if the Supervisor queue-worker wrapper is missing or no longer executable. Updater-owned retention/cleanup temporarily reopens directory permissions only while deleting a sealed inactive release.
+
+Before migration, the updater holds the existing purchase-provider mutation barrier, enters the existing maintenance/Scheduler mutation fence, requests queue-worker drain/restart, rechecks unsafe financial/provider/provisioning/synchronization work and proves the active release/schema have not drifted. Migrations run only from the exact staged release with `artisan migrate --force --isolated=1`; there is no updater path that calls `migrate:rollback`.
+
+Immediately after migration and before `current` switches, installed migration rows are proved against the candidate release's exact migration directory rather than inferred from the still-active predecessor symlink. The same release-bound proof is used when a compatibility-approved code-only rollback intentionally keeps the newer schema while switching back to previous code. A partial/unknown migration set cannot satisfy that exact release identity and remains contained.
+
+Before activation and again after activation, the exact release must pass the existing critical health contract plus route/webhook, Scheduler and Composer platform/dependency checks. After activation the existing runtime-refresh path restarts workers. Each reviewed Supervisor wrapper resolves its physical release directory, exports that exact release ID to both the queue process and heartbeat sidecar, and generates one boot ID for that wrapper generation. Immediately before the intended refresh the updater snapshots a complete baseline covering every reviewed worker ID. A predecessor created before boot-generation support may contribute a `null` baseline value, but a missing worker or malformed non-null boot ID is never accepted. After refresh, every reviewed worker must publish a fresh heartbeat for the exact intended release with a valid boot ID; when the baseline already had a boot ID, the post-refresh ID must differ. Wrong-release rows, stale same-generation rows, stale timestamps, or an incomplete baseline fail closed before maintenance can be released. Compatible rollback and controlled Restore recovery use the same post-refresh proof; therefore a legacy target release that cannot emit the required post-refresh release/generation evidence remains contained rather than reopening processing. The updater then re-proves release/schema identity before reopening normal processing.
+
+Protected sanitized reports are written to `<root>/shared/update-reports/update-<run-id>.json` with mode `0600`; installed release/rollback identity is stored in `<root>/shared/installed-release.json`. Reports contain release/schema/package/backup identifiers and phase/containment decisions, never exception details, credentials, provider payloads or private backup contents. An interrupted **pre-mutation** run may clean only its updater-owned staging/inactive release and finalize as recovered. Any unfinished report that crossed migration/activation remains fail-closed for explicit operator recovery rather than being guessed from stale local booleans.
+
+### Failure and rollback decisions
+
+If mutation/postflight fails, maintenance, the Scheduler fence and worker quiescence are re-proven before full containment is claimed. A code-only recovery is allowed only when the observed schema exactly matches signed/trusted rollback-compatibility metadata for the previous release; the previous release must then pass health and worker-boot verification. That recovery also reconciles `installed-release.json` to the actually active previous release before processing is reopened.
+
+When old code is not schema-compatible, migration completion is uncertain, containment cannot be proven, or code rollback cannot restore a coherent verified state, the update report returns `restore_required` and preserves the verified pre-update backup ID plus the potential data-loss window. Recovery is keyed only by the exact protected update-run identity: preflight with `php artisan operations:update:recover <update-run-id> --json`, and an authorized apply requires the same update-run ID in both the argument and `--confirm`. The handoff reloads that protected report and therefore cannot substitute an arbitrary backup or release. It proves the recorded pre-update backup against the exact predecessor release. If update containment is already retained, the recovery process adopts it only when maintenance is owned by that exact update run; foreign or unproven ownership fails closed without a maintenance-off gap. Existing Restore machinery restores the protected state, the existing release activator returns `current` to the exact predecessor, and predecessor schema, exact-release runtime, fresh worker generation, installed identity, and the protected report are reconciled before maintenance is released. Any failed handoff proof remains contained. Never manually edit update reports, maintenance ownership, financial/provider evidence, or migration guards to force recovery.
+
+Evaluate explicit rollback without mutation first:
+
+```bash
+php artisan operations:update:rollback --json
+```
+
+A compatibility-proven code-only rollback, when separately authorized, requires exact active-release confirmation:
+
+```bash
+php artisan operations:update:rollback \
+  --apply \
+  --confirm=<active-release-id> \
+  --json
+```
+
+If rollback metadata does not prove the current schema safe for the previous code, the command refuses mutation and reports `rollback_incompatible_restore_required` with the verified pre-update backup context. Database rollback is never inferred from code rollback and the updater never runs production `migrate:rollback`.
+
+If activation fails, preserve diagnostics, prevent unsafe new effects, and use the guarded code-rollback/Restore decision appropriate to the proven schema state. Do not manually edit update reports, `installed-release.json`, `current`, migration rows, financial/provider evidence or update package metadata to manufacture a healthy state.
+
+The final target-like update/rollback rehearsal remains Phase 0.8 Outcome F. Repository tests and Outcome-E integration do not substitute for that later rehearsal.
 
 For the generic outbound Telegram delivery authority, quiesce queue workers and effect consumers before rollback, but do not rely on quiescence as the only race barrier. The migration-owned rollback path must acquire the capability-row exclusive lifecycle fence, wait out runtime transactions that already hold the shared fence, refuse without deactivation if any operation or `telegram.delivery.requested` Outbox authority then exists, and persist the capability as inactive before destructive DDL. New queue/effect transactions must fail closed after that point; a rollback blocked by an external FK must leave the surviving authority tables guarded and inactive. Do not manually edit the capability row, lifecycle session variables, installation lock, or Telegram Outbox guards to force rollback progress. If durable authority exists, retain the schema and use the reviewed forward-fix/restore decision instead of bypassing the refusal.
 

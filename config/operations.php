@@ -13,6 +13,7 @@ return [
         'interval_seconds' => (int) env('WORKER_HEARTBEAT_INTERVAL_SECONDS', 30),
         'stale_after_seconds' => (int) env('WORKER_HEARTBEAT_STALE_AFTER_SECONDS', 480),
         'release_version' => env('APP_VERSION'),
+        'boot_id' => null,
     ],
 
     'backup' => [
@@ -42,5 +43,16 @@ return [
         'mariadb_binary' => env('RESTORE_MARIADB_BINARY', '/usr/bin/mariadb'),
         'process_timeout_seconds' => (int) env('RESTORE_PROCESS_TIMEOUT_SECONDS', 1800),
         'quiesce_seconds' => (int) env('RESTORE_QUIESCE_SECONDS', 360),
+    ],
+
+    'update' => [
+        'enabled' => filter_var(env('UPDATE_ENABLED', false), FILTER_VALIDATE_BOOL),
+        'deployment_root' => env('UPDATE_DEPLOYMENT_ROOT', dirname(base_path())),
+        'package_root' => env('UPDATE_PACKAGE_ROOT', dirname(base_path()).'/shared/update-packages'),
+        'php_binary' => env('UPDATE_PHP_BINARY', PHP_BINARY),
+        'composer_binary' => env('UPDATE_COMPOSER_BINARY', '/usr/bin/composer'),
+        'run_user' => env('UPDATE_RUN_USER', 'www'),
+        'process_timeout_seconds' => (int) env('UPDATE_PROCESS_TIMEOUT_SECONDS', 1800),
+        'release_retention' => (int) env('UPDATE_RELEASE_RETENTION', 3),
     ],
 ];

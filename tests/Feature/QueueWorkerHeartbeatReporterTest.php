@@ -31,6 +31,7 @@ final class QueueWorkerHeartbeatReporterTest extends TestCase
             'worker_id' => 'worker-critical-00',
             'queue' => 'critical,default',
             'release_version' => '0.2.0-test',
+            'boot_id' => str_repeat('b', 32),
         ]);
 
         $this->assertFalse($reporter->report('critical-payments'));
@@ -94,6 +95,7 @@ final class QueueWorkerHeartbeatReporterTest extends TestCase
             $workerId,
             'critical,default',
             '0.2.0-test',
+            str_repeat('b', 32),
             30,
         );
     }

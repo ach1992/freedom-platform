@@ -16,7 +16,8 @@ final class RecordWorkerHeartbeatCommand extends Command
     protected $signature = 'operations:worker-heartbeat
         {worker-id : Stable process-manager worker identifier}
         {--queue=default : Queue name handled by this worker}
-        {--release= : Explicit release version override}';
+        {--release= : Explicit physical release identifier}
+        {--boot= : Explicit wrapper boot-generation identifier}';
 
     protected $description = 'Record an authenticated application worker heartbeat';
 
@@ -27,6 +28,7 @@ final class RecordWorkerHeartbeatCommand extends Command
                 $this->stringArgument('worker-id'),
                 $this->stringOption('queue'),
                 $this->releaseVersion(),
+                $this->bootId(),
             );
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
@@ -59,6 +61,20 @@ final class RecordWorkerHeartbeatCommand extends Command
         }
 
         return $value;
+    }
+
+    private function bootId(): ?string
+    {
+        $boot = $this->option('boot');
+
+        if ($boot === null) {
+            return null;
+        }
+        if (! is_string($boot)) {
+            throw new InvalidArgumentException('Boot option must be a string.');
+        }
+
+        return $boot;
     }
 
     private function releaseVersion(): string

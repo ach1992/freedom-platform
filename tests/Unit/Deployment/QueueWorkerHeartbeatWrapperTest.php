@@ -19,6 +19,12 @@ final class QueueWorkerHeartbeatWrapperTest extends TestCase
         exec('bash -n '.escapeshellarg($path), $output, $status);
         self::assertSame(0, $status, implode(PHP_EOL, $output));
         self::assertStringContainsString('operations:worker-heartbeat', $script);
+        self::assertStringContainsString('APPLICATION_ROOT=$(CDPATH= cd -- "$APPLICATION_ROOT" && pwd -P)', $script);
+        self::assertStringContainsString('WORKER_RELEASE_ID=${WORKER_RELEASE_ID:-$(basename -- "$APPLICATION_ROOT")}', $script);
+        self::assertStringContainsString('WORKER_BOOT_ID=${WORKER_BOOT_ID//-/}', $script);
+        self::assertStringContainsString('"--release=$WORKER_RELEASE_ID"', $script);
+        self::assertStringContainsString('"--boot=$WORKER_BOOT_ID"', $script);
+        self::assertStringContainsString('export WORKER_RELEASE_ID WORKER_BOOT_ID', $script);
         self::assertStringContainsString('heartbeat_loop &', $script);
         self::assertStringContainsString('trap cleanup EXIT', $script);
         self::assertStringContainsString("trap 'stop_children TERM' TERM INT HUP", $script);

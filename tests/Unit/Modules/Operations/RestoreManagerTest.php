@@ -9,13 +9,18 @@ use App\Modules\Operations\Application\BackupKind;
 use App\Modules\Operations\Application\BackupManager;
 use App\Modules\Operations\Application\BackupRuntimeConfiguration;
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
+use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
+use App\Modules\Operations\Application\Contracts\UpdateSafetyInspector;
+use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Modules\Operations\Application\RestoreManager;
 use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
+use App\Modules\Operations\Application\VerifiedUpdatePackage;
 use App\Modules\Operations\Infrastructure\BackupBundleReader;
 use App\Modules\Operations\Infrastructure\BackupBundleWriter;
 use App\Modules\Operations\Infrastructure\BackupPayloadCollector;
@@ -458,6 +463,144 @@ final class RestoreManagerTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 SEC-001 QUA-001 */
+    public function test_update_recovery_adopts_retained_containment_restores_exact_backup_and_reopens_only_after_predecessor_proofs(): void
+    {
+        $fixture = $this->fixture('update-recovery');
+
+        try {
+            $sourceId = $this->sourceBackup($fixture);
+            $source = (new FilesystemBackupRepository($fixture['root']))->completedBackup($sourceId);
+            $events = new RestoreEventLog;
+            $runId = '20260929T025900Z-aaaaaaaaaaaaaaaa';
+            $previousRelease = 'test-predecessor';
+            $previousPath = $this->predecessorRelease($fixture, $previousRelease);
+            $workspace = new RestoreTestUpdateWorkspace($events);
+            $workspace->current = 'candidate-release';
+            $workspace->reports[$runId] = [
+                'version' => 1,
+                'update_run_id' => $runId,
+                'operation' => 'update',
+                'status' => 'restore_required',
+                'report_finalized' => true,
+                'restore_required' => true,
+                'release_id' => 'candidate-release',
+                'previous_release' => $previousRelease,
+                'previous_application_version' => 'test-release',
+                'pre_update_backup_id' => $source->backupId,
+                'pre_update_backup_completed_at' => $source->completedAt,
+                'maintenance_retained' => true,
+                'scheduler_mutation_fence_retained' => true,
+                'worker_quiescence_retained' => true,
+                'containment_retained' => true,
+            ];
+            $releases = new RestoreTestReleaseActivator(
+                $events,
+                $workspace,
+                [$previousRelease => $previousPath],
+            );
+            $safety = new RestoreTestUpdateSafetyInspector($events, $source->migrationsSha256);
+            $executor = new RestoreTestUpdateReleaseExecutor($events);
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                updateWorkspace: $workspace,
+                releaseActivator: $releases,
+                updateSafety: $safety,
+                updateExecutor: $executor,
+            );
+
+            $result = $manager->recoverUpdate($runId, true);
+
+            self::assertSame('completed', $result->status);
+            self::assertSame($sourceId, $result->sourceBackupId);
+            self::assertSame($previousRelease, $workspace->current);
+            self::assertSame($previousRelease, $workspace->identity['release_id'] ?? null);
+            self::assertSame($source->migrationsSha256, $workspace->identity['schema_sha256'] ?? null);
+            self::assertSame('restore_recovered', $workspace->reports[$runId]['status'] ?? null);
+            self::assertFalse($workspace->reports[$runId]['restore_required'] ?? true);
+            self::assertFalse($workspace->reports[$runId]['containment_retained'] ?? true);
+            self::assertSame([
+                'payload_preflight',
+                'maintenance_adopt',
+                'safety_backup_capture',
+                'payload_preflight',
+                'database_restore',
+                'payload_restore',
+                'release_rollback',
+                'update_schema_verify',
+                'update_release_verify:'.$previousRelease,
+                'worker_boot_snapshot',
+                'runtime_refresh',
+                'worker_attest:'.$previousRelease,
+                'update_release_verify:'.$previousRelease,
+                'post_restore_verify:'.$previousRelease,
+                'update_identity',
+                'maintenance_leave',
+            ], $events->events);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 QUA-001 */
+    public function test_update_recovery_failed_containment_adoption_never_crosses_restore_or_release_mutation_boundary(): void
+    {
+        $fixture = $this->fixture('update-recovery-adoption-failure');
+
+        try {
+            $sourceId = $this->sourceBackup($fixture);
+            $source = (new FilesystemBackupRepository($fixture['root']))->completedBackup($sourceId);
+            $events = new RestoreEventLog;
+            $runId = '20260929T025901Z-bbbbbbbbbbbbbbbb';
+            $previousRelease = 'test-predecessor';
+            $previousPath = $this->predecessorRelease($fixture, $previousRelease);
+            $workspace = new RestoreTestUpdateWorkspace($events);
+            $workspace->reports[$runId] = [
+                'version' => 1,
+                'update_run_id' => $runId,
+                'operation' => 'update',
+                'status' => 'restore_required',
+                'report_finalized' => true,
+                'restore_required' => true,
+                'release_id' => 'candidate-release',
+                'previous_release' => $previousRelease,
+                'previous_application_version' => 'test-release',
+                'pre_update_backup_id' => $source->backupId,
+                'pre_update_backup_completed_at' => $source->completedAt,
+                'maintenance_retained' => true,
+                'scheduler_mutation_fence_retained' => true,
+                'worker_quiescence_retained' => true,
+                'containment_retained' => true,
+            ];
+            $manager = $this->manager(
+                $fixture,
+                $events,
+                adoptFailure: true,
+                updateWorkspace: $workspace,
+                releaseActivator: new RestoreTestReleaseActivator(
+                    $events,
+                    $workspace,
+                    [$previousRelease => $previousPath],
+                ),
+                updateSafety: new RestoreTestUpdateSafetyInspector($events, $source->migrationsSha256),
+                updateExecutor: new RestoreTestUpdateReleaseExecutor($events),
+            );
+
+            $this->expectRestoreFailure(fn () => $manager->recoverUpdate($runId, true));
+
+            self::assertSame(['payload_preflight', 'maintenance_adopt'], $events->events);
+            self::assertSame('candidate-release', $workspace->current);
+            self::assertNull($workspace->identity);
+            self::assertSame('restore_recovery_adoption_failed', $workspace->reports[$runId]['status'] ?? null);
+            self::assertTrue($workspace->reports[$runId]['restore_required'] ?? false);
+            self::assertTrue($workspace->reports[$runId]['containment_retained'] ?? false);
+            self::assertFalse($workspace->reports[$runId]['recovery_containment_adoption_proven'] ?? true);
+        } finally {
+            $this->removeTree($fixture['base']);
+        }
+    }
+
     /**
      * @param  array{base:string,root:string,environment:string,private:string}  $fixture
      */
@@ -474,6 +617,11 @@ final class RestoreManagerTest extends TestCase
         bool $resumeFailure = false,
         bool $retainWorkersQuiesced = true,
         bool $finalReportFailure = false,
+        bool $adoptFailure = false,
+        ?RestoreTestUpdateWorkspace $updateWorkspace = null,
+        ?RestoreTestReleaseActivator $releaseActivator = null,
+        ?RestoreTestUpdateSafetyInspector $updateSafety = null,
+        ?RestoreTestUpdateReleaseExecutor $updateExecutor = null,
     ): RestoreManager {
         $backup = $this->backupConfiguration($fixture);
         $repository = new FilesystemBackupRepository($backup->root);
@@ -488,6 +636,11 @@ final class RestoreManagerTest extends TestCase
             new RestoreFixedRandom("\x22"),
             'test-release',
         );
+
+        $updateWorkspace ??= new RestoreTestUpdateWorkspace($events);
+        $releaseActivator ??= new RestoreTestReleaseActivator($events, $updateWorkspace, []);
+        $updateSafety ??= new RestoreTestUpdateSafetyInspector($events, hash('sha256', 'test-only-schema'));
+        $updateExecutor ??= new RestoreTestUpdateReleaseExecutor($events);
 
         return new RestoreManager(
             new RestoreRuntimeConfiguration($enabled, '/usr/bin/mariadb', 30, 360),
@@ -509,6 +662,7 @@ final class RestoreManagerTest extends TestCase
                 $runtimeRefreshFailure,
                 $resumeFailure,
                 $retainWorkersQuiesced,
+                $adoptFailure,
             ),
             new RestoreTestPayloadRestorer($events, $payloadFailure),
             new RestoreTestPostVerifier($events, $postRestoreFailure),
@@ -517,6 +671,10 @@ final class RestoreManagerTest extends TestCase
                 : new FilesystemRestoreWorkspace($backup->root),
             new RestoreFixedClock('2026-09-29T03:00:00+00:00'),
             new RestoreFixedRandom("\x33"),
+            $updateWorkspace,
+            $releaseActivator,
+            $updateSafety,
+            $updateExecutor,
         );
     }
 
@@ -560,6 +718,33 @@ final class RestoreManagerTest extends TestCase
             database_path('migrations'),
             'mysql',
         );
+    }
+
+    /**
+     * @param  array{base:string,root:string,environment:string,private:string}  $fixture
+     */
+    private function predecessorRelease(array $fixture, string $releaseId): string
+    {
+        $path = $fixture['base'].'/deployment/releases/'.$releaseId;
+        if (! mkdir($path.'/database/migrations', 0700, true) && ! is_dir($path.'/database/migrations')) {
+            self::fail('Could not create predecessor release fixture.');
+        }
+        if (! copy(base_path('composer.lock'), $path.'/composer.lock')) {
+            self::fail('Could not copy predecessor composer.lock fixture.');
+        }
+
+        $migrations = glob(database_path('migrations/*.php'));
+        self::assertIsArray($migrations);
+        foreach ($migrations as $migration) {
+            if (! copy($migration, $path.'/database/migrations/'.basename($migration))) {
+                self::fail('Could not copy predecessor migration fixture.');
+            }
+        }
+
+        $resolved = realpath($path);
+        self::assertIsString($resolved);
+
+        return $resolved;
     }
 
     /**
@@ -713,6 +898,7 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
         private readonly bool $failRefresh = false,
         private readonly bool $failLeaveAfterDeactivate = false,
         private readonly bool $retainWorkersQuiesced = true,
+        private readonly bool $failAdopt = false,
     ) {}
 
     public function enter(string $restoreRunId): void
@@ -723,6 +909,15 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
             throw new RuntimeException('test-only maintenance failure');
         }
 
+        $this->active = true;
+    }
+
+    public function adopt(string $restoreRunId): void
+    {
+        $this->events->events[] = 'maintenance_adopt';
+        if ($this->failAdopt) {
+            throw new RuntimeException('test-only retained containment adoption failure');
+        }
         $this->active = true;
     }
 
@@ -816,9 +1011,11 @@ final readonly class RestoreTestPostVerifier implements RestorePostRestoreVerifi
         private bool $fail = false,
     ) {}
 
-    public function verify(): array
+    public function verify(?string $releasePath = null): array
     {
-        $this->events->events[] = 'post_restore_verify';
+        $this->events->events[] = $releasePath === null
+            ? 'post_restore_verify'
+            : 'post_restore_verify:'.basename($releasePath);
 
         if ($this->fail) {
             throw new RuntimeException('test-only post restore failure');
@@ -831,6 +1028,178 @@ final readonly class RestoreTestPostVerifier implements RestorePostRestoreVerifi
             'service_violations' => 0,
             'runtime_health' => true,
         ];
+    }
+}
+
+final class RestoreTestUpdateWorkspace implements UpdateWorkspace
+{
+    public string $current = 'candidate-release';
+
+    /** @var array<string, array<string, mixed>> */
+    public array $reports = [];
+
+    /** @var array<string, mixed>|null */
+    public ?array $identity = null;
+
+    public function __construct(private readonly RestoreEventLog $events) {}
+
+    public function recoverInterruptedPreMutationRuns(): void {}
+
+    public function storeReport(string $updateRunId, array $report): void
+    {
+        $this->reports[$updateRunId] = $report;
+    }
+
+    public function loadReport(string $updateRunId): array
+    {
+        $report = $this->reports[$updateRunId] ?? null;
+        if (! is_array($report)) {
+            throw new RuntimeException('test-only missing protected update report');
+        }
+
+        return $report;
+    }
+
+    public function createStaging(string $updateRunId, string $releaseId): string
+    {
+        throw new RuntimeException('test-only unexpected staging');
+    }
+
+    public function publishRelease(string $stagingPath, string $releaseId): string
+    {
+        throw new RuntimeException('test-only unexpected publish');
+    }
+
+    public function sealPublishedRelease(string $releaseId): void {}
+
+    public function discardStaging(string $stagingPath): void {}
+
+    public function discardInactiveRelease(string $releaseId): void {}
+
+    public function currentReleaseId(): ?string
+    {
+        return $this->current;
+    }
+
+    public function installedIdentity(): ?array
+    {
+        return $this->identity;
+    }
+
+    public function storeInstalledIdentity(array $identity): void
+    {
+        $this->events->events[] = 'update_identity';
+        $this->identity = $identity;
+    }
+
+    public function pruneReleases(array $protectedReleaseIds, int $retention): void {}
+}
+
+final readonly class RestoreTestReleaseActivator implements ReleaseActivator
+{
+    /** @param array<string, string> $releasePaths */
+    public function __construct(
+        private RestoreEventLog $events,
+        private RestoreTestUpdateWorkspace $workspace,
+        private array $releasePaths,
+    ) {}
+
+    public function prepare(string $releaseId): string
+    {
+        return $this->resolve($releaseId);
+    }
+
+    public function resolve(string $releaseId): string
+    {
+        $path = $this->releasePaths[$releaseId] ?? null;
+        if (! is_string($path) || $path === '') {
+            throw new RuntimeException('test-only unknown release');
+        }
+
+        return $path;
+    }
+
+    public function activate(string $releaseId, bool $automaticRollbackSafe = true): array
+    {
+        $previous = $this->workspace->current;
+        $this->workspace->current = $releaseId;
+
+        return ['status' => 'activated', 'release' => $releaseId, 'previous_release' => $previous];
+    }
+
+    public function rollbackTo(string $releaseId): array
+    {
+        $this->events->events[] = 'release_rollback';
+        $previous = $this->workspace->current;
+        $this->workspace->current = $releaseId;
+
+        return ['status' => 'rolled_back', 'release' => $releaseId, 'previous_release' => $previous];
+    }
+}
+
+final class RestoreTestUpdateSafetyInspector implements UpdateSafetyInspector
+{
+    public function __construct(
+        private readonly RestoreEventLog $events,
+        public string $schema,
+    ) {}
+
+    public function currentSchemaSha256(): string
+    {
+        return $this->schema;
+    }
+
+    public function installedSchemaSha256ForRelease(string $releasePath): string
+    {
+        $this->events->events[] = 'update_schema_verify';
+
+        return $this->schema;
+    }
+
+    public function releaseSchemaSha256(string $releasePath): string
+    {
+        return $this->schema;
+    }
+
+    public function assertNoUnsafeWork(): void {}
+
+    public function workerBootIds(): array
+    {
+        $this->events->events[] = 'worker_boot_snapshot';
+
+        return ['freedom-platform-critical_00' => str_repeat('a', 32)];
+    }
+
+    public function assertWorkersRestartedAfter(
+        string $restartedAfter,
+        string $expectedReleaseId,
+        array $previousBootIds,
+    ): void {
+        if ($previousBootIds === []) {
+            throw new RuntimeException('test-only missing previous boot generation');
+        }
+        $this->events->events[] = 'worker_attest:'.$expectedReleaseId;
+    }
+}
+
+final readonly class RestoreTestUpdateReleaseExecutor implements UpdateReleaseExecutor
+{
+    public function __construct(private RestoreEventLog $events) {}
+
+    public function assertPrerequisites(VerifiedUpdatePackage $package): void {}
+
+    public function prepare(string $releasePath, VerifiedUpdatePackage $package): void {}
+
+    public function prepareRuntime(string $releasePath): void {}
+
+    public function migrate(string $releasePath): void
+    {
+        throw new RuntimeException('test-only unexpected update migration');
+    }
+
+    public function verifyRelease(string $releasePath, ?VerifiedUpdatePackage $package = null): void
+    {
+        $this->events->events[] = 'update_release_verify:'.basename($releasePath);
     }
 }
 

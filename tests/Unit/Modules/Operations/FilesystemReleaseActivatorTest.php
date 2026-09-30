@@ -218,6 +218,75 @@ final class FilesystemReleaseActivatorTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 RUN-002 QUA-001 */
+    public function test_resolve_proves_existing_release_without_mutating_shared_links_or_current(): void
+    {
+        $root = $this->deployment('resolve-only');
+        $candidate = $this->release($root, '1.0.0');
+        $activator = $this->activator($root, new RecordingReleaseHealthVerifier);
+
+        try {
+            $resolved = $activator->resolve('1.0.0');
+
+            self::assertSame($candidate, $resolved);
+            self::assertFileDoesNotExist($root.'/current');
+            self::assertFalse(is_link($candidate.'/.env'));
+            self::assertFalse(is_link($candidate.'/storage'));
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 QUA-001 */
+    public function test_prepare_reuses_release_authority_for_shared_links_without_switching_current(): void
+    {
+        $root = $this->deployment('prepare-only');
+        $candidate = $this->release($root, '1.1.0');
+        $activator = $this->activator($root, new RecordingReleaseHealthVerifier);
+
+        try {
+            $prepared = $activator->prepare('1.1.0');
+
+            self::assertSame($candidate, $prepared);
+            self::assertSame($root.'/shared/.env', realpath($candidate.'/.env'));
+            self::assertSame($root.'/shared/storage', realpath($candidate.'/storage'));
+            self::assertFileDoesNotExist($root.'/current');
+            self::assertFalse(is_link($root.'/current'));
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 QUA-001 */
+    public function test_health_failure_can_withhold_automatic_code_rollback_when_schema_policy_says_unsafe(): void
+    {
+        $root = $this->deployment('rollback-withheld');
+        $this->release($root, '1.0.0');
+        $candidate = $this->release($root, '1.1.0');
+        $verifier = new RecordingReleaseHealthVerifier('1.1.0');
+        $activator = $this->activator($root, $verifier);
+
+        try {
+            $activator->activate('1.0.0');
+
+            try {
+                $activator->activate('1.1.0', false);
+                self::fail('Schema-incompatible automatic rollback must be withheld.');
+            } catch (RuntimeException $exception) {
+                self::assertSame(
+                    'Release verification failed and automatic rollback was withheld by compatibility policy.',
+                    $exception->getMessage(),
+                );
+            }
+
+            self::assertSame($candidate, realpath($root.'/current'));
+            $journal = (string) file_get_contents($root.'/shared/release-journal.json');
+            self::assertStringContainsString('verification_failed_rollback_withheld', $journal);
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
     private function activator(string $root, ReleaseHealthVerifier $verifier): FilesystemReleaseActivator
     {
         return new FilesystemReleaseActivator(
