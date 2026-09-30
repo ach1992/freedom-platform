@@ -286,7 +286,14 @@ final class OperationsCenterIntegrationTest extends TestCase
             'operations.test.delivery.dead',
             ['state' => 'delivery-dead-letter'],
         );
+        $deliveryDeadLetterAlertId = (string) DB::table('alerts')
+            ->where('event_name', 'operations.delivery_dead_letter_test')
+            ->where('deduplication_key', hash('sha256', 'operations-delivery-dead-letter-test'))
+            ->value('id');
+        self::assertNotSame('', $deliveryDeadLetterAlertId);
+
         DB::table('operational_alert_deliveries')
+            ->where('alert_id', $deliveryDeadLetterAlertId)
             ->where('state', 'pending')
             ->update([
                 'state' => 'failed',
