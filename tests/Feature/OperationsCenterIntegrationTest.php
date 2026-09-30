@@ -295,7 +295,7 @@ final class OperationsCenterIntegrationTest extends TestCase
             ]);
 
         $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
-        self::assertNotNull($snapshot->fact('panels.provider.xui'));
+        self::assertNotNull($snapshot->fact('panels.provider.marzban'));
         self::assertNotNull($snapshot->fact('providers.sms_health'));
         self::assertSame('unknown', $snapshot->fact('providers.sms_health')?->state);
         self::assertSame('observed', $snapshot->fact('scheduler.run_history')?->state);
