@@ -75,6 +75,19 @@ final class OutboxRuntimeCommandTest extends TestCase
             'dispatch_state' => 'processed',
             'attempts' => 1,
         ]);
+        $this->assertDatabaseHas('scheduled_task_runs', [
+            'task_name' => 'operations.dispatch-outbox',
+            'state' => 'succeeded',
+        ]);
+        $metrics = json_decode(
+            (string) DB::table('scheduled_task_runs')
+                ->where('task_name', 'operations.dispatch-outbox')
+                ->value('metrics'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        self::assertSame(1, $metrics['examined'] ?? null);
+        self::assertSame(1, $metrics['success'] ?? null);
     }
 
     public function test_limit_is_bounded_and_unsupported_events_become_review_with_backlog_age_visibility(): void
@@ -178,6 +191,11 @@ final class OutboxRuntimeCommandTest extends TestCase
         ]));
         self::assertStringContainsString('Outbox dispatch failed unexpectedly.', Artisan::output());
         self::assertStringNotContainsString('sensitive-runtime-detail', Artisan::output());
+        self::assertSame(2, DB::table('scheduled_task_runs')
+            ->where('task_name', 'operations.dispatch-outbox')
+            ->where('state', 'failed')
+            ->where('error_code', 'outbox_dispatch_failed')
+            ->count());
     }
 
     public function test_outbox_dispatch_is_registered_in_the_single_scheduler(): void

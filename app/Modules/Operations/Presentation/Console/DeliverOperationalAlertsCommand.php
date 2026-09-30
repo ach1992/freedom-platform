@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Presentation\Console;
 
 use App\Modules\Operations\Application\OperationalAlertDeliveryRunner;
+use App\Modules\Operations\Application\OperationalAlertDeliveryRunSummary;
+use App\Modules\Operations\Application\ScheduledTaskRunRecorder;
+use App\Shared\Application\Clock;
+use DateTimeZone;
 use Illuminate\Console\Command;
 use Throwable;
 
-/** @requirement OPS-001 OPS-003 QUA-004 */
+/** @requirement OPS-001 OPS-003 QUA-004 RUN-003 */
 final class DeliverOperationalAlertsCommand extends Command
 {
     protected $signature = 'operations:deliver-alerts
@@ -17,16 +21,34 @@ final class DeliverOperationalAlertsCommand extends Command
 
     protected $description = 'Queue a bounded batch of persisted operational alert deliveries';
 
-    public function handle(OperationalAlertDeliveryRunner $runner): int
-    {
+    public function handle(
+        OperationalAlertDeliveryRunner $runner,
+        ScheduledTaskRunRecorder $runs,
+        Clock $clock,
+    ): int {
         $limit = filter_var($this->option('limit'), FILTER_VALIDATE_INT);
         if ($limit === false || $limit < 1 || $limit > 50) {
             return $this->invalidInput();
         }
 
+        $startedAt = $clock->now()->setTimezone(new DateTimeZone('UTC'));
+        $startedMonotonic = hrtime(true);
+        $runId = $runs->start('operations.deliver-alerts', $startedAt);
+
         try {
             $summary = $runner->runDue($limit);
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            $this->finishRun(
+                $runs,
+                $clock,
+                $runId,
+                $startedMonotonic,
+                'failed',
+                [],
+                $exception::class,
+                'operational_alert_delivery_failed',
+            );
+
             if ($this->option('json')) {
                 $this->line('{"status":"failed","code":"operational_alert_delivery_failed"}');
             } else {
@@ -35,6 +57,17 @@ final class DeliverOperationalAlertsCommand extends Command
 
             return self::FAILURE;
         }
+
+        $this->finishRun(
+            $runs,
+            $clock,
+            $runId,
+            $startedMonotonic,
+            'succeeded',
+            $this->metrics($summary),
+            null,
+            null,
+        );
 
         $result = [
             'status' => $summary->failed > 0 ? 'manual_review' : 'ok',
@@ -54,6 +87,40 @@ final class DeliverOperationalAlertsCommand extends Command
         }
 
         return $summary->failed > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /** @return array<string,int> */
+    private function metrics(OperationalAlertDeliveryRunSummary $summary): array
+    {
+        return [
+            'examined' => $summary->examined,
+            'queued' => $summary->queued,
+            'retry_scheduled' => $summary->retryScheduled,
+            'failed' => $summary->failed,
+        ];
+    }
+
+    /** @param array<string,int> $metrics */
+    private function finishRun(
+        ScheduledTaskRunRecorder $runs,
+        Clock $clock,
+        string $runId,
+        int $startedMonotonic,
+        string $state,
+        array $metrics,
+        ?string $errorClass,
+        ?string $errorCode,
+    ): void {
+        $durationMs = max(0, (int) round((hrtime(true) - $startedMonotonic) / 1_000_000));
+        $runs->finish(
+            $runId,
+            $state,
+            $clock->now()->setTimezone(new DateTimeZone('UTC')),
+            $durationMs,
+            $metrics,
+            $errorClass,
+            $errorCode,
+        );
     }
 
     private function invalidInput(): int

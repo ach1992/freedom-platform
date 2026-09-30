@@ -10,6 +10,7 @@ use App\Shared\Application\OperationalAlertRecorder;
 use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\OperationsAccessFoundationSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -53,6 +54,10 @@ final class OperationalAlertDeliveryIntegrationTest extends TestCase
         self::assertSame(['critical', 'critical'], $gateway->severities);
         self::assertSame(['operations.delivery_test', 'operations.delivery_test'], $gateway->events);
         self::assertSame([false, false], $gateway->resolved);
+        self::assertSame([3, 3], $gateway->occurrenceCounts);
+        foreach ($gateway->correlationIds as $correlationId) {
+            self::assertNotSame('', $correlationId);
+        }
         foreach ($gateway->trackingCodes as $trackingCode) {
             self::assertMatchesRegularExpression('/\\A[a-f0-9]{12}\\z/', $trackingCode);
         }
@@ -65,6 +70,37 @@ final class OperationalAlertDeliveryIntegrationTest extends TestCase
         $replay = $this->app->make(OperationalAlertDeliveryRunner::class)->runDue(10);
         self::assertSame(0, $replay->examined);
         self::assertSame(2, $gateway->calls);
+    }
+
+    public function test_delivery_command_records_durable_scheduled_run_evidence(): void
+    {
+        $gateway = new FakeOperationalAlertDeliveryGateway;
+        $this->app->instance(OperationalAlertDeliveryGateway::class, $gateway);
+        $this->app->make(OperationalAlertRecorder::class)->raise(
+            'critical',
+            'operations.delivery_command_test',
+            hash('sha256', 'operations-delivery-command-test'),
+            'operations.delivery.command',
+            ['state' => 'degraded'],
+        );
+
+        self::assertSame(0, Artisan::call('operations:deliver-alerts', [
+            '--limit' => 10,
+            '--json' => true,
+        ]));
+
+        $run = DB::table('scheduled_task_runs')
+            ->where('task_name', 'operations.deliver-alerts')
+            ->first(['state', 'metrics', 'error_class', 'error_code']);
+        self::assertNotNull($run);
+        self::assertSame('succeeded', $run->state);
+        self::assertNull($run->error_class);
+        self::assertNull($run->error_code);
+
+        $metrics = json_decode((string) $run->metrics, true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(2, $metrics['examined'] ?? null);
+        self::assertSame(2, $metrics['queued'] ?? null);
+        self::assertSame(0, $metrics['failed'] ?? null);
     }
 
     public function test_transient_queue_failure_retries_then_becomes_manual_review_without_payload_leakage(): void
@@ -133,6 +169,12 @@ final class FakeOperationalAlertDeliveryGateway implements OperationalAlertDeliv
     /** @var list<string> */
     public array $requestKeys = [];
 
+    /** @var list<int> */
+    public array $occurrenceCounts = [];
+
+    /** @var list<string> */
+    public array $correlationIds = [];
+
     public function __construct(private readonly bool $shouldFail = false) {}
 
     public function queue(
@@ -147,18 +189,17 @@ final class FakeOperationalAlertDeliveryGateway implements OperationalAlertDeliv
     ): string {
         $this->calls++;
         $this->audiences[] = $audience;
+        $this->severities[] = $severity;
+        $this->events[] = $eventName;
+        $this->resolved[] = $resolved;
+        $this->trackingCodes[] = $trackingCode;
+        $this->requestKeys[] = $requestKey;
+        $this->occurrenceCounts[] = $occurrenceCount;
+        $this->correlationIds[] = $correlationId;
 
         if ($this->shouldFail) {
             throw new RuntimeException('simulated provider queue failure with secret detail');
         }
-
-        self::assertContains($severity, ['critical']);
-        self::assertSame('operations.delivery_test', $eventName);
-        self::assertGreaterThanOrEqual(1, $occurrenceCount);
-        self::assertFalse($resolved);
-        self::assertMatchesRegularExpression('/\A[a-f0-9]{12}\z/', $trackingCode);
-        self::assertStringStartsWith('operations-alert:', $requestKey);
-        self::assertNotSame('', $correlationId);
 
         return (string) Str::ulid();
     }
