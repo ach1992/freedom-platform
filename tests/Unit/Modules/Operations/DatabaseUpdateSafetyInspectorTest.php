@@ -178,7 +178,7 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
     }
 
     /** @requirement UPD-001 RUN-003 OPS-003 QUA-001 */
-    public function test_worker_boot_verification_requires_every_reviewed_supervisor_process_after_activation(): void
+    public function test_worker_boot_verification_is_release_and_generation_bound(): void
     {
         $workers = [
             'freedom-platform-critical_00',
@@ -187,23 +187,94 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
             'freedom-platform-provisioning_01',
             'freedom-platform-bulk_00',
         ];
-        $inspector = new DatabaseUpdateSafetyInspector(
-            $this->databaseForWorkers($workers),
+
+        $baselineInspector = new DatabaseUpdateSafetyInspector(
+            $this->databaseForWorkers($this->workerRows(
+                $workers,
+                '1.0.0',
+                str_repeat('a', 32),
+                '2026-09-30 00:59:59.000000',
+            )),
             base_path('database/migrations'),
             base_path('deploy/supervisor/freedom-platform.conf'),
         );
-        $inspector->assertWorkersRestartedAfter('2026-09-30 01:00:00.000000');
+        $baseline = $baselineInspector->workerBootIds();
+        self::assertCount(count($workers), $baseline);
+
+        $freshInspector = new DatabaseUpdateSafetyInspector(
+            $this->databaseForWorkers($this->workerRows(
+                $workers,
+                '1.1.0',
+                str_repeat('b', 32),
+                '2026-09-30 01:00:01.000000',
+            )),
+            base_path('database/migrations'),
+            base_path('deploy/supervisor/freedom-platform.conf'),
+        );
+        $freshInspector->assertWorkersRestartedAfter(
+            '2026-09-30 01:00:00.000000',
+            '1.1.0',
+            $baseline,
+        );
         self::addToAssertionCount(1);
 
-        array_pop($workers);
-        $inspector = new DatabaseUpdateSafetyInspector(
-            $this->databaseForWorkers($workers),
+        foreach ([
+            'wrong release' => $this->workerRows(
+                $workers,
+                '1.0.0',
+                str_repeat('c', 32),
+                '2026-09-30 01:00:01.000000',
+            ),
+            'stale generation' => $this->workerRows(
+                $workers,
+                '1.1.0',
+                str_repeat('a', 32),
+                '2026-09-30 01:00:01.000000',
+            ),
+            'stale timestamp' => $this->workerRows(
+                $workers,
+                '1.1.0',
+                str_repeat('c', 32),
+                '2026-09-30 00:59:59.000000',
+            ),
+        ] as $case => $rows) {
+            $inspector = new DatabaseUpdateSafetyInspector(
+                $this->databaseForWorkers($rows),
+                base_path('database/migrations'),
+                base_path('deploy/supervisor/freedom-platform.conf'),
+            );
+
+            try {
+                $inspector->assertWorkersRestartedAfter(
+                    '2026-09-30 01:00:00.000000',
+                    '1.1.0',
+                    $baseline,
+                );
+                self::fail('Worker verification must reject '.$case.'.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('The activated release worker boot verification failed.', $exception->getMessage());
+            }
+        }
+
+        $missingRows = $this->workerRows(
+            $workers,
+            '1.1.0',
+            str_repeat('d', 32),
+            '2026-09-30 01:00:01.000000',
+        );
+        array_pop($missingRows);
+        $missingInspector = new DatabaseUpdateSafetyInspector(
+            $this->databaseForWorkers($missingRows),
             base_path('database/migrations'),
             base_path('deploy/supervisor/freedom-platform.conf'),
         );
         try {
-            $inspector->assertWorkersRestartedAfter('2026-09-30 01:00:00.000000');
-            self::fail('Every reviewed Supervisor worker must boot after activation.');
+            $missingInspector->assertWorkersRestartedAfter(
+                '2026-09-30 01:00:00.000000',
+                '1.1.0',
+                $baseline,
+            );
+            self::fail('Every reviewed Supervisor worker must provide fresh boot evidence.');
         } catch (RuntimeException $exception) {
             self::assertSame('The activated release worker boot verification failed.', $exception->getMessage());
         }
@@ -243,13 +314,15 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
         return $query;
     }
 
-    /** @param list<string> $workers */
-    private function databaseForWorkers(array $workers): DatabaseManager
+    /** @param list<array{worker_id:string,release_version:string,boot_id:string,last_seen_at:string}> $rows */
+    private function databaseForWorkers(array $rows): DatabaseManager
     {
         $query = $this->createStub(QueryBuilder::class);
         $query->method('whereIn')->willReturnSelf();
-        $query->method('where')->willReturnSelf();
-        $query->method('pluck')->willReturn(new Collection($workers));
+        $query->method('get')->willReturn(new Collection(array_map(
+            static fn (array $row): object => (object) $row,
+            $rows,
+        )));
 
         $connection = $this->createStub(Connection::class);
         $connection->method('table')->willReturn($query);
@@ -258,6 +331,27 @@ final class DatabaseUpdateSafetyInspectorTest extends TestCase
         $database->method('connection')->willReturn($connection);
 
         return $database;
+    }
+
+    /**
+     * @param list<string> $workers
+     * @return list<array{worker_id:string,release_version:string,boot_id:string,last_seen_at:string}>
+     */
+    private function workerRows(
+        array $workers,
+        string $release,
+        string $bootId,
+        string $lastSeenAt,
+    ): array {
+        return array_map(
+            static fn (string $workerId): array => [
+                'worker_id' => $workerId,
+                'release_version' => $release,
+                'boot_id' => $bootId,
+                'last_seen_at' => $lastSeenAt,
+            ],
+            $workers,
+        );
     }
 
     private function removeTree(string $path): void
