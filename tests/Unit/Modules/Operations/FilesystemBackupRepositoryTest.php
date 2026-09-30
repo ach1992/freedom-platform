@@ -202,6 +202,59 @@ PHP, var_export($autoload, true)));
         }
     }
 
+    /** @requirement BAK-001 OPS-002 QUA-001 */
+    public function test_operational_status_is_read_only_and_bounds_completed_inventory(): void
+    {
+        $base = $this->directory('status');
+        $root = $base.'/backups';
+        $repository = new FilesystemBackupRepository($root);
+
+        try {
+            self::assertDirectoryDoesNotExist($root);
+            self::assertSame([
+                'completed_count' => 0,
+                'inspection_complete' => true,
+                'inspected_entries' => 0,
+                'latest_bytes' => null,
+                'latest_completed_at' => null,
+            ], $repository->operationalStatus());
+            self::assertDirectoryDoesNotExist($root);
+
+            $authorityRoot = $repository->root();
+            chmod($authorityRoot, 0750);
+            chmod($authorityRoot.'/completed', 0750);
+            clearstatcache(true, $authorityRoot);
+            clearstatcache(true, $authorityRoot.'/completed');
+            $rootMode = fileperms($authorityRoot) & 0777;
+            $completedMode = fileperms($authorityRoot.'/completed') & 0777;
+
+            $completedAtValues = [];
+            for ($index = 0; $index < 40; $index++) {
+                $id = sprintf('20260930T%06dZ-%016x', $index + 1, $index + 1);
+                $completedAt = sprintf('2026-09-30T00:00:%02d+00:00', $index);
+                $completedAtValues[] = $completedAt;
+                $this->completedPair($authorityRoot, $id, $completedAt);
+            }
+
+            $status = $repository->operationalStatus();
+
+            self::assertFalse($status['inspection_complete']);
+            self::assertSame(64, $status['inspected_entries']);
+            self::assertGreaterThanOrEqual(0, $status['completed_count']);
+            self::assertLessThanOrEqual(40, $status['completed_count']);
+            if ($status['latest_completed_at'] !== null) {
+                self::assertContains($status['latest_completed_at'], $completedAtValues);
+            }
+
+            clearstatcache(true, $authorityRoot);
+            clearstatcache(true, $authorityRoot.'/completed');
+            self::assertSame($rootMode, fileperms($authorityRoot) & 0777);
+            self::assertSame($completedMode, fileperms($authorityRoot.'/completed') & 0777);
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
     private function waitForFile(string $path): void
     {
         $deadline = microtime(true) + 2.0;

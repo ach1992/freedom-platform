@@ -12,4 +12,15 @@ interface RestoreWorkspace
 
     /** @param array<string, mixed> $report */
     public function storeReport(string $restoreRunId, array $report): void;
+
+    /**
+     * @return array{
+     *     latest_status:string|null,
+     *     latest_failure_code:string|null,
+     *     latest_completed_at:string|null,
+     *     report_inventory_complete:bool,
+     *     inspected_entries:int
+     * }
+     */
+    public function operationalStatus(): array;
 }

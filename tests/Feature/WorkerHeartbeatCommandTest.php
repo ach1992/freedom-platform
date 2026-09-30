@@ -64,6 +64,19 @@ final class WorkerHeartbeatCommandTest extends TestCase
         ], $firstOutput);
 
         self::assertSame(1, $firstExitCode, $firstOutput->fetch());
+        $this->assertDatabaseHas('scheduled_task_runs', [
+            'task_name' => 'operations.check-worker-heartbeats',
+            'state' => 'succeeded',
+        ]);
+        $metrics = json_decode(
+            (string) DB::table('scheduled_task_runs')
+                ->where('task_name', 'operations.check-worker-heartbeats')
+                ->orderBy('id')
+                ->value('metrics'),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        self::assertSame(1, $metrics['stale_workers'] ?? null);
         $this->assertDatabaseHas('alerts', [
             'severity' => 'critical',
             'event_name' => 'operations.worker_heartbeat_stale',
@@ -103,5 +116,9 @@ final class WorkerHeartbeatCommandTest extends TestCase
 
         self::assertSame(0, $exitCode, $output->fetch());
         self::assertSame(0, DB::table('alerts')->count());
+        $this->assertDatabaseHas('scheduled_task_runs', [
+            'task_name' => 'operations.check-worker-heartbeats',
+            'state' => 'succeeded',
+        ]);
     }
 }

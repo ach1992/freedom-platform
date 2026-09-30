@@ -12,7 +12,6 @@ use App\Shared\Application\OutboxRuntimeResult;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Database\Query\Builder;
 use InvalidArgumentException;
 
 final readonly class DatabaseOutboxRuntime implements OutboxRuntime
@@ -55,12 +54,9 @@ final readonly class DatabaseOutboxRuntime implements OutboxRuntime
 
         $now = $this->clock->now();
         $nowString = $now->format('Y-m-d H:i:s.u');
-        $dueBacklog = $this->claimableQuery($nowString)->count();
-        $oldestDue = $this->claimableQuery($nowString)->min('available_at');
-        $reviewRequired = $this->database->connection()->table('outbox_messages')
-            ->whereNull('processed_at')
-            ->where('dispatch_state', 'review_required')
-            ->count();
+        $dueBacklog = DatabaseOutboxClaimQuery::claimable($this->database->connection(), $nowString)->count();
+        $oldestDue = DatabaseOutboxClaimQuery::claimable($this->database->connection(), $nowString)->min('available_at');
+        $reviewRequired = DatabaseOutboxClaimQuery::reviewRequired($this->database->connection())->count();
 
         return new OutboxRuntimeResult(
             $examined,
@@ -72,18 +68,6 @@ final readonly class DatabaseOutboxRuntime implements OutboxRuntime
             $this->oldestDueAgeSeconds($oldestDue, $now),
             $reviewRequired,
         );
-    }
-
-    private function claimableQuery(string $now): Builder
-    {
-        return $this->database->connection()->table('outbox_messages')
-            ->whereNull('processed_at')
-            ->whereIn('dispatch_state', ['pending', 'retry', 'leased'])
-            ->where('available_at', '<=', $now)
-            ->where(function (Builder $query) use ($now): void {
-                $query->whereNull('leased_until')
-                    ->orWhere('leased_until', '<=', $now);
-            });
     }
 
     private function oldestDueAgeSeconds(mixed $oldestDue, DateTimeImmutable $now): ?int

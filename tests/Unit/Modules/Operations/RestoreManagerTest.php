@@ -976,6 +976,11 @@ final readonly class RestoreFailingFinalReportWorkspace implements RestoreWorksp
 
         $this->inner->storeReport($restoreRunId, $report);
     }
+
+    public function operationalStatus(): array
+    {
+        return $this->inner->operationalStatus();
+    }
 }
 
 final readonly class RestoreTestPayloadRestorer implements RestorePayloadRestorer
@@ -1090,6 +1095,21 @@ final class RestoreTestUpdateWorkspace implements UpdateWorkspace
     {
         $this->events->events[] = 'update_identity';
         $this->identity = $identity;
+    }
+
+    public function operationalStatus(): array
+    {
+        $report = $this->reports === [] ? null : end($this->reports);
+
+        return [
+            'current_release_id' => $this->current,
+            'application_version' => is_array($this->identity) && is_string($this->identity['application_version'] ?? null)
+                ? $this->identity['application_version']
+                : null,
+            'latest_status' => is_array($report) && is_string($report['status'] ?? null) ? $report['status'] : null,
+            'latest_failure_code' => is_array($report) && is_string($report['failure_code'] ?? null) ? $report['failure_code'] : null,
+            'latest_completed_at' => is_array($report) && is_string($report['completed_at'] ?? null) ? $report['completed_at'] : null,
+        ];
     }
 
     public function pruneReleases(array $protectedReleaseIds, int $retention): void {}

@@ -40,6 +40,19 @@ interface BackupRepository
     /** @return array{filename:string,bytes:int,sha256:string,completed_at:string} */
     public function completedArtifactMetadata(string $backupId): array;
 
+    /**
+     * completed_count is the number of validated completed backups observed inside the bounded inspection.
+     *
+     * @return array{
+     *     completed_count:int,
+     *     inspection_complete:bool,
+     *     inspected_entries:int,
+     *     latest_bytes:int|null,
+     *     latest_completed_at:string|null
+     * }
+     */
+    public function operationalStatus(): array;
+
     public function readArtifactSlice(string $backupId, int $offset, int $length): string;
 
     public function storeTelegramExportManifest(string $backupId, string $contents): void;

@@ -37,6 +37,17 @@ Schedule::command('operations:dispatch-outbox', [
     ->withoutOverlapping(10)
     ->onOneServer();
 
+Schedule::command('operations:deliver-alerts', [
+    '--limit' => 25,
+    '--json' => true,
+])
+    ->name('operations.deliver-alerts')
+    ->everyMinute()
+    // Alert intents are persisted before this scan. Per-intent leases plus Telegram's durable
+    // request identity fence duplicate local queueing while keeping crash recovery bounded.
+    ->withoutOverlapping(10)
+    ->onOneServer();
+
 Schedule::command('wallet:maintenance', [
     '--hold-limit' => 100,
     '--wallet-limit' => 200,

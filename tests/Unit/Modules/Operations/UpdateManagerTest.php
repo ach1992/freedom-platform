@@ -656,6 +656,21 @@ final class FakeUpdateWorkspace implements UpdateWorkspace
         $this->identity = $identity;
     }
 
+    public function operationalStatus(): array
+    {
+        $report = $this->reports === [] ? null : $this->reports[array_key_last($this->reports)];
+
+        return [
+            'current_release_id' => $this->current,
+            'application_version' => is_array($this->identity) && is_string($this->identity['application_version'] ?? null)
+                ? $this->identity['application_version']
+                : null,
+            'latest_status' => is_array($report) && is_string($report['status'] ?? null) ? $report['status'] : null,
+            'latest_failure_code' => is_array($report) && is_string($report['failure_code'] ?? null) ? $report['failure_code'] : null,
+            'latest_completed_at' => is_array($report) && is_string($report['completed_at'] ?? null) ? $report['completed_at'] : null,
+        ];
+    }
+
     public function pruneReleases(array $protectedReleaseIds, int $retention): void
     {
         $this->events->add('workspace.prune');

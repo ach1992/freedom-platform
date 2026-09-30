@@ -32,6 +32,19 @@ interface UpdateWorkspace
     /** @param array<string, mixed> $identity */
     public function storeInstalledIdentity(array $identity): void;
 
+    /**
+     * @return array{
+     *     current_release_id:string|null,
+     *     application_version:string|null,
+     *     latest_status:string|null,
+     *     latest_failure_code:string|null,
+     *     latest_completed_at:string|null,
+     *     report_inventory_complete:bool,
+     *     inspected_entries:int
+     * }
+     */
+    public function operationalStatus(): array;
+
     /** @param list<string> $protectedReleaseIds */
     public function pruneReleases(array $protectedReleaseIds, int $retention): void;
 }

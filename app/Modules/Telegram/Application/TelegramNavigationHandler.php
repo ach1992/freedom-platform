@@ -10,6 +10,7 @@ use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
 use App\Modules\Customers\Application\CustomerAccountSummary;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
+use App\Modules\Operations\Application\OperationsPermissions;
 use App\Modules\Promotions\Application\ReferralSelfSummary;
 use App\Modules\Promotions\Application\ReferralSelfSummaryService;
 use App\Modules\Reporting\Application\ReportingPermissions;
@@ -1228,6 +1229,21 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $administrationButtons[] = new TelegramInlineCallbackButton(
                 $this->translation('telegram_reporting.entry_button', $locale),
                 $reporting->publicId,
+                TelegramInlineButtonStyle::Primary,
+            );
+        }
+
+        if ($this->administratorUsers->allowsUser($action->userId, OperationsPermissions::VIEW)) {
+            $operations = $this->callbacks->issue(
+                $action->sessionPublicId,
+                $sessionVersion,
+                TelegramAdministratorOperationsNavigationHandler::ACTION_ENTRY,
+                [],
+                'nav-admin-operations:'.$requestKey,
+            );
+            $administrationButtons[] = new TelegramInlineCallbackButton(
+                $this->translation('telegram_operations.entry_button', $locale),
+                $operations->publicId,
                 TelegramInlineButtonStyle::Primary,
             );
         }
@@ -4504,6 +4520,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             || $this->administratorSearchAvailableFor($userId)
             || $this->administratorAccess->availableForUser($userId)
             || $this->administratorUsers->allowsUser($userId, ReportingPermissions::VIEW)
+            || $this->administratorUsers->allowsUser($userId, OperationsPermissions::VIEW)
             || $this->administratorUsers->allowsUser($userId, TelegramBroadcastCampaignService::PERMISSION)
             || $this->administratorUsers->allowsUser($userId, TelegramClientGuideCatalog::MANAGE_PERMISSION)
             || $this->administratorUsers->allowsUser($userId, TelegramMenuConfigurationMutationExecutor::MANAGE_PERMISSION)

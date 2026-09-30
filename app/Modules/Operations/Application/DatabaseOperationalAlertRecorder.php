@@ -8,6 +8,7 @@ use App\Shared\Application\Clock;
 use App\Shared\Application\OperationalAlertRecorder;
 use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use JsonException;
@@ -94,15 +95,17 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
             $encodedContext,
             $countRepeatedOccurrence,
         ): void {
-            $now = $this->clock->now()->format('Y-m-d H:i:s.u');
+            $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
+            $alertId = (string) Str::uuid();
             $inserted = $connection->table('alerts')->insertOrIgnore([
-                'id' => (string) Str::uuid(),
+                'id' => $alertId,
                 'severity' => $severity,
                 'event_name' => $eventName,
                 'deduplication_key' => $deduplicationKey,
                 'correlation_id' => $correlationId,
                 'safe_context' => $encodedContext,
                 'occurrence_count' => 1,
+                'activation_sequence' => 1,
                 'first_seen_at' => $now,
                 'last_seen_at' => $now,
                 'acknowledged_at' => null,
@@ -111,20 +114,45 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 'updated_at' => $now,
             ]);
             if ($inserted === 1) {
+                $this->ensureDeliveryIntents(
+                    $connection,
+                    $alertId,
+                    1,
+                    $severity,
+                    $correlationId,
+                    $now,
+                );
+                $this->recordSecurityActivationAudit(
+                    $connection,
+                    $alertId,
+                    1,
+                    $severity,
+                    $eventName,
+                    $correlationId,
+                    $now,
+                );
+
                 return;
             }
 
-            /** @var object{id:string,occurrence_count:int|string}|null $existing */
+            /** @var object{id:string,occurrence_count:int|string,activation_sequence:int|string,acknowledged_at:?string,resolved_at:?string}|null $existing */
             $existing = $connection->table('alerts')
                 ->where('event_name', $eventName)
                 ->where('deduplication_key', $deduplicationKey)
                 ->lockForUpdate()
-                ->first(['id', 'occurrence_count']);
+                ->first(['id', 'occurrence_count', 'activation_sequence', 'acknowledged_at', 'resolved_at']);
             if ($existing === null) {
                 throw new RuntimeException('Operational alert deduplication conflict could not be reconciled.');
             }
             if (! $countRepeatedOccurrence) {
                 return;
+            }
+
+            $occurrenceCount = (int) $existing->occurrence_count + 1;
+            $activationSequence = (int) $existing->activation_sequence;
+            $reopened = $existing->resolved_at !== null;
+            if ($reopened) {
+                $activationSequence++;
             }
 
             $connection->table('alerts')
@@ -133,11 +161,31 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                     'severity' => $severity,
                     'correlation_id' => $correlationId,
                     'safe_context' => $encodedContext,
-                    'occurrence_count' => (int) $existing->occurrence_count + 1,
+                    'occurrence_count' => $occurrenceCount,
+                    'activation_sequence' => $activationSequence,
                     'last_seen_at' => $now,
+                    'acknowledged_at' => $reopened ? null : $existing->acknowledged_at,
                     'resolved_at' => null,
                     'updated_at' => $now,
                 ]);
+
+            $this->ensureDeliveryIntents(
+                $connection,
+                $existing->id,
+                $activationSequence,
+                $severity,
+                $correlationId,
+                $now,
+            );
+            $this->recordSecurityActivationAudit(
+                $connection,
+                $existing->id,
+                $activationSequence,
+                $severity,
+                $eventName,
+                $correlationId,
+                $now,
+            );
         }, 3);
     }
 
@@ -146,7 +194,7 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
         $this->assertEventName($eventName);
         $this->assertDeduplicationKey($deduplicationKey);
 
-        $now = $this->clock->now()->format('Y-m-d H:i:s.u');
+        $now = $this->clock->now()->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');
         $this->database->connection()->table('alerts')
             ->where('event_name', $eventName)
             ->where('deduplication_key', $deduplicationKey)
@@ -155,6 +203,152 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 'resolved_at' => $now,
                 'updated_at' => $now,
             ]);
+    }
+
+    private function ensureDeliveryIntents(
+        Connection $connection,
+        string $alertId,
+        int $activationSequence,
+        string $severity,
+        string $correlationId,
+        string $now,
+    ): void {
+        foreach ($this->deliveryAudiences($severity) as $audience) {
+            $requestKey = sprintf(
+                'operations-alert:%s:%d:%s',
+                $alertId,
+                $activationSequence,
+                $audience,
+            );
+            $requestKeyHash = hash('sha256', $requestKey);
+            try {
+                $connection->table('operational_alert_deliveries')->insert([
+                    'public_id' => (string) Str::ulid(),
+                    'alert_id' => $alertId,
+                    'activation_sequence' => $activationSequence,
+                    'audience' => $audience,
+                    'request_key_hash' => $requestKeyHash,
+                    'state' => 'pending',
+                    'attempts' => 0,
+                    'available_at' => $now,
+                    'lease_token_hash' => null,
+                    'leased_until' => null,
+                    'telegram_operation_public_id' => null,
+                    'last_error_code' => null,
+                    'queued_at' => null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+
+                continue;
+            } catch (QueryException $exception) {
+                if (! $this->isDuplicateKey($exception)) {
+                    throw $exception;
+                }
+            }
+
+            /** @var object{request_key_hash:string}|null $existing */
+            $existing = $connection->table('operational_alert_deliveries')
+                ->where('alert_id', $alertId)
+                ->where('activation_sequence', $activationSequence)
+                ->where('audience', $audience)
+                ->first(['request_key_hash']);
+            if ($existing === null || ! hash_equals($existing->request_key_hash, $requestKeyHash)) {
+                throw new RuntimeException('Operational alert delivery intent replay is inconsistent.');
+            }
+        }
+    }
+
+    private function recordSecurityActivationAudit(
+        Connection $connection,
+        string $alertId,
+        int $activationSequence,
+        string $severity,
+        string $eventName,
+        string $correlationId,
+        string $now,
+    ): void {
+        if ($severity !== 'security') {
+            return;
+        }
+
+        $action = 'operations.alert.security_activated';
+        $safeData = [
+            'event_name' => $eventName,
+            'activation_sequence' => $activationSequence,
+        ];
+        $safeJson = json_encode($safeData, JSON_THROW_ON_ERROR);
+        $requestFingerprint = hash(
+            'sha256',
+            $action."\0".$alertId."\0".$activationSequence,
+        );
+
+        try {
+            $connection->table('audit_logs')->insert([
+                'actor_type' => 'system',
+                'actor_id' => null,
+                'action' => $action,
+                'target_type' => 'operational_alert',
+                'target_id' => $alertId,
+                'before_safe_data' => null,
+                'after_safe_data' => $safeJson,
+                'reason_code' => 'security_alert_activation',
+                'reason' => 'Security operational alert activation recorded.',
+                'correlation_id' => $correlationId,
+                'request_fingerprint' => $requestFingerprint,
+                'created_at' => $now,
+            ]);
+
+            return;
+        } catch (QueryException $exception) {
+            if (! $this->isDuplicateKey($exception)) {
+                throw $exception;
+            }
+        }
+
+        /** @var object{actor_type:string,actor_id:?string,action:string,target_type:string,target_id:string,after_safe_data:string,reason_code:string,reason:string}|null $existing */
+        $existing = $connection->table('audit_logs')
+            ->where('action', $action)
+            ->where('request_fingerprint', $requestFingerprint)
+            ->first([
+                'actor_type',
+                'actor_id',
+                'action',
+                'target_type',
+                'target_id',
+                'after_safe_data',
+                'reason_code',
+                'reason',
+            ]);
+        if ($existing === null
+            || $existing->actor_type !== 'system'
+            || $existing->actor_id !== null
+            || $existing->action !== $action
+            || $existing->target_type !== 'operational_alert'
+            || $existing->target_id !== $alertId
+            || $existing->reason_code !== 'security_alert_activation'
+            || $existing->reason !== 'Security operational alert activation recorded.'
+            || json_decode($existing->after_safe_data, true, 512, JSON_THROW_ON_ERROR) !== $safeData
+        ) {
+            throw new RuntimeException('Security operational alert audit replay is inconsistent.');
+        }
+    }
+
+    private function isDuplicateKey(QueryException $exception): bool
+    {
+        return (string) ($exception->errorInfo[0] ?? '') === '23000'
+            && (int) ($exception->errorInfo[1] ?? 0) === 1062;
+    }
+
+    /** @return list<string> */
+    private function deliveryAudiences(string $severity): array
+    {
+        return match ($severity) {
+            'warning' => ['report_channel'],
+            'critical' => ['report_channel', 'owner'],
+            'security' => ['owner'],
+            default => [],
+        };
     }
 
     private function assertSeverity(string $severity): void
