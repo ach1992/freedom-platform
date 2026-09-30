@@ -47,13 +47,7 @@ final readonly class TelegramOperationalAlertDeliveryGateway implements Operatio
             : $this->reportChannelChatId();
 
         $presentation = $this->presentations->fromSource(
-            new readonly class(
-                $severity,
-                $eventName,
-                $occurrenceCount,
-                $resolved,
-                $trackingCode,
-            ) implements ConfidentialTelegramPresentationSource
+            new readonly class($severity, $eventName, $occurrenceCount, $resolved, $trackingCode) implements ConfidentialTelegramPresentationSource
             {
                 public function __construct(
                     private string $severity,
