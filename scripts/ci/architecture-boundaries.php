@@ -49,6 +49,7 @@ return [
         'app/Modules/Reporting/Application/ReportingTelegramExportPresentationSource.php|App\Modules\Telegram\Application\TelegramProtectedPresentationReference',
         'app/Modules/Telegram/Application/DatabaseBackupTelegramOwnerDestinationResolver.php|App\\Modules\\Operations\\Application\\Contracts\\BackupTelegramOwnerDestinationResolver',
         'app/Modules/Telegram/Application/TelegramBackupDeliveryQueue.php|App\\Modules\\Operations\\Application\\Contracts\\BackupTelegramDeliveryQueue',
+        'app/Modules/Telegram/Application/TelegramOperationalAlertDeliveryGateway.php|App\\Modules\\Operations\\Application\\Contracts\\OperationalAlertDeliveryGateway',
     ],
     'domain_dependency_exceptions' => [
         'app/Modules/Catalog/Domain/CustomPlanPolicyDefinition.php|Customers\\Domain',
@@ -110,6 +111,7 @@ return [
         'app/Modules/Telegram/Application/TelegramGiftCardNavigationHandler.php',
         'app/Modules/Telegram/Application/TelegramInteractiveDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramMenuConfigurationNavigationHandler.php',
+        'app/Modules/Telegram/Application/TelegramOperationalAlertDeliveryGateway.php',
         'app/Modules/Telegram/Application/TelegramProtectedReferenceDeliveryOutboxHandler.php',
         'app/Modules/Telegram/Application/TelegramBackupProtectedReferenceDeliveryQueue.php',
         'app/Modules/Telegram/Application/TelegramReportingProtectedReferenceDeliveryQueue.php',
