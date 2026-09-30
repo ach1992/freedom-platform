@@ -514,6 +514,8 @@ return [
         'agent_status_histories' => 'Agents',
         'alerts' => 'Operations',
         'audit_logs' => 'SharedAppendOnly',
+        'operational_alert_deliveries' => 'Operations',
+        'operational_alert_events' => 'Operations',
         'broadcast_audiences' => 'Telegram',
         'broadcast_campaign_tests' => 'Telegram',
         'broadcast_campaigns' => 'Telegram',

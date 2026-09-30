@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Application;
 
 use App\Shared\Application\Clock;
+use App\Shared\Application\OperationalAlertRecorder;
 use DateInterval;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Support\Str;
@@ -18,6 +19,7 @@ final readonly class WorkerHeartbeatService
     public function __construct(
         private DatabaseManager $database,
         private Clock $clock,
+        private OperationalAlertRecorder $alerts,
     ) {}
 
     public function record(
@@ -40,12 +42,12 @@ final readonly class WorkerHeartbeatService
         }
 
         if ($releaseVersion !== null
-            && ($releaseVersion === '' || strlen($releaseVersion) > 64 || preg_match('/[\\x00-\\x1F\\x7F]/', $releaseVersion) === 1)
+            && ($releaseVersion === '' || strlen($releaseVersion) > 64 || preg_match('/[\x00-\x1F\x7F]/', $releaseVersion) === 1)
         ) {
             throw new InvalidArgumentException('Worker release identity must contain between 1 and 64 safe characters.');
         }
 
-        if ($bootId !== null && preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1) {
+        if ($bootId !== null && preg_match('/\A[0-9a-f]{32}\z/', $bootId) !== 1) {
             throw new InvalidArgumentException('Worker boot identity must be 32 lowercase hexadecimal characters.');
         }
 
@@ -65,14 +67,10 @@ final readonly class WorkerHeartbeatService
             ],
         );
 
-        $this->database->table('alerts')
-            ->where('event_name', 'operations.worker_heartbeat_stale')
-            ->where('deduplication_key', $this->deduplicationKey($workerId))
-            ->whereNull('resolved_at')
-            ->update([
-                'resolved_at' => $timestamp,
-                'updated_at' => $timestamp,
-            ]);
+        $this->alerts->resolve(
+            'operations.worker_heartbeat_stale',
+            $this->deduplicationKey($workerId),
+        );
     }
 
     /**
@@ -85,7 +83,6 @@ final readonly class WorkerHeartbeatService
         }
 
         $now = $this->clock->now();
-        $timestamp = $now->format('Y-m-d H:i:s.u');
         $cutoff = $now->sub(new DateInterval(sprintf('PT%dS', $maxAgeSeconds)));
 
         /** @var list<object{worker_id:string, queue:string, last_seen_at:string}> $stale */
@@ -97,47 +94,18 @@ final readonly class WorkerHeartbeatService
             ->all();
 
         foreach ($stale as $heartbeat) {
-            $deduplicationKey = $this->deduplicationKey($heartbeat->worker_id);
-            $safeContext = json_encode([
-                'worker_id' => $heartbeat->worker_id,
-                'queue' => $heartbeat->queue,
-                'last_seen_at' => $heartbeat->last_seen_at,
-                'max_age_seconds' => $maxAgeSeconds,
-            ], JSON_THROW_ON_ERROR);
-
-            /** @var null|object{id:string, occurrence_count:int} $existing */
-            $existing = $this->database->table('alerts')
-                ->where('event_name', 'operations.worker_heartbeat_stale')
-                ->where('deduplication_key', $deduplicationKey)
-                ->first();
-
-            if ($existing === null) {
-                $this->database->table('alerts')->insert([
-                    'id' => (string) Str::uuid(),
-                    'severity' => 'critical',
-                    'event_name' => 'operations.worker_heartbeat_stale',
-                    'deduplication_key' => $deduplicationKey,
-                    'correlation_id' => (string) Str::uuid(),
-                    'safe_context' => $safeContext,
-                    'occurrence_count' => 1,
-                    'first_seen_at' => $timestamp,
-                    'last_seen_at' => $timestamp,
-                    'created_at' => $timestamp,
-                    'updated_at' => $timestamp,
-                ]);
-
-                continue;
-            }
-
-            $this->database->table('alerts')
-                ->where('id', $existing->id)
-                ->update([
-                    'safe_context' => $safeContext,
-                    'occurrence_count' => $existing->occurrence_count + 1,
-                    'last_seen_at' => $timestamp,
-                    'resolved_at' => null,
-                    'updated_at' => $timestamp,
-                ]);
+            $this->alerts->raise(
+                'critical',
+                'operations.worker_heartbeat_stale',
+                $this->deduplicationKey($heartbeat->worker_id),
+                (string) Str::uuid(),
+                [
+                    'worker_id' => $heartbeat->worker_id,
+                    'queue' => $heartbeat->queue,
+                    'last_seen_at' => $heartbeat->last_seen_at,
+                    'max_age_seconds' => $maxAgeSeconds,
+                ],
+            );
         }
 
         return array_map(
