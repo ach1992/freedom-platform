@@ -9,12 +9,15 @@ use App\Modules\Operations\Application\Contracts\BackupRepository;
 use App\Modules\Operations\Application\ResolvedBackup;
 use Closure;
 use DateTimeImmutable;
+use FilesystemIterator;
 use RuntimeException;
 use Throwable;
 
 final readonly class FilesystemBackupRepository implements BackupRepository
 {
     private const AUTHORITY = 'freedom_platform_backup_v1';
+
+    private const OPERATIONAL_SCAN_LIMIT = 64;
 
     public function __construct(private string $configuredRoot) {}
 
@@ -437,33 +440,47 @@ final readonly class FilesystemBackupRepository implements BackupRepository
 
     public function operationalStatus(): array
     {
-        $completed = $this->root().'/completed';
-        $backupIds = [];
-        foreach (scandir($completed) ?: [] as $name) {
-            if (preg_match('/\\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.manifest\\.json\\z/', $name, $matches) === 1) {
-                $backupIds[$matches[1]] = true;
-            }
-        }
-
-        if ($backupIds === []) {
+        $completed = $this->readOnlyCompletedDirectory();
+        if ($completed === null) {
             return [
                 'completed_count' => 0,
+                'inspection_complete' => true,
+                'inspected_entries' => 0,
                 'latest_bytes' => null,
                 'latest_completed_at' => null,
             ];
         }
 
-        ksort($backupIds, SORT_STRING);
+        $completedCount = 0;
+        $inspectionComplete = true;
+        $inspectedEntries = 0;
         $latest = null;
-        $count = 0;
-        foreach (array_keys($backupIds) as $backupId) {
-            $metadata = $this->validatedCompletedArtifact($backupId, false);
-            $count++;
-            $latest = $metadata;
+        $latestAt = null;
+
+        foreach (new FilesystemIterator($completed, FilesystemIterator::SKIP_DOTS) as $entry) {
+            if ($inspectedEntries >= self::OPERATIONAL_SCAN_LIMIT) {
+                $inspectionComplete = false;
+                break;
+            }
+            $inspectedEntries++;
+
+            if (preg_match('/\\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.manifest\\.json\\z/', $entry->getFilename(), $matches) !== 1) {
+                continue;
+            }
+
+            $metadata = $this->validatedCompletedArtifactInDirectory($completed, $matches[1], false);
+            $completedAt = new DateTimeImmutable($metadata['completed_at']);
+            $completedCount++;
+            if ($latestAt === null || $completedAt > $latestAt) {
+                $latestAt = $completedAt;
+                $latest = $metadata;
+            }
         }
 
         return [
-            'completed_count' => $count,
+            'completed_count' => $completedCount,
+            'inspection_complete' => $inspectionComplete,
+            'inspected_entries' => $inspectedEntries,
             'latest_bytes' => $latest['bytes'] ?? null,
             'latest_completed_at' => $latest['completed_at'] ?? null,
         ];
@@ -570,6 +587,39 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         return $contents;
     }
 
+    private function readOnlyCompletedDirectory(): ?string
+    {
+        if (! str_starts_with($this->configuredRoot, DIRECTORY_SEPARATOR)) {
+            throw new RuntimeException('The backup root must be absolute.');
+        }
+        if (is_link($this->configuredRoot)) {
+            throw new RuntimeException('The backup root cannot be a symbolic link.');
+        }
+        if (! file_exists($this->configuredRoot)) {
+            return null;
+        }
+
+        $root = realpath($this->configuredRoot);
+        if ($root === false || ! is_dir($root)) {
+            throw new RuntimeException('The backup root is unavailable or unsafe.');
+        }
+
+        $path = $root.'/completed';
+        if (is_link($path)) {
+            throw new RuntimeException('The backup completed directory is unsafe.');
+        }
+        if (! file_exists($path)) {
+            return null;
+        }
+
+        $completed = realpath($path);
+        if ($completed === false || ! is_dir($completed) || dirname($completed) !== $root) {
+            throw new RuntimeException('The backup completed directory is unavailable or unsafe.');
+        }
+
+        return $completed;
+    }
+
     public function root(): string
     {
         if (! str_starts_with($this->configuredRoot, DIRECTORY_SEPARATOR)) {
@@ -615,8 +665,22 @@ final readonly class FilesystemBackupRepository implements BackupRepository
      */
     private function validatedCompletedArtifact(string $backupId, bool $verifyHash): array
     {
+        return $this->validatedCompletedArtifactInDirectory(
+            $this->root().'/completed',
+            $backupId,
+            $verifyHash,
+        );
+    }
+
+    /**
+     * @return array{path:string,filename:string,bytes:int,sha256:string,completed_at:string}
+     */
+    private function validatedCompletedArtifactInDirectory(
+        string $completed,
+        string $backupId,
+        bool $verifyHash,
+    ): array {
         $this->assertBackupId($backupId);
-        $completed = $this->root().'/completed';
         $artifactFilename = 'backup-'.$backupId.'.fbk';
         $artifactPath = $completed.'/'.$artifactFilename;
         $manifestPath = $completed.'/backup-'.$backupId.'.manifest.json';

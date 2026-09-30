@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
+use FilesystemIterator;
 use RuntimeException;
 use Throwable;
 
@@ -13,6 +14,8 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
     private const REPORT_VERSION = 1;
 
     private const IDENTITY_VERSION = 1;
+
+    private const OPERATIONAL_REPORT_SCAN_LIMIT = 64;
 
     public function __construct(private string $deploymentRoot) {}
 
@@ -302,6 +305,7 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
 
     public function operationalStatus(): array
     {
+        $root = $this->root();
         $currentRelease = $this->currentReleaseId();
         $identity = $this->installedIdentity();
         $applicationVersion = is_array($identity)
@@ -310,20 +314,38 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
                 ? $identity['application_version']
                 : null;
 
-        $reportsDirectory = $this->reportsDirectory($this->root());
-        $runIds = [];
-        foreach (scandir($reportsDirectory) ?: [] as $name) {
-            if (preg_match('/\\Aupdate-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.json\\z/', $name, $matches) === 1) {
-                $runIds[] = $matches[1];
+        $reportsDirectory = $this->readOnlyReportsDirectory($root);
+        $latestRunId = null;
+        $inspectionComplete = true;
+        $inspectedEntries = 0;
+
+        if ($reportsDirectory !== null) {
+            foreach (new FilesystemIterator($reportsDirectory, FilesystemIterator::SKIP_DOTS) as $entry) {
+                if ($inspectedEntries >= self::OPERATIONAL_REPORT_SCAN_LIMIT) {
+                    $inspectionComplete = false;
+                    break;
+                }
+                $inspectedEntries++;
+
+                if (preg_match('/\\Aupdate-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.json\\z/', $entry->getFilename(), $matches) !== 1) {
+                    continue;
+                }
+                if ($entry->isLink() || ! $entry->isFile()) {
+                    throw new RuntimeException('A protected update report path is unsafe.');
+                }
+
+                $runId = $matches[1];
+                if ($latestRunId === null || strcmp($runId, $latestRunId) > 0) {
+                    $latestRunId = $runId;
+                }
             }
         }
-        rsort($runIds, SORT_STRING);
 
         $status = null;
         $failureCode = null;
         $completedAt = null;
-        if ($runIds !== []) {
-            $report = $this->loadReport($runIds[0]);
+        if ($reportsDirectory !== null && $latestRunId !== null) {
+            $report = $this->readOperationalReport($reportsDirectory, $latestRunId);
             $status = $this->safeOperationalToken($report['status'] ?? null, 'update status');
             $failureCode = $this->safeOperationalToken($report['failure_code'] ?? null, 'update failure code', true);
             $completedAt = $this->safeOperationalTimestamp($report['completed_at'] ?? null, 'update completed timestamp');
@@ -335,6 +357,8 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
             'latest_status' => $status,
             'latest_failure_code' => $failureCode,
             'latest_completed_at' => $completedAt,
+            'report_inventory_complete' => $inspectionComplete,
+            'inspected_entries' => $inspectedEntries,
         ];
     }
 
@@ -390,6 +414,48 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
 
             $this->removeTree($releases.'/'.$releaseId);
         }
+    }
+
+    private function readOnlyReportsDirectory(string $root): ?string
+    {
+        $shared = realpath($root.'/shared');
+        if ($shared === false || ! is_dir($shared) || dirname($shared) !== $root) {
+            throw new RuntimeException('The shared deployment directory is unavailable.');
+        }
+
+        $path = $shared.'/update-reports';
+        if (is_link($path)) {
+            throw new RuntimeException('The protected update report directory is unsafe.');
+        }
+        if (! file_exists($path)) {
+            return null;
+        }
+
+        $reports = realpath($path);
+        if ($reports === false || ! is_dir($reports) || dirname($reports) !== $shared) {
+            throw new RuntimeException('The protected update report directory is unsafe.');
+        }
+
+        return $reports;
+    }
+
+    /** @return array<string, mixed> */
+    private function readOperationalReport(string $reportsDirectory, string $updateRunId): array
+    {
+        $this->assertRunId($updateRunId);
+        $path = $reportsDirectory.'/update-'.$updateRunId.'.json';
+        if (! is_file($path) || is_link($path)) {
+            throw new RuntimeException('The protected update report is unavailable or unsafe.');
+        }
+
+        $report = $this->readJson($path, 'The protected update report is invalid.');
+        if (($report['version'] ?? null) !== self::REPORT_VERSION
+            || ($report['update_run_id'] ?? null) !== $updateRunId
+        ) {
+            throw new RuntimeException('The protected update report identity is invalid.');
+        }
+
+        return $report;
     }
 
     private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string

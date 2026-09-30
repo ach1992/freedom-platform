@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use FilesystemIterator;
 use RuntimeException;
 use Throwable;
 
 final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
 {
+    private const OPERATIONAL_REPORT_SCAN_LIMIT = 64;
+
     public function __construct(private string $configuredBackupRoot) {}
 
     public function create(string $restoreRunId): string
@@ -79,23 +82,51 @@ final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
 
     public function operationalStatus(): array
     {
-        $reports = $this->restoreRoot().'/reports';
-        $runIds = [];
-        foreach (scandir($reports) ?: [] as $name) {
-            if (preg_match('/\\Arestore-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.json\\z/', $name, $matches) === 1) {
-                $runIds[] = $matches[1];
-            }
-        }
-        rsort($runIds, SORT_STRING);
-        if ($runIds === []) {
+        $reports = $this->readOnlyReportsDirectory();
+        if ($reports === null) {
             return [
                 'latest_status' => null,
                 'latest_failure_code' => null,
                 'latest_completed_at' => null,
+                'report_inventory_complete' => true,
+                'inspected_entries' => 0,
             ];
         }
 
-        $runId = $runIds[0];
+        $latestRunId = null;
+        $inspectionComplete = true;
+        $inspectedEntries = 0;
+        foreach (new FilesystemIterator($reports, FilesystemIterator::SKIP_DOTS) as $entry) {
+            if ($inspectedEntries >= self::OPERATIONAL_REPORT_SCAN_LIMIT) {
+                $inspectionComplete = false;
+                break;
+            }
+            $inspectedEntries++;
+
+            if (preg_match('/\\Arestore-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.json\\z/', $entry->getFilename(), $matches) !== 1) {
+                continue;
+            }
+            if ($entry->isLink() || ! $entry->isFile()) {
+                throw new RuntimeException('A protected restore report path is unsafe.');
+            }
+
+            $runId = $matches[1];
+            if ($latestRunId === null || strcmp($runId, $latestRunId) > 0) {
+                $latestRunId = $runId;
+            }
+        }
+
+        if ($latestRunId === null) {
+            return [
+                'latest_status' => null,
+                'latest_failure_code' => null,
+                'latest_completed_at' => null,
+                'report_inventory_complete' => $inspectionComplete,
+                'inspected_entries' => $inspectedEntries,
+            ];
+        }
+
+        $runId = $latestRunId;
         $path = $reports.'/restore-'.$runId.'.json';
         if (! is_file($path) || is_link($path)) {
             throw new RuntimeException('The protected restore report path is unsafe.');
@@ -125,10 +156,57 @@ final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
             'latest_status' => $this->safeOperationalToken($decoded['status'] ?? null, 'restore status'),
             'latest_failure_code' => $this->safeOperationalToken($decoded['failure_code'] ?? null, 'restore failure code', true),
             'latest_completed_at' => $this->safeOperationalTimestamp($decoded['completed_at'] ?? null),
+            'report_inventory_complete' => $inspectionComplete,
+            'inspected_entries' => $inspectedEntries,
         ];
     }
 
-    private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string
+    private function readOnlyReportsDirectory(): ?string
+    {
+        if (! str_starts_with($this->configuredBackupRoot, DIRECTORY_SEPARATOR)
+            || is_link($this->configuredBackupRoot)
+        ) {
+            throw new RuntimeException('The restore authority root is invalid.');
+        }
+        if (! file_exists($this->configuredBackupRoot)) {
+            return null;
+        }
+
+        $backupRoot = realpath($this->configuredBackupRoot);
+        if ($backupRoot === false || ! is_dir($backupRoot)) {
+            throw new RuntimeException('The restore authority root is unavailable.');
+        }
+
+        $restorePath = $backupRoot.'/restore';
+        if (is_link($restorePath)) {
+            throw new RuntimeException('The restore authority directory is unsafe.');
+        }
+        if (! file_exists($restorePath)) {
+            return null;
+        }
+
+        $restore = realpath($restorePath);
+        if ($restore === false || ! is_dir($restore) || dirname($restore) !== $backupRoot) {
+            throw new RuntimeException('The restore authority directory is unsafe.');
+        }
+
+        $reportsPath = $restore.'/reports';
+        if (is_link($reportsPath)) {
+            throw new RuntimeException('A restore authority subdirectory is unsafe.');
+        }
+        if (! file_exists($reportsPath)) {
+            return null;
+        }
+
+        $reports = realpath($reportsPath);
+        if ($reports === false || ! is_dir($reports) || dirname($reports) !== $restore) {
+            throw new RuntimeException('A restore authority subdirectory is unsafe.');
+        }
+
+        return $reports;
+    }
+
+    private function safeOperationalToken    private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string
     {
         if ($value === null && $nullable) {
             return null;
