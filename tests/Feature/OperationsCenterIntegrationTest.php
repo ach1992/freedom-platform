@@ -15,7 +15,6 @@ use Database\Seeders\OperationsAccessFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use RuntimeException;
 use Tests\TestCase;
 
