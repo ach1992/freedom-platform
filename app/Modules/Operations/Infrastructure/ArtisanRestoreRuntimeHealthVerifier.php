@@ -39,8 +39,8 @@ final readonly class ArtisanRestoreRuntimeHealthVerifier implements RestoreRunti
     /** @requirement BAK-002 OPS-001 SEC-001 QUA-001 */
     public function verify(string $expectedAuthorityFingerprint, ?string $releasePath = null): void
     {
-        $artisanPath = $artisanPath;
-        $workingDirectory = $workingDirectory;
+        $artisanPath = $this->artisanPath;
+        $workingDirectory = $this->workingDirectory;
         if ($releasePath !== null) {
             if (! str_starts_with($releasePath, DIRECTORY_SEPARATOR)
                 || is_link($releasePath)
