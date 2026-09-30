@@ -435,6 +435,40 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         ];
     }
 
+    public function operationalStatus(): array
+    {
+        $completed = $this->root().'/completed';
+        $backupIds = [];
+        foreach (scandir($completed) ?: [] as $name) {
+            if (preg_match('/\\Abackup-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.manifest\\.json\\z/', $name, $matches) === 1) {
+                $backupIds[$matches[1]] = true;
+            }
+        }
+
+        if ($backupIds === []) {
+            return [
+                'completed_count' => 0,
+                'latest_bytes' => null,
+                'latest_completed_at' => null,
+            ];
+        }
+
+        ksort($backupIds, SORT_STRING);
+        $latest = null;
+        $count = 0;
+        foreach (array_keys($backupIds) as $backupId) {
+            $metadata = $this->validatedCompletedArtifact($backupId, false);
+            $count++;
+            $latest = $metadata;
+        }
+
+        return [
+            'completed_count' => $count,
+            'latest_bytes' => $latest['bytes'] ?? null,
+            'latest_completed_at' => $latest['completed_at'] ?? null,
+        ];
+    }
+
     public function readArtifactSlice(string $backupId, int $offset, int $length): string
     {
         if ($offset < 0 || $length < 1) {

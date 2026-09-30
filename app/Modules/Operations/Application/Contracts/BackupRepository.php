@@ -40,6 +40,9 @@ interface BackupRepository
     /** @return array{filename:string,bytes:int,sha256:string,completed_at:string} */
     public function completedArtifactMetadata(string $backupId): array;
 
+    /** @return array{completed_count:int,latest_bytes:int|null,latest_completed_at:string|null} */
+    public function operationalStatus(): array;
+
     public function readArtifactSlice(string $backupId, int $offset, int $length): string;
 
     public function storeTelegramExportManifest(string $backupId, string $contents): void;

@@ -300,6 +300,44 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
         $this->atomicJsonWrite($this->root().'/shared/installed-release.json', $identity);
     }
 
+    public function operationalStatus(): array
+    {
+        $currentRelease = $this->currentReleaseId();
+        $identity = $this->installedIdentity();
+        $applicationVersion = is_array($identity)
+            && ($identity['release_id'] ?? null) === $currentRelease
+            && is_string($identity['application_version'] ?? null)
+                ? $identity['application_version']
+                : null;
+
+        $reportsDirectory = $this->reportsDirectory($this->root());
+        $runIds = [];
+        foreach (scandir($reportsDirectory) ?: [] as $name) {
+            if (preg_match('/\\Aupdate-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.json\\z/', $name, $matches) === 1) {
+                $runIds[] = $matches[1];
+            }
+        }
+        rsort($runIds, SORT_STRING);
+
+        $status = null;
+        $failureCode = null;
+        $completedAt = null;
+        if ($runIds !== []) {
+            $report = $this->loadReport($runIds[0]);
+            $status = $this->safeOperationalToken($report['status'] ?? null, 'update status');
+            $failureCode = $this->safeOperationalToken($report['failure_code'] ?? null, 'update failure code', true);
+            $completedAt = $this->safeOperationalTimestamp($report['completed_at'] ?? null, 'update completed timestamp');
+        }
+
+        return [
+            'current_release_id' => $currentRelease,
+            'application_version' => $applicationVersion,
+            'latest_status' => $status,
+            'latest_failure_code' => $failureCode,
+            'latest_completed_at' => $completedAt,
+        ];
+    }
+
     /** @param list<string> $protectedReleaseIds */
     public function pruneReleases(array $protectedReleaseIds, int $retention): void
     {
@@ -352,6 +390,30 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
 
             $this->removeTree($releases.'/'.$releaseId);
         }
+    }
+
+    private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string
+    {
+        if ($value === null && $nullable) {
+            return null;
+        }
+        if (! is_string($value) || preg_match('/\\A[a-z0-9_.:-]{1,64}\\z/', $value) !== 1) {
+            throw new RuntimeException('The protected '.$label.' is invalid.');
+        }
+
+        return $value;
+    }
+
+    private function safeOperationalTimestamp(mixed $value, string $label): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (! is_string($value) || strlen($value) > 64 || preg_match('/[\\x00-\\x1F\\x7F]/', $value) === 1) {
+            throw new RuntimeException('The protected '.$label.' is invalid.');
+        }
+
+        return $value;
     }
 
     private function root(): string

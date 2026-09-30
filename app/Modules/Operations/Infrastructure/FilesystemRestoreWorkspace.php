@@ -6,6 +6,7 @@ namespace App\Modules\Operations\Infrastructure;
 
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use RuntimeException;
+use Throwable;
 
 final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
 {
@@ -74,6 +75,81 @@ final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
                 @unlink($temporary);
             }
         }
+    }
+
+    public function operationalStatus(): array
+    {
+        $reports = $this->restoreRoot().'/reports';
+        $runIds = [];
+        foreach (scandir($reports) ?: [] as $name) {
+            if (preg_match('/\\Arestore-([0-9]{8}T[0-9]{6}Z-[a-f0-9]{16})\\.json\\z/', $name, $matches) === 1) {
+                $runIds[] = $matches[1];
+            }
+        }
+        rsort($runIds, SORT_STRING);
+        if ($runIds === []) {
+            return [
+                'latest_status' => null,
+                'latest_failure_code' => null,
+                'latest_completed_at' => null,
+            ];
+        }
+
+        $runId = $runIds[0];
+        $path = $reports.'/restore-'.$runId.'.json';
+        if (! is_file($path) || is_link($path)) {
+            throw new RuntimeException('The protected restore report path is unsafe.');
+        }
+        $bytes = filesize($path);
+        if (! is_int($bytes) || $bytes < 1 || $bytes > 1_000_000) {
+            throw new RuntimeException('The protected restore report size is invalid.');
+        }
+
+        try {
+            $contents = file_get_contents($path);
+            $decoded = is_string($contents)
+                ? json_decode($contents, true, 32, JSON_THROW_ON_ERROR)
+                : null;
+        } catch (Throwable $throwable) {
+            throw new RuntimeException('The protected restore report is invalid.', 0, $throwable);
+        }
+        if (! is_array($decoded)
+            || array_is_list($decoded)
+            || ($decoded['version'] ?? null) !== 1
+            || ($decoded['restore_run_id'] ?? null) !== $runId
+        ) {
+            throw new RuntimeException('The protected restore report is malformed.');
+        }
+
+        return [
+            'latest_status' => $this->safeOperationalToken($decoded['status'] ?? null, 'restore status'),
+            'latest_failure_code' => $this->safeOperationalToken($decoded['failure_code'] ?? null, 'restore failure code', true),
+            'latest_completed_at' => $this->safeOperationalTimestamp($decoded['completed_at'] ?? null),
+        ];
+    }
+
+    private function safeOperationalToken(mixed $value, string $label, bool $nullable = false): ?string
+    {
+        if ($value === null && $nullable) {
+            return null;
+        }
+        if (! is_string($value) || preg_match('/\\A[a-z0-9_.:-]{1,64}\\z/', $value) !== 1) {
+            throw new RuntimeException('The protected '.$label.' is invalid.');
+        }
+
+        return $value;
+    }
+
+    private function safeOperationalTimestamp(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (! is_string($value) || strlen($value) > 64 || preg_match('/[\\x00-\\x1F\\x7F]/', $value) === 1) {
+            throw new RuntimeException('The protected restore completed timestamp is invalid.');
+        }
+
+        return $value;
     }
 
     private function restoreRoot(): string
