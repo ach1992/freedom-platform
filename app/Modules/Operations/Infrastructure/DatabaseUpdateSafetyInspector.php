@@ -86,12 +86,59 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
         }
     }
 
-    /** @requirement UPD-001 RUN-003 OPS-003 QUA-001 */
-    public function assertWorkersRestartedAfter(string $activatedAfter): void
+    /** @return array<string, string> */
+    public function workerBootIds(): array
     {
-        $activation = \DateTimeImmutable::createFromFormat('Y-m-d H:i:s.u', $activatedAfter, new \DateTimeZone('UTC'));
-        if ($activation === false || $activation->format('Y-m-d H:i:s.u') !== $activatedAfter) {
-            throw new RuntimeException('The activated worker verification timestamp is invalid.');
+        $expectedWorkers = $this->expectedWorkerIds();
+        if ($expectedWorkers === []) {
+            throw new RuntimeException('The reviewed worker runtime topology is unavailable.');
+        }
+
+        $rows = $this->workerRows($expectedWorkers);
+        $bootIds = [];
+        foreach ($rows as $row) {
+            if (! is_string($row->worker_id ?? null)
+                || ! is_string($row->boot_id ?? null)
+                || preg_match('/\\A[0-9a-f]{32}\\z/', $row->boot_id) !== 1
+            ) {
+                continue;
+            }
+
+            $bootIds[$row->worker_id] = $row->boot_id;
+        }
+
+        return $bootIds;
+    }
+
+    /**
+     * @param array<string, string> $previousBootIds
+     * @requirement UPD-001 RUN-003 OPS-003 QUA-001
+     */
+    public function assertWorkersRestartedAfter(
+        string $restartedAfter,
+        string $expectedReleaseId,
+        array $previousBootIds,
+    ): void {
+        $restart = \DateTimeImmutable::createFromFormat(
+            'Y-m-d H:i:s.u',
+            $restartedAfter,
+            new \DateTimeZone('UTC'),
+        );
+        if ($restart === false || $restart->format('Y-m-d H:i:s.u') !== $restartedAfter) {
+            throw new RuntimeException('The worker restart verification timestamp is invalid.');
+        }
+        if (preg_match('/\\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\z/', $expectedReleaseId) !== 1
+            || str_contains($expectedReleaseId, '..')
+        ) {
+            throw new RuntimeException('The expected worker release identity is invalid.');
+        }
+        foreach ($previousBootIds as $workerId => $bootId) {
+            if (! is_string($workerId)
+                || ! is_string($bootId)
+                || preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1
+            ) {
+                throw new RuntimeException('The previous worker boot evidence is invalid.');
+            }
         }
 
         $expectedWorkers = $this->expectedWorkerIds();
@@ -99,25 +146,65 @@ final readonly class DatabaseUpdateSafetyInspector implements UpdateSafetyInspec
             throw new RuntimeException('The reviewed worker runtime topology is unavailable.');
         }
 
+        $actual = [];
+        foreach ($this->workerRows($expectedWorkers) as $row) {
+            $workerId = $row->worker_id ?? null;
+            $releaseVersion = $row->release_version ?? null;
+            $bootId = $row->boot_id ?? null;
+            $lastSeenAt = $row->last_seen_at ?? null;
+
+            if (! is_string($workerId)
+                || ! in_array($workerId, $expectedWorkers, true)
+                || ! is_string($releaseVersion)
+                || ! hash_equals($expectedReleaseId, $releaseVersion)
+                || ! is_string($bootId)
+                || preg_match('/\\A[0-9a-f]{32}\\z/', $bootId) !== 1
+                || ! is_string($lastSeenAt)
+            ) {
+                continue;
+            }
+
+            $lastSeen = \DateTimeImmutable::createFromFormat(
+                'Y-m-d H:i:s.u',
+                $lastSeenAt,
+                new \DateTimeZone('UTC'),
+            );
+            if ($lastSeen === false
+                || $lastSeen->format('Y-m-d H:i:s.u') !== $lastSeenAt
+                || $lastSeen < $restart
+            ) {
+                continue;
+            }
+
+            $previousBootId = $previousBootIds[$workerId] ?? null;
+            if (is_string($previousBootId) && hash_equals($previousBootId, $bootId)) {
+                continue;
+            }
+
+            $actual[$workerId] = true;
+        }
+
+        $actualWorkers = array_keys($actual);
+        sort($actualWorkers, SORT_STRING);
+        sort($expectedWorkers, SORT_STRING);
+
+        if ($actualWorkers !== $expectedWorkers) {
+            throw new RuntimeException('The activated release worker boot verification failed.');
+        }
+    }
+
+    /** @param list<string> $expectedWorkers
+     *  @return list<object{worker_id:mixed,release_version:mixed,boot_id:mixed,last_seen_at:mixed}>
+     */
+    private function workerRows(array $expectedWorkers): array
+    {
         $rows = $this->database->connection()
             ->table('worker_heartbeats')
             ->whereIn('worker_id', $expectedWorkers)
-            ->where('last_seen_at', '>=', $activatedAfter)
-            ->pluck('worker_id')
+            ->get(['worker_id', 'release_version', 'boot_id', 'last_seen_at'])
             ->all();
 
-        $actual = [];
-        foreach ($rows as $workerId) {
-            if (is_string($workerId)) {
-                $actual[] = $workerId;
-            }
-        }
-        sort($actual, SORT_STRING);
-        sort($expectedWorkers, SORT_STRING);
-
-        if ($actual !== $expectedWorkers) {
-            throw new RuntimeException('The activated release worker boot verification failed.');
-        }
+        return array_values(array_filter($rows, 'is_object'));
     }
 
     private function installedSchemaSha256(string $migrationsDirectory, string $mismatchMessage): string
