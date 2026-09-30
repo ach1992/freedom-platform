@@ -31,6 +31,16 @@ final class FilesystemUpdateWorkspaceTest extends TestCase
             self::assertSame(0600, fileperms($path) & 0777);
             self::assertSame(0700, fileperms(dirname($path)) & 0777);
             self::assertStringNotContainsString('APP_KEY', (string) file_get_contents($path));
+            self::assertSame('running', $workspace->loadReport($runId)['status'] ?? null);
+
+            $foreignRunId = '20260930T010208Z-fedcba9876543210';
+            symlink($path, dirname($path).'/update-'.$foreignRunId.'.json');
+            try {
+                $workspace->loadReport($foreignRunId);
+                self::fail('Recovery report lookup must reject symlinked or foreign report authority.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('The protected update report is unavailable or unsafe.', $exception->getMessage());
+            }
         } finally {
             $this->removeTree($root);
         }
