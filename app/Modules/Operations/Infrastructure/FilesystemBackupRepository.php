@@ -11,6 +11,7 @@ use Closure;
 use DateTimeImmutable;
 use FilesystemIterator;
 use RuntimeException;
+use SplFileInfo;
 use Throwable;
 
 final readonly class FilesystemBackupRepository implements BackupRepository
@@ -458,6 +459,9 @@ final readonly class FilesystemBackupRepository implements BackupRepository
         $latestAt = null;
 
         foreach (new FilesystemIterator($completed, FilesystemIterator::SKIP_DOTS) as $entry) {
+            if (! $entry instanceof SplFileInfo) {
+                throw new RuntimeException('A backup operational inspection entry is invalid.');
+            }
             if ($inspectedEntries >= self::OPERATIONAL_SCAN_LIMIT) {
                 $inspectionComplete = false;
                 break;

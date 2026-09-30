@@ -7,6 +7,7 @@ namespace App\Modules\Operations\Infrastructure;
 use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use FilesystemIterator;
 use RuntimeException;
+use SplFileInfo;
 use Throwable;
 
 final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
@@ -321,6 +322,9 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
 
         if ($reportsDirectory !== null) {
             foreach (new FilesystemIterator($reportsDirectory, FilesystemIterator::SKIP_DOTS) as $entry) {
+                if (! $entry instanceof SplFileInfo) {
+                    throw new RuntimeException('An update operational inspection entry is invalid.');
+                }
                 if ($inspectedEntries >= self::OPERATIONAL_REPORT_SCAN_LIMIT) {
                     $inspectionComplete = false;
                     break;

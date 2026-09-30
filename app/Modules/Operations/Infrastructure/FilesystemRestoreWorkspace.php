@@ -7,6 +7,7 @@ namespace App\Modules\Operations\Infrastructure;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use FilesystemIterator;
 use RuntimeException;
+use SplFileInfo;
 use Throwable;
 
 final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
@@ -97,6 +98,9 @@ final readonly class FilesystemRestoreWorkspace implements RestoreWorkspace
         $inspectionComplete = true;
         $inspectedEntries = 0;
         foreach (new FilesystemIterator($reports, FilesystemIterator::SKIP_DOTS) as $entry) {
+            if (! $entry instanceof SplFileInfo) {
+                throw new RuntimeException('A restore operational inspection entry is invalid.');
+            }
             if ($inspectedEntries >= self::OPERATIONAL_REPORT_SCAN_LIMIT) {
                 $inspectionComplete = false;
                 break;
