@@ -672,9 +672,24 @@ final class FakeUpdateSafetyInspector implements UpdateSafetyInspector
         }
     }
 
-    public function assertWorkersRestartedAfter(string $activatedAfter): void
+    public function workerBootIds(): array
     {
+        return [
+            'freedom-platform-critical_00' => str_repeat('a', 32),
+        ];
+    }
+
+    public function assertWorkersRestartedAfter(
+        string $restartedAfter,
+        string $expectedReleaseId,
+        array $previousBootIds,
+    ): void {
         $this->events->add('safety.workers');
+        if (! in_array($expectedReleaseId, ['1.0.0', '1.1.0'], true)
+            || $previousBootIds === []
+        ) {
+            throw new RuntimeException('test-only-worker-attestation-contract');
+        }
         if ($this->workerFailure) {
             throw new RuntimeException('test-only-worker-secret');
         }
