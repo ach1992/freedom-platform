@@ -509,8 +509,8 @@ final readonly class OperationsCenterService
         }
 
         $unmatched = (int) $this->database->connection()->table('c2c_bank_transactions as bank')
-            ->leftJoin('c2c_transaction_matches as matches', 'matches.bank_transaction_id', '=', 'bank.id')
-            ->leftJoin('c2c_match_reviews as reviews', 'reviews.bank_transaction_id', '=', 'bank.id')
+            ->leftJoin('c2c_transaction_matches as matches', 'matches.c2c_bank_transaction_id', '=', 'bank.id')
+            ->leftJoin('c2c_match_reviews as reviews', 'reviews.c2c_bank_transaction_id', '=', 'bank.id')
             ->where('bank.status', 'settled')
             ->whereNull('matches.id')
             ->whereNull('reviews.id')
