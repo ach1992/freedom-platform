@@ -10,6 +10,9 @@ use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Modules\Operations\Application\OperationalAlertLifecycleService;
 use App\Modules\Operations\Application\OperationsCenterActionService;
 use App\Modules\Operations\Application\OperationsCenterService;
+use App\Modules\Operations\Infrastructure\FilesystemBackupRepository;
+use App\Modules\Operations\Infrastructure\FilesystemRestoreWorkspace;
+use App\Modules\Operations\Infrastructure\FilesystemUpdateWorkspace;
 use App\Shared\Application\OperationalAlertRecorder;
 use App\Shared\Application\OutboxRuntime;
 use App\Shared\Application\OutboxRuntimeResult;
@@ -377,6 +380,8 @@ final class OperationsCenterIntegrationTest extends TestCase
         $backup = $this->createStub(BackupRepository::class);
         $backup->method('operationalStatus')->willReturn([
             'completed_count' => 2,
+            'inspection_complete' => true,
+            'inspected_entries' => 2,
             'latest_bytes' => 4096,
             'latest_completed_at' => '2026-09-30T08:00:00+00:00',
         ]);
@@ -387,12 +392,16 @@ final class OperationsCenterIntegrationTest extends TestCase
             'latest_status' => 'failed_pre_mutation',
             'latest_failure_code' => 'preflight_failed',
             'latest_completed_at' => '2026-09-30T08:01:00+00:00',
+            'report_inventory_complete' => true,
+            'inspected_entries' => 1,
         ]);
         $restore = $this->createStub(RestoreWorkspace::class);
         $restore->method('operationalStatus')->willReturn([
             'latest_status' => 'completed',
             'latest_failure_code' => null,
             'latest_completed_at' => '2026-09-30T08:02:00+00:00',
+            'report_inventory_complete' => true,
+            'inspected_entries' => 1,
         ]);
         $this->app->instance(BackupRepository::class, $backup);
         $this->app->instance(UpdateWorkspace::class, $update);
@@ -408,6 +417,41 @@ final class OperationsCenterIntegrationTest extends TestCase
         self::assertSame('status=failed_pre_mutation;failure_code=preflight_failed', $snapshot->fact('update.latest')?->detail);
         self::assertSame('observed', $snapshot->fact('restore.latest')?->state);
         self::assertSame('status=completed', $snapshot->fact('restore.latest')?->detail);
+    }
+
+    public function test_snapshot_with_real_filesystem_status_authorities_is_non_mutating(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        $base = storage_path('framework/testing/operations-center-readonly-'.bin2hex(random_bytes(4)));
+        $deployment = $base.'/deployment';
+        $backupRoot = $base.'/backups';
+
+        mkdir($deployment.'/releases', 0700, true);
+        mkdir($deployment.'/shared/storage', 0700, true);
+        chmod($deployment.'/shared', 0750);
+        clearstatcache(true, $deployment.'/shared');
+        $sharedMode = fileperms($deployment.'/shared') & 0777;
+
+        $this->app->instance(BackupRepository::class, new FilesystemBackupRepository($backupRoot));
+        $this->app->instance(UpdateWorkspace::class, new FilesystemUpdateWorkspace($deployment));
+        $this->app->instance(RestoreWorkspace::class, new FilesystemRestoreWorkspace($backupRoot));
+        config()->set('operations.backup.enabled', true);
+
+        try {
+            $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+
+            self::assertSame('unknown', $snapshot->fact('backup.runtime')?->state);
+            self::assertSame('empty', $snapshot->fact('backup.completed')?->state);
+            self::assertSame('unknown', $snapshot->fact('update.latest')?->state);
+            self::assertSame('unknown', $snapshot->fact('restore.latest')?->state);
+            self::assertDirectoryDoesNotExist($backupRoot);
+            self::assertDirectoryDoesNotExist($deployment.'/shared/update-reports');
+            clearstatcache(true, $deployment.'/shared');
+            self::assertSame($sharedMode, fileperms($deployment.'/shared') & 0777);
+        } finally {
+            $this->removeOperationsStatusTree($base);
+        }
     }
 
     public function test_snapshot_is_permission_gated_bounded_and_does_not_surface_panel_secrets(): void
@@ -506,6 +550,25 @@ final class OperationsCenterIntegrationTest extends TestCase
         } catch (AuthorizationException) {
             $this->addToAssertionCount(1);
         }
+    }
+
+    private function removeOperationsStatusTree(string $path): void
+    {
+        if (is_link($path) || is_file($path)) {
+            @unlink($path);
+
+            return;
+        }
+        if (! is_dir($path)) {
+            return;
+        }
+
+        foreach (scandir($path) ?: [] as $name) {
+            if ($name !== '.' && $name !== '..') {
+                $this->removeOperationsStatusTree($path.'/'.$name);
+            }
+        }
+        @rmdir($path);
     }
 
     private function insertOutboxFixture(

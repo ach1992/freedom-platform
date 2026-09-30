@@ -217,6 +217,57 @@ final class FilesystemUpdateWorkspaceTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 OPS-002 QUA-001 */
+    public function test_operational_status_is_read_only_and_bounds_report_inventory(): void
+    {
+        $root = $this->deployment('status');
+        $workspace = new FilesystemUpdateWorkspace($root);
+        $reports = $root.'/shared/update-reports';
+
+        try {
+            chmod($root.'/shared', 0750);
+            clearstatcache(true, $root.'/shared');
+            $sharedMode = fileperms($root.'/shared') & 0777;
+
+            self::assertDirectoryDoesNotExist($reports);
+            $empty = $workspace->operationalStatus();
+            self::assertTrue($empty['report_inventory_complete']);
+            self::assertSame(0, $empty['inspected_entries']);
+            self::assertNull($empty['latest_status']);
+            self::assertDirectoryDoesNotExist($reports);
+            clearstatcache(true, $root.'/shared');
+            self::assertSame($sharedMode, fileperms($root.'/shared') & 0777);
+
+            $completedAtValues = [];
+            for ($index = 0; $index < 65; $index++) {
+                $runId = sprintf('20260930T%06dZ-%016x', $index + 1, $index + 1);
+                $completedAt = sprintf('2026-09-30T00:01:%02d+00:00', $index % 60);
+                $completedAtValues[] = $completedAt;
+                $workspace->storeReport($runId, [
+                    'version' => 1,
+                    'update_run_id' => $runId,
+                    'status' => 'completed',
+                    'failure_code' => null,
+                    'completed_at' => $completedAt,
+                ]);
+            }
+
+            chmod($reports, 0750);
+            clearstatcache(true, $reports);
+            $reportsMode = fileperms($reports) & 0777;
+
+            $bounded = $workspace->operationalStatus();
+            self::assertFalse($bounded['report_inventory_complete']);
+            self::assertSame(64, $bounded['inspected_entries']);
+            self::assertSame('completed', $bounded['latest_status']);
+            self::assertContains($bounded['latest_completed_at'], $completedAtValues);
+            clearstatcache(true, $reports);
+            self::assertSame($reportsMode, fileperms($reports) & 0777);
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
     private function deployment(string $case): string
     {
         $root = storage_path('framework/testing/update-workspace-'.$case.'-'.bin2hex(random_bytes(4)));
