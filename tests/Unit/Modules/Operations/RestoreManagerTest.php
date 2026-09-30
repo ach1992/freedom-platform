@@ -721,7 +721,7 @@ final class RestoreManagerTest extends TestCase
     }
 
     /**
-     * @param array{base:string,root:string,environment:string,private:string} $fixture
+     * @param  array{base:string,root:string,environment:string,private:string}  $fixture
      */
     private function predecessorRelease(array $fixture, string $releaseId): string
     {
