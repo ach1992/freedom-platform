@@ -587,6 +587,9 @@ final readonly class OperationsCenterService
             ->whereNull('resolved_at')
             ->whereIn('severity', ['critical', 'security'])
             ->count();
+        $deliveryFailed = (int) $connection->table('operational_alert_deliveries')
+            ->where('state', 'failed')
+            ->count();
 
         return [
             new OperationsCenterFact(
@@ -600,6 +603,12 @@ final readonly class OperationsCenterService
                 'alerts.unresolved_critical_security',
                 $critical === 0 ? 'empty' : 'degraded',
                 $critical,
+            ),
+            new OperationsCenterFact(
+                'alerts',
+                'alerts.delivery_failed',
+                $deliveryFailed === 0 ? 'empty' : 'manual_review',
+                $deliveryFailed,
             ),
         ];
     }

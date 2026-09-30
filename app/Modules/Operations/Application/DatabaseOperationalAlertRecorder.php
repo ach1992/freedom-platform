@@ -121,6 +121,16 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                     $correlationId,
                     $now,
                 );
+                $this->recordSecurityActivationAudit(
+                    $connection,
+                    $alertId,
+                    1,
+                    $severity,
+                    $eventName,
+                    1,
+                    $correlationId,
+                    $now,
+                );
 
                 return;
             }
@@ -164,6 +174,16 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 $existing->id,
                 $activationSequence,
                 $severity,
+                $correlationId,
+                $now,
+            );
+            $this->recordSecurityActivationAudit(
+                $connection,
+                $existing->id,
+                $activationSequence,
+                $severity,
+                $eventName,
+                $occurrenceCount,
                 $correlationId,
                 $now,
             );
@@ -219,6 +239,44 @@ final readonly class DatabaseOperationalAlertRecorder implements OperationalAler
                 'updated_at' => $now,
             ]);
         }
+    }
+
+    private function recordSecurityActivationAudit(
+        Connection $connection,
+        string $alertId,
+        int $activationSequence,
+        string $severity,
+        string $eventName,
+        int $occurrenceCount,
+        string $correlationId,
+        string $now,
+    ): void {
+        if ($severity !== 'security') {
+            return;
+        }
+
+        $action = 'operations.alert.security_activated';
+        $connection->table('audit_logs')->insertOrIgnore([
+            'actor_type' => 'system',
+            'actor_id' => null,
+            'action' => $action,
+            'target_type' => 'operational_alert',
+            'target_id' => $alertId,
+            'before_safe_data' => null,
+            'after_safe_data' => json_encode([
+                'event_name' => $eventName,
+                'activation_sequence' => $activationSequence,
+                'occurrence_count' => $occurrenceCount,
+            ], JSON_THROW_ON_ERROR),
+            'reason_code' => 'security_alert_activation',
+            'reason' => 'Security operational alert activation recorded.',
+            'correlation_id' => $correlationId,
+            'request_fingerprint' => hash(
+                'sha256',
+                $action."\0".$alertId."\0".$activationSequence,
+            ),
+            'created_at' => $now,
+        ]);
     }
 
     /** @return list<string> */

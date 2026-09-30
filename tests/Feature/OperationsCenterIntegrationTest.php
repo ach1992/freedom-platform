@@ -114,6 +114,67 @@ final class OperationsCenterIntegrationTest extends TestCase
             ->count());
     }
 
+    public function test_security_alert_activation_has_owner_delivery_and_safe_audit_path(): void
+    {
+        $recorder = $this->app->make(OperationalAlertRecorder::class);
+        $event = 'operations.security_integration_alert';
+        $deduplicationKey = hash('sha256', 'operations-security-integration-alert');
+
+        $recorder->raise(
+            'security',
+            $event,
+            $deduplicationKey,
+            'operations.test.security',
+            ['state' => 'security-condition'],
+        );
+        $alert = DB::table('alerts')->where('event_name', $event)->first();
+        self::assertNotNull($alert);
+        self::assertSame(['owner'], DB::table('operational_alert_deliveries')
+            ->where('alert_id', $alert->id)
+            ->pluck('audience')
+            ->all());
+        self::assertSame(1, DB::table('audit_logs')
+            ->where('action', 'operations.alert.security_activated')
+            ->where('target_id', $alert->id)
+            ->count());
+
+        $recorder->raise(
+            'security',
+            $event,
+            $deduplicationKey,
+            'operations.test.security',
+            ['state' => 'security-condition-repeat'],
+        );
+        self::assertSame(1, DB::table('audit_logs')
+            ->where('action', 'operations.alert.security_activated')
+            ->where('target_id', $alert->id)
+            ->count());
+
+        $auditJson = json_encode(
+            DB::table('audit_logs')
+                ->where('action', 'operations.alert.security_activated')
+                ->where('target_id', $alert->id)
+                ->pluck('after_safe_data')
+                ->all(),
+            JSON_THROW_ON_ERROR,
+        );
+        self::assertStringNotContainsString('security-condition', $auditJson);
+
+        $recorder->resolve($event, $deduplicationKey);
+        $recorder->raise(
+            'security',
+            $event,
+            $deduplicationKey,
+            'operations.test.security.reopen',
+            ['state' => 'security-condition-reopened'],
+        );
+        self::assertSame(2, DB::table('audit_logs')
+            ->where('action', 'operations.alert.security_activated')
+            ->where('target_id', $alert->id)
+            ->count());
+        self::assertSame(2, (int) DB::table('alerts')->where('id', $alert->id)->value('activation_sequence'));
+    }
+
     public function test_operations_permissions_do_not_widen_safe_actions(): void
     {
         $viewOnlyUserId = $this->quoteUser('customer');
@@ -199,10 +260,27 @@ final class OperationsCenterIntegrationTest extends TestCase
             'updated_at' => $now,
         ]);
 
+        $this->app->make(OperationalAlertRecorder::class)->raise(
+            'warning',
+            'operations.delivery_dead_letter_test',
+            hash('sha256', 'operations-delivery-dead-letter-test'),
+            'operations.test.delivery.dead',
+            ['state' => 'delivery-dead-letter'],
+        );
+        DB::table('operational_alert_deliveries')
+            ->where('state', 'pending')
+            ->update([
+                'state' => 'failed',
+                'attempts' => 4,
+                'last_error_code' => 'telegram_queue_failed',
+            ]);
+
         $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
         self::assertNotNull($snapshot->fact('panels.provider.xui'));
         self::assertNotNull($snapshot->fact('providers.sms_health'));
         self::assertSame('unknown', $snapshot->fact('providers.sms_health')?->state);
+        self::assertSame('manual_review', $snapshot->fact('alerts.delivery_failed')?->state);
+        self::assertSame(1, $snapshot->fact('alerts.delivery_failed')?->value);
         self::assertLessThanOrEqual(200, count($snapshot->facts));
 
         $safeJson = json_encode(
