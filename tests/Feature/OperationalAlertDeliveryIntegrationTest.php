@@ -50,6 +50,15 @@ final class OperationalAlertDeliveryIntegrationTest extends TestCase
         self::assertSame(0, $summary->failed);
         self::assertSame(2, $gateway->calls);
         self::assertEqualsCanonicalizing(['owner', 'report_channel'], $gateway->audiences);
+        self::assertSame(['critical', 'critical'], $gateway->severities);
+        self::assertSame(['operations.delivery_test', 'operations.delivery_test'], $gateway->events);
+        self::assertSame([false, false], $gateway->resolved);
+        foreach ($gateway->trackingCodes as $trackingCode) {
+            self::assertMatchesRegularExpression('/\\A[a-f0-9]{12}\\z/', $trackingCode);
+        }
+        foreach ($gateway->requestKeys as $requestKey) {
+            self::assertStringStartsWith('operations-alert:', $requestKey);
+        }
         self::assertSame(2, DB::table('operational_alert_deliveries')->where('state', 'queued')->count());
         self::assertSame(2, DB::table('operational_alert_deliveries')->whereNotNull('telegram_operation_public_id')->count());
 
@@ -108,6 +117,21 @@ final class FakeOperationalAlertDeliveryGateway implements OperationalAlertDeliv
 
     /** @var list<string> */
     public array $audiences = [];
+
+    /** @var list<string> */
+    public array $severities = [];
+
+    /** @var list<string> */
+    public array $events = [];
+
+    /** @var list<bool> */
+    public array $resolved = [];
+
+    /** @var list<string> */
+    public array $trackingCodes = [];
+
+    /** @var list<string> */
+    public array $requestKeys = [];
 
     public function __construct(private readonly bool $shouldFail = false) {}
 
