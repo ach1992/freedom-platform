@@ -65,6 +65,7 @@ final class OperationsServiceProvider extends ServiceProvider
                 'worker_id' => config('operations.worker_heartbeat.worker_id'),
                 'queue_group' => config('operations.worker_heartbeat.queue_group', 'default'),
                 'release_version' => config('operations.worker_heartbeat.release_version'),
+                'boot_id' => config('operations.worker_heartbeat.boot_id'),
                 'interval_seconds' => config('operations.worker_heartbeat.interval_seconds', 30),
             ]),
         );
@@ -82,6 +83,7 @@ final class OperationsServiceProvider extends ServiceProvider
                     $runtime->workerId,
                     $runtime->queueGroup,
                     $runtime->releaseVersion,
+                    $runtime->bootId,
                     $runtime->intervalSeconds,
                 );
             },
