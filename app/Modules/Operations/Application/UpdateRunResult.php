@@ -23,6 +23,8 @@ final readonly class UpdateRunResult
             'completed',
             'rollback_dry_run_completed',
             'rollback_completed',
+            'restore_recovery_dry_run_completed',
+            'restore_recovered',
         ], true);
     }
 }
