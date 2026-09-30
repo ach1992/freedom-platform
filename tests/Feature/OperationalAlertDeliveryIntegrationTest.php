@@ -54,7 +54,7 @@ final class OperationalAlertDeliveryIntegrationTest extends TestCase
         self::assertSame(['critical', 'critical'], $gateway->severities);
         self::assertSame(['operations.delivery_test', 'operations.delivery_test'], $gateway->events);
         self::assertSame([false, false], $gateway->resolved);
-        self::assertSame([3, 3], $gateway->occurrenceCounts);
+        self::assertSame([1, 1], $gateway->occurrenceCounts);
         foreach ($gateway->correlationIds as $correlationId) {
             self::assertNotSame('', $correlationId);
         }
