@@ -16,10 +16,10 @@ interface UpdateSafetyInspector
 
     public function assertNoUnsafeWork(): void;
 
-    /** @return array<string, string> */
+    /** @return array<string, string|null> */
     public function workerBootIds(): array;
 
-    /** @param array<string, string> $previousBootIds */
+    /** @param array<string, string|null> $previousBootIds */
     public function assertWorkersRestartedAfter(
         string $restartedAfter,
         string $expectedReleaseId,
