@@ -156,6 +156,79 @@ final class LaravelRestoreMaintenanceCoordinatorTest extends TestCase
         }
     }
 
+    /** @requirement UPD-001 BAK-002 OPS-003 QUA-001 */
+    public function test_adopt_reuses_exact_retained_owner_and_reestablishes_scheduler_and_worker_containment(): void
+    {
+        $runId = '20260929T040019Z-eeeeeeeeeeeeeeee';
+        $maintenance = $this->createMock(MaintenanceMode::class);
+        $console = $this->createMock(Kernel::class);
+        $scheduler = $this->createMock(RestoreSchedulerMutationLock::class);
+        $events = [];
+
+        $maintenance->expects(self::exactly(2))->method('active')->willReturn(true);
+        $maintenance->expects(self::exactly(2))->method('data')->willReturn(['restore_run_id' => $runId]);
+        $maintenance->expects(self::never())->method('activate');
+        $maintenance->expects(self::never())->method('deactivate');
+
+        $scheduler->expects(self::exactly(3))
+            ->method('held')
+            ->willReturnOnConsecutiveCalls(false, true, true);
+        $scheduler->expects(self::once())
+            ->method('acquire')
+            ->with(360)
+            ->willReturnCallback(static function () use (&$events): void {
+                $events[] = 'scheduler';
+            });
+        $scheduler->expects(self::never())->method('release');
+
+        $console->expects(self::once())
+            ->method('call')
+            ->with('queue:restart', ['--no-interaction' => true])
+            ->willReturnCallback(static function () use (&$events): int {
+                $events[] = 'queue';
+
+                return 0;
+            });
+
+        $this->coordinator(
+            $maintenance,
+            $console,
+            $scheduler,
+            static function (int $_seconds) use (&$events): void {
+                $events[] = 'wait';
+            },
+        )->adopt($runId);
+
+        self::assertSame(['scheduler', 'queue', 'wait'], $events);
+    }
+
+    /** @requirement UPD-001 BAK-002 OPS-003 QUA-001 */
+    public function test_adopt_refuses_foreign_retained_maintenance_without_releasing_or_mutating_it(): void
+    {
+        $runId = '20260929T040020Z-ffffffffffffffff';
+        $maintenance = $this->createMock(MaintenanceMode::class);
+        $console = $this->createMock(Kernel::class);
+        $scheduler = $this->createMock(RestoreSchedulerMutationLock::class);
+
+        $maintenance->expects(self::once())->method('active')->willReturn(true);
+        $maintenance->expects(self::once())
+            ->method('data')
+            ->willReturn(['restore_run_id' => '20260929T040021Z-1111111111111111']);
+        $maintenance->expects(self::never())->method('activate');
+        $maintenance->expects(self::never())->method('deactivate');
+        $scheduler->expects(self::never())->method('held');
+        $scheduler->expects(self::never())->method('acquire');
+        $scheduler->expects(self::never())->method('release');
+        $console->expects(self::never())->method('call');
+
+        try {
+            $this->coordinator($maintenance, $console, $scheduler)->adopt($runId);
+            self::fail('Foreign retained maintenance must never be adopted by update recovery.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Restore maintenance ownership changed unexpectedly.', $exception->getMessage());
+        }
+    }
+
     /** @requirement BAK-002 OPS-003 QUA-001 */
     public function test_refresh_runtime_clears_config_then_restarts_workers_while_scheduler_fence_is_retained(): void
     {
