@@ -9,13 +9,18 @@ use App\Modules\Operations\Application\BackupKind;
 use App\Modules\Operations\Application\BackupManager;
 use App\Modules\Operations\Application\BackupRuntimeConfiguration;
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
+use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
+use App\Modules\Operations\Application\Contracts\UpdateSafetyInspector;
+use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Modules\Operations\Application\RestoreManager;
 use App\Modules\Operations\Application\RestoreRuntimeConfiguration;
+use App\Modules\Operations\Application\VerifiedUpdatePackage;
 use App\Modules\Operations\Infrastructure\BackupBundleReader;
 use App\Modules\Operations\Infrastructure\BackupBundleWriter;
 use App\Modules\Operations\Infrastructure\BackupPayloadCollector;
@@ -474,6 +479,11 @@ final class RestoreManagerTest extends TestCase
         bool $resumeFailure = false,
         bool $retainWorkersQuiesced = true,
         bool $finalReportFailure = false,
+        bool $adoptFailure = false,
+        ?RestoreTestUpdateWorkspace $updateWorkspace = null,
+        ?RestoreTestReleaseActivator $releaseActivator = null,
+        ?RestoreTestUpdateSafetyInspector $updateSafety = null,
+        ?RestoreTestUpdateReleaseExecutor $updateExecutor = null,
     ): RestoreManager {
         $backup = $this->backupConfiguration($fixture);
         $repository = new FilesystemBackupRepository($backup->root);
@@ -488,6 +498,11 @@ final class RestoreManagerTest extends TestCase
             new RestoreFixedRandom("\x22"),
             'test-release',
         );
+
+        $updateWorkspace ??= new RestoreTestUpdateWorkspace($events);
+        $releaseActivator ??= new RestoreTestReleaseActivator($events, $updateWorkspace, []);
+        $updateSafety ??= new RestoreTestUpdateSafetyInspector($events, hash('sha256', 'test-only-schema'));
+        $updateExecutor ??= new RestoreTestUpdateReleaseExecutor($events);
 
         return new RestoreManager(
             new RestoreRuntimeConfiguration($enabled, '/usr/bin/mariadb', 30, 360),
@@ -509,6 +524,7 @@ final class RestoreManagerTest extends TestCase
                 $runtimeRefreshFailure,
                 $resumeFailure,
                 $retainWorkersQuiesced,
+                $adoptFailure,
             ),
             new RestoreTestPayloadRestorer($events, $payloadFailure),
             new RestoreTestPostVerifier($events, $postRestoreFailure),
@@ -517,6 +533,10 @@ final class RestoreManagerTest extends TestCase
                 : new FilesystemRestoreWorkspace($backup->root),
             new RestoreFixedClock('2026-09-29T03:00:00+00:00'),
             new RestoreFixedRandom("\x33"),
+            $updateWorkspace,
+            $releaseActivator,
+            $updateSafety,
+            $updateExecutor,
         );
     }
 
@@ -713,6 +733,7 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
         private readonly bool $failRefresh = false,
         private readonly bool $failLeaveAfterDeactivate = false,
         private readonly bool $retainWorkersQuiesced = true,
+        private readonly bool $failAdopt = false,
     ) {}
 
     public function enter(string $restoreRunId): void
@@ -723,6 +744,15 @@ final class RestoreTestMaintenance implements RestoreMaintenanceCoordinator
             throw new RuntimeException('test-only maintenance failure');
         }
 
+        $this->active = true;
+    }
+
+    public function adopt(string $restoreRunId): void
+    {
+        $this->events->events[] = 'maintenance_adopt';
+        if ($this->failAdopt) {
+            throw new RuntimeException('test-only retained containment adoption failure');
+        }
         $this->active = true;
     }
 
@@ -816,9 +846,11 @@ final readonly class RestoreTestPostVerifier implements RestorePostRestoreVerifi
         private bool $fail = false,
     ) {}
 
-    public function verify(): array
+    public function verify(?string $releasePath = null): array
     {
-        $this->events->events[] = 'post_restore_verify';
+        $this->events->events[] = $releasePath === null
+            ? 'post_restore_verify'
+            : 'post_restore_verify:'.basename($releasePath);
 
         if ($this->fail) {
             throw new RuntimeException('test-only post restore failure');
