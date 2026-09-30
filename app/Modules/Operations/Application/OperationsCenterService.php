@@ -230,6 +230,7 @@ final readonly class OperationsCenterService
             $observed = $this->date($worker->last_seen_at);
             if ($observed === null) {
                 $stale++;
+
                 continue;
             }
             $latest = $latest === null || $observed > $latest ? $observed : $latest;
