@@ -32,6 +32,16 @@ final readonly class FilesystemReleaseActivator implements ReleaseActivator
         });
     }
 
+    public function resolve(string $releaseId): string
+    {
+        return $this->synchronized(function () use ($releaseId): string {
+            $root = $this->validatedRoot();
+            $releases = $this->validatedReleasesDirectory($root);
+
+            return $this->validatedCandidate($releases, $releaseId);
+        });
+    }
+
     /**
      * @return array{status: 'activated'|'already_active', release: string, previous_release: string|null}
      */
