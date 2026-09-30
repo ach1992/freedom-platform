@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Modules\Reporting\Application\Contracts\ReportingExportDeliveryGateway;
 use App\Modules\Reporting\Application\Contracts\ReportingScheduledChannelDelivery;
 use App\Modules\Reporting\Application\Contracts\ReportingTextDeliveryGateway;
 use App\Modules\Reporting\Application\ReportDateRange;
@@ -231,6 +232,7 @@ final class ReportingScheduleIntegrationTest extends TestCase
 
         $gateway = new ScheduleReportingTextDeliveryGateway;
         $this->app->instance(ReportingTextDeliveryGateway::class, $gateway);
+        $this->app->instance(ReportingExportDeliveryGateway::class, new ScheduleReportingExportDeliveryGateway);
 
         $summary = $this->app->make(ReportScheduleRunner::class)->runDue(5);
         self::assertSame(1, $summary->examined);
@@ -359,6 +361,20 @@ final class ScheduleReportingTextDeliveryGateway implements ReportingTextDeliver
     {
         $this->sendCalls++;
 
+        return strtoupper((string) Str::ulid());
+    }
+}
+
+final class ScheduleReportingExportDeliveryGateway implements ReportingExportDeliveryGateway
+{
+    public function queue(
+        int $recipientChatId,
+        ReportDateRange $range,
+        string $format,
+        string $locale,
+        string $requestKey,
+        string $correlationId,
+    ): string {
         return strtoupper((string) Str::ulid());
     }
 }
