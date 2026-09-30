@@ -21,13 +21,15 @@ final class WorkerRuntimeConfigurationTest extends TestCase
                 'worker_id' => null,
                 'queue_group' => 'cached-default',
                 'release_version' => 'cached-release',
+                'boot_id' => null,
                 'interval_seconds' => 60,
             ],
             $this->environment([
                 'WORKER_HEARTBEAT_ENABLED' => 'true',
                 'WORKER_NAME' => 'freedom-platform-critical_01',
                 'WORKER_QUEUE_GROUP' => 'critical-payments,bank-verification',
-                'APP_VERSION' => 'staging-release',
+                'WORKER_RELEASE_ID' => 'staging-release',
+                'WORKER_BOOT_ID' => str_repeat('a', 32),
                 'WORKER_HEARTBEAT_INTERVAL_SECONDS' => '30',
             ]),
         );
@@ -36,6 +38,7 @@ final class WorkerRuntimeConfigurationTest extends TestCase
         self::assertSame('freedom-platform-critical_01', $runtime->workerId);
         self::assertSame('critical-payments,bank-verification', $runtime->queueGroup);
         self::assertSame('staging-release', $runtime->releaseVersion);
+        self::assertSame(str_repeat('a', 32), $runtime->bootId);
         self::assertSame(30, $runtime->intervalSeconds);
     }
 
@@ -47,6 +50,7 @@ final class WorkerRuntimeConfigurationTest extends TestCase
                 'worker_id' => null,
                 'queue_group' => 'default',
                 'release_version' => 'cached-release',
+                'boot_id' => null,
                 'interval_seconds' => 30,
             ],
             $this->environment([]),
@@ -56,6 +60,7 @@ final class WorkerRuntimeConfigurationTest extends TestCase
         self::assertSame('', $runtime->workerId);
         self::assertSame('default', $runtime->queueGroup);
         self::assertSame('cached-release', $runtime->releaseVersion);
+        self::assertNull($runtime->bootId);
         self::assertSame(30, $runtime->intervalSeconds);
     }
 
@@ -73,6 +78,7 @@ final class WorkerRuntimeConfigurationTest extends TestCase
                 'worker_id' => null,
                 'queue_group' => 'default',
                 'release_version' => null,
+                'boot_id' => null,
                 'interval_seconds' => 30,
             ],
             $this->environment($environment),
@@ -82,13 +88,18 @@ final class WorkerRuntimeConfigurationTest extends TestCase
     /** @return iterable<string, array{array<string, string>, string}> */
     public static function invalidRuntimeProvider(): iterable
     {
+        $validIdentity = [
+            'WORKER_RELEASE_ID' => 'release-1',
+            'WORKER_BOOT_ID' => str_repeat('b', 32),
+        ];
+
         yield 'invalid boolean' => [
             ['WORKER_HEARTBEAT_ENABLED' => 'sometimes'],
             'Worker heartbeat enabled must be a boolean value.',
         ];
 
         yield 'missing identity' => [
-            [
+            $validIdentity + [
                 'WORKER_HEARTBEAT_ENABLED' => 'true',
                 'WORKER_QUEUE_GROUP' => 'critical',
             ],
@@ -96,7 +107,7 @@ final class WorkerRuntimeConfigurationTest extends TestCase
         ];
 
         yield 'missing queue group' => [
-            [
+            $validIdentity + [
                 'WORKER_HEARTBEAT_ENABLED' => 'true',
                 'WORKER_NAME' => 'worker-01',
                 'WORKER_QUEUE_GROUP' => ' ',
@@ -104,8 +115,28 @@ final class WorkerRuntimeConfigurationTest extends TestCase
             'An enabled queue worker heartbeat requires a queue group.',
         ];
 
-        yield 'invalid interval' => [
+        yield 'missing physical release' => [
             [
+                'WORKER_HEARTBEAT_ENABLED' => 'true',
+                'WORKER_NAME' => 'worker-01',
+                'WORKER_QUEUE_GROUP' => 'critical',
+                'WORKER_BOOT_ID' => str_repeat('b', 32),
+            ],
+            'An enabled queue worker heartbeat requires the exact physical release ID.',
+        ];
+
+        yield 'missing boot generation' => [
+            [
+                'WORKER_HEARTBEAT_ENABLED' => 'true',
+                'WORKER_NAME' => 'worker-01',
+                'WORKER_QUEUE_GROUP' => 'critical',
+                'WORKER_RELEASE_ID' => 'release-1',
+            ],
+            'An enabled queue worker heartbeat requires a valid boot ID.',
+        ];
+
+        yield 'invalid interval' => [
+            $validIdentity + [
                 'WORKER_HEARTBEAT_ENABLED' => 'true',
                 'WORKER_NAME' => 'worker-01',
                 'WORKER_QUEUE_GROUP' => 'critical',
