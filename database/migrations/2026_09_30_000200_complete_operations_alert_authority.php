@@ -68,10 +68,10 @@ return new class extends Migration
         DB::statement("ALTER TABLE operational_alert_events ADD CONSTRAINT operational_alert_events_type_chk CHECK (event_type IN ('acknowledged','resolved'))");
         DB::statement('ALTER TABLE operational_alert_events ADD CONSTRAINT operational_alert_events_hash_chk CHECK (CHAR_LENGTH(request_key_hash) = 64)');
         DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_audience_chk CHECK (audience IN ('report_channel','owner'))");
-        DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_state_chk CHECK (state IN ('pending','retry','leased','queued','failed'))");
+        DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_state_chk CHECK (state IN ('pending','retry','leased','queued','failed','suppressed'))");
         DB::statement('ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_activation_chk CHECK (activation_sequence >= 1)');
         DB::statement('ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_attempts_chk CHECK (attempts <= 100)');
-        DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_shape_chk CHECK ((state = 'leased' AND lease_token_hash IS NOT NULL AND leased_until IS NOT NULL AND telegram_operation_public_id IS NULL AND queued_at IS NULL) OR (state = 'queued' AND lease_token_hash IS NULL AND leased_until IS NULL AND telegram_operation_public_id IS NOT NULL AND queued_at IS NOT NULL) OR (state IN ('pending','retry','failed') AND lease_token_hash IS NULL AND leased_until IS NULL AND telegram_operation_public_id IS NULL AND queued_at IS NULL))");
+        DB::statement("ALTER TABLE operational_alert_deliveries ADD CONSTRAINT operational_alert_delivery_shape_chk CHECK ((state = 'leased' AND lease_token_hash IS NOT NULL AND leased_until IS NOT NULL AND telegram_operation_public_id IS NULL AND queued_at IS NULL) OR (state = 'queued' AND lease_token_hash IS NULL AND leased_until IS NULL AND telegram_operation_public_id IS NOT NULL AND queued_at IS NOT NULL) OR (state IN ('pending','retry','failed','suppressed') AND lease_token_hash IS NULL AND leased_until IS NULL AND telegram_operation_public_id IS NULL AND queued_at IS NULL))");
 
         $this->installEventGuards();
     }

@@ -56,6 +56,7 @@ final readonly class OperationalAlertDeliveryRunner
 
         $examined = 0;
         $queued = 0;
+        $suppressed = 0;
         $retryScheduled = 0;
         $failed = 0;
 
@@ -67,8 +68,11 @@ final readonly class OperationalAlertDeliveryRunner
             $examined++;
 
             try {
-                $this->queueClaim($claim);
-                $queued++;
+                if ($this->queueClaim($claim)) {
+                    $queued++;
+                } else {
+                    $suppressed++;
+                }
             } catch (Throwable) {
                 if ($claim['attempts'] >= self::MAX_ATTEMPTS) {
                     $this->finishFailed($claim, 'telegram_queue_failed');
@@ -83,6 +87,7 @@ final readonly class OperationalAlertDeliveryRunner
         return new OperationalAlertDeliveryRunSummary(
             $examined,
             $queued,
+            $suppressed,
             $retryScheduled,
             $failed,
         );
@@ -152,7 +157,7 @@ final readonly class OperationalAlertDeliveryRunner
     }
 
     /** @param DeliveryClaim $claim */
-    private function queueClaim(array $claim): void
+    private function queueClaim(array $claim): bool
     {
         $this->database->connection()->transaction(function (Connection $connection) use ($claim): void {
             /** @var object{severity:string,event_name:string,correlation_id:string,occurrence_count:int|string,resolved_at:?string}|null $alert */
@@ -167,6 +172,24 @@ final readonly class OperationalAlertDeliveryRunner
                 ]);
             if ($alert === null) {
                 throw new RuntimeException('Operational alert delivery references a missing alert.');
+            }
+
+            if (! $this->audienceAllowed($claim['audience'], $alert->severity)) {
+                $timestamp = $this->clock->now()
+                    ->setTimezone(new DateTimeZone('UTC'))
+                    ->format('Y-m-d H:i:s.u');
+                $updated = $this->leasedRow($connection, $claim)->update([
+                    'state' => 'suppressed',
+                    'lease_token_hash' => null,
+                    'leased_until' => null,
+                    'last_error_code' => 'audience_policy_changed',
+                    'updated_at' => $timestamp,
+                ]);
+                if ($updated !== 1) {
+                    throw new RuntimeException('Operational alert delivery suppression lost its lease.');
+                }
+
+                return false;
             }
 
             $requestKey = sprintf(
@@ -210,7 +233,19 @@ final readonly class OperationalAlertDeliveryRunner
             if ($updated !== 1) {
                 throw new RuntimeException('Operational alert delivery queue acceptance lost its lease.');
             }
+
+            return true;
         }, 3);
+    }
+
+    private function audienceAllowed(string $audience, string $severity): bool
+    {
+        return match ($severity) {
+            'warning' => $audience === 'report_channel',
+            'critical' => in_array($audience, ['report_channel', 'owner'], true),
+            'security' => $audience === 'owner',
+            default => false,
+        };
     }
 
     /** @param DeliveryClaim $claim */

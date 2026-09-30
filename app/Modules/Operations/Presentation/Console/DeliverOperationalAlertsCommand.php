@@ -78,9 +78,10 @@ final class DeliverOperationalAlertsCommand extends Command
             $this->line(json_encode($result, JSON_THROW_ON_ERROR));
         } else {
             $this->info(sprintf(
-                'Operational alert delivery: examined=%d queued=%d retry=%d failed=%d',
+                'Operational alert delivery: examined=%d queued=%d suppressed=%d retry=%d failed=%d',
                 $summary->examined,
                 $summary->queued,
+                $summary->suppressed,
                 $summary->retryScheduled,
                 $summary->failed,
             ));
@@ -95,6 +96,7 @@ final class DeliverOperationalAlertsCommand extends Command
         return [
             'examined' => $summary->examined,
             'queued' => $summary->queued,
+            'suppressed' => $summary->suppressed,
             'retry_scheduled' => $summary->retryScheduled,
             'failed' => $summary->failed,
         ];

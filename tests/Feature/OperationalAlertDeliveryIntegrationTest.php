@@ -47,6 +47,7 @@ final class OperationalAlertDeliveryIntegrationTest extends TestCase
         $summary = $this->app->make(OperationalAlertDeliveryRunner::class)->runDue(10);
         self::assertSame(2, $summary->examined);
         self::assertSame(2, $summary->queued);
+        self::assertSame(0, $summary->suppressed);
         self::assertSame(0, $summary->retryScheduled);
         self::assertSame(0, $summary->failed);
         self::assertSame(2, $gateway->calls);
@@ -100,7 +101,53 @@ final class OperationalAlertDeliveryIntegrationTest extends TestCase
         $metrics = json_decode((string) $run->metrics, true, flags: JSON_THROW_ON_ERROR);
         self::assertSame(2, $metrics['examined'] ?? null);
         self::assertSame(2, $metrics['queued'] ?? null);
+        self::assertSame(0, $metrics['suppressed'] ?? null);
         self::assertSame(0, $metrics['failed'] ?? null);
+    }
+
+    public function test_security_escalation_suppresses_stale_report_channel_delivery(): void
+    {
+        $gateway = new FakeOperationalAlertDeliveryGateway;
+        $this->app->instance(OperationalAlertDeliveryGateway::class, $gateway);
+        $recorder = $this->app->make(OperationalAlertRecorder::class);
+        $event = 'operations.delivery_security_escalation';
+        $deduplicationKey = hash('sha256', 'operations-delivery-security-escalation');
+
+        $recorder->raise(
+            'warning',
+            $event,
+            $deduplicationKey,
+            'operations.delivery.escalation',
+            ['state' => 'warning'],
+        );
+        $recorder->raise(
+            'security',
+            $event,
+            $deduplicationKey,
+            'operations.delivery.escalation',
+            ['state' => 'security'],
+        );
+
+        self::assertSame(2, DB::table('operational_alert_deliveries')->count());
+
+        $summary = $this->app->make(OperationalAlertDeliveryRunner::class)->runDue(10);
+        self::assertSame(2, $summary->examined);
+        self::assertSame(1, $summary->queued);
+        self::assertSame(1, $summary->suppressed);
+        self::assertSame(0, $summary->retryScheduled);
+        self::assertSame(0, $summary->failed);
+        self::assertSame(['owner'], $gateway->audiences);
+        self::assertSame(['security'], $gateway->severities);
+
+        $this->assertDatabaseHas('operational_alert_deliveries', [
+            'audience' => 'report_channel',
+            'state' => 'suppressed',
+            'last_error_code' => 'audience_policy_changed',
+        ]);
+        $this->assertDatabaseHas('operational_alert_deliveries', [
+            'audience' => 'owner',
+            'state' => 'queued',
+        ]);
     }
 
     public function test_transient_queue_failure_retries_then_becomes_manual_review_without_payload_leakage(): void
