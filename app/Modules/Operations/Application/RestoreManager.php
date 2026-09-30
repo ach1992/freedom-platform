@@ -7,18 +7,23 @@ namespace App\Modules\Operations\Application;
 use App\Modules\Operations\Application\Contracts\BackupArtifactCipherFactory;
 use App\Modules\Operations\Application\Contracts\BackupBundleReader;
 use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreDatabaseRestorer;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\RestorePayloadRestorer;
 use App\Modules\Operations\Application\Contracts\RestorePostRestoreVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
+use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
+use App\Modules\Operations\Application\Contracts\UpdateSafetyInspector;
+use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Shared\Application\Clock;
 use App\Shared\Application\RandomGenerator;
 use DateTimeZone;
 use RuntimeException;
 use Throwable;
 
-final readonly class RestoreManager
+final readonly class RestoreManager implements UpdateRecoveryRestore
 {
     public function __construct(
         private RestoreRuntimeConfiguration $configuration,
@@ -35,10 +40,35 @@ final readonly class RestoreManager
         private RestoreWorkspace $workspace,
         private Clock $clock,
         private RandomGenerator $random,
+        private UpdateWorkspace $updateWorkspace,
+        private ReleaseActivator $releases,
+        private UpdateSafetyInspector $updateSafety,
+        private UpdateReleaseExecutor $updateExecutor,
     ) {}
 
     /** @requirement BAK-002 SEC-001 OPS-003 QUA-001 */
     public function run(string $backupId, bool $apply = false): RestoreRunResult
+    {
+        return $this->execute($backupId, $apply, null);
+    }
+
+    /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 SEC-001 QUA-001 */
+    public function recoverUpdate(string $updateRunId, bool $apply = false): RestoreRunResult
+    {
+        if (preg_match('/\\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\\z/', $updateRunId) !== 1) {
+            throw new RuntimeException('The source update run identifier is invalid.');
+        }
+
+        $updateReport = $this->updateWorkspace->loadReport($updateRunId);
+        $recovery = $this->recoveryContext($updateReport, $updateRunId);
+
+        return $this->execute($recovery['backup_id'], $apply, $recovery);
+    }
+
+    /**
+     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,schema_before_sha256:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}|null $recovery
+     */
+    private function execute(string $backupId, bool $apply, ?array $recovery): RestoreRunResult
     {
         if ($apply && ! $this->configuration->enabled) {
             throw new RuntimeException('Restore execution is disabled by configuration.');
