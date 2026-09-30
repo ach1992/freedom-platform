@@ -34,8 +34,8 @@ final readonly class DatabasePanelOperationsSnapshotSource implements PanelOpera
         /** @var list<object{provider_type:string,connection_count:int|string,tested_count:int|string,failed_count:int|string,last_tested_at:?string}> $rows */
         $rows = $connection->table('panel_connections')
             ->selectRaw(
-                "provider_type, COUNT(*) AS connection_count, ".
-                "SUM(CASE WHEN last_test_status IS NOT NULL THEN 1 ELSE 0 END) AS tested_count, ".
+                'provider_type, COUNT(*) AS connection_count, '.
+                'SUM(CASE WHEN last_test_status IS NOT NULL THEN 1 ELSE 0 END) AS tested_count, '.
                 "SUM(CASE WHEN last_test_status = 'failure' THEN 1 ELSE 0 END) AS failed_count, ".
                 'MAX(last_tested_at) AS last_tested_at',
             )
