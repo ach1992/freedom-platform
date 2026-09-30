@@ -31,6 +31,7 @@ use Database\Seeders\IdentityAccessFoundationSeeder;
 use Database\Seeders\PaymentEligibilityAccessFoundationSeeder;
 use Database\Seeders\ReportingAccessFoundationSeeder;
 use Database\Seeders\SupportTicketCategorySeeder;
+use Database\Seeders\WalletFinancialFoundationSeeder;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +52,7 @@ final class ReportingSnapshotIntegrationTest extends TestCase
         $this->seed(SupportTicketCategorySeeder::class);
         $this->seed(CatalogAccessFoundationSeeder::class);
         $this->seed(PaymentEligibilityAccessFoundationSeeder::class);
+        $this->seed(WalletFinancialFoundationSeeder::class);
         $this->bootPurchaseOrderClock();
     }
 
