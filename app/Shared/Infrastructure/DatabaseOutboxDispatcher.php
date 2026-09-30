@@ -11,7 +11,6 @@ use App\Shared\Application\OutboxMessage;
 use App\Shared\Application\OutboxMessageHandler;
 use DateInterval;
 use Illuminate\Database\DatabaseManager;
-use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use JsonException;
 use LogicException;
@@ -72,14 +71,7 @@ final readonly class DatabaseOutboxDispatcher
             $now = $this->clock->now();
             $nowString = $this->format($now);
 
-            $row = $this->database->connection()->table('outbox_messages')
-                ->whereNull('processed_at')
-                ->whereIn('dispatch_state', ['pending', 'retry', 'leased'])
-                ->where('available_at', '<=', $nowString)
-                ->where(function (Builder $query) use ($nowString): void {
-                    $query->whereNull('leased_until')
-                        ->orWhere('leased_until', '<=', $nowString);
-                })
+            $row = DatabaseOutboxClaimQuery::claimable($this->database->connection(), $nowString)
                 ->orderBy('available_at')
                 ->orderBy('id')
                 ->lockForUpdate()

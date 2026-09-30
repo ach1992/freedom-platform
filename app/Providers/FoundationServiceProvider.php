@@ -19,11 +19,13 @@ use App\Shared\Application\OperationalAlertRecorder;
 use App\Shared\Application\OutboxDeferrer;
 use App\Shared\Application\OutboxEventHandler;
 use App\Shared\Application\OutboxMessageRouter;
+use App\Shared\Application\OutboxOperationalSnapshotSource;
 use App\Shared\Application\OutboxPublisher;
 use App\Shared\Application\OutboxRuntime;
 use App\Shared\Application\RandomGenerator;
 use App\Shared\Infrastructure\DatabaseOutboxDeferrer;
 use App\Shared\Infrastructure\DatabaseOutboxDispatcher;
+use App\Shared\Infrastructure\DatabaseOutboxOperationalSnapshotSource;
 use App\Shared\Infrastructure\DatabaseOutboxPublisher;
 use App\Shared\Infrastructure\DatabaseOutboxRuntime;
 use App\Shared\Infrastructure\SecureRandomGenerator;
@@ -90,5 +92,6 @@ final class FoundationServiceProvider extends ServiceProvider
             ),
         );
         $this->app->singleton(OutboxRuntime::class, DatabaseOutboxRuntime::class);
+        $this->app->singleton(OutboxOperationalSnapshotSource::class, DatabaseOutboxOperationalSnapshotSource::class);
     }
 }

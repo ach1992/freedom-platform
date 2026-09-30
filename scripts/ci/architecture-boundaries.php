@@ -25,6 +25,14 @@ return [
     // consumer-owned Application contract without creating a broad module edge.
     // Each entry is source-path plus exact imported symbol.
     'module_dependency_reference_exceptions' => [
+        'app/Modules/Telegram/Application/DatabaseTelegramOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\Contracts\\TelegramOperationsSnapshotSource',
+        'app/Modules/Telegram/Application/DatabaseTelegramOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\OperationsCenterFact',
+        'app/Modules/Panels/Application/DatabasePanelOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\Contracts\\PanelOperationsSnapshotSource',
+        'app/Modules/Panels/Application/DatabasePanelOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\OperationsCenterFact',
+        'app/Modules/Payments/Application/DatabasePaymentOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\Contracts\\PaymentOperationsSnapshotSource',
+        'app/Modules/Payments/Application/DatabasePaymentOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\OperationsCenterFact',
+        'app/Modules/Provisioning/Application/DatabaseProvisioningOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\Contracts\\ProvisioningOperationsSnapshotSource',
+        'app/Modules/Provisioning/Application/DatabaseProvisioningOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\OperationsCenterFact',
         'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\Contracts\\TelegramAdministratorCustomerTargetDiscovery',
         'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorCustomerTarget',
         'app/Modules/Customers/Application/TelegramAdministratorCustomerTargetDiscoveryService.php|App\\Modules\\Telegram\\Application\\TelegramAdministratorCustomerTargetSearchResult',

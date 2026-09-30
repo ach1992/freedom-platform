@@ -5,7 +5,15 @@ declare(strict_types=1);
 namespace App\Modules\Operations\Application;
 
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
+use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\PanelOperationsSnapshotSource;
+use App\Modules\Operations\Application\Contracts\PaymentOperationsSnapshotSource;
+use App\Modules\Operations\Application\Contracts\ProvisioningOperationsSnapshotSource;
+use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
+use App\Modules\Operations\Application\Contracts\TelegramOperationsSnapshotSource;
+use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Shared\Application\Clock;
+use App\Shared\Application\OutboxOperationalSnapshotSource;
 use DateInterval;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -23,6 +31,14 @@ final readonly class OperationsCenterService
         private RuntimeHealthProbe $runtimeHealth,
         private AdministratorUserPermissionAuthorizer $administrators,
         private Clock $clock,
+        private TelegramOperationsSnapshotSource $telegram,
+        private PanelOperationsSnapshotSource $panels,
+        private PaymentOperationsSnapshotSource $payments,
+        private ProvisioningOperationsSnapshotSource $provisioning,
+        private OutboxOperationalSnapshotSource $outbox,
+        private BackupRepository $backups,
+        private UpdateWorkspace $updates,
+        private RestoreWorkspace $restores,
     ) {}
 
     /** @requirement OPS-001 OPS-002 OPS-003 ACL-001 ACL-002 DAT-003 SEC-002 */
@@ -38,22 +54,13 @@ final readonly class OperationsCenterService
             ...$this->outboxFacts($now),
             ...$this->heartbeatFacts($now),
             ...$this->scheduledRunFacts($now),
-            ...$this->telegramIngressFacts(),
-            ...$this->panelFacts(),
-            ...$this->paymentHealthFacts($now),
-            ...$this->cardToCardFacts(),
-            ...$this->giftCardFacts(),
-            ...$this->provisioningFacts(),
-            ...$this->serviceSyncFacts(),
+            ...$this->telegram->facts($now),
+            ...$this->panels->facts($now),
+            ...$this->payments->facts($now),
+            ...$this->provisioning->facts($now),
             ...$this->alertFacts(),
             ...$this->backupAndReleaseFacts(),
-            new OperationsCenterFact(
-                'providers',
-                'providers.sms_health',
-                'unknown',
-                0,
-                'no_authoritative_health_observation',
-            ),
+            new OperationsCenterFact('providers', 'providers.sms_health', 'unknown', 0, 'no_authoritative_health_observation'),
         ];
 
         usort(
@@ -72,10 +79,7 @@ final readonly class OperationsCenterService
 
         $facts = [];
         foreach ($checks as $code => $check) {
-            $detail = null;
-            if (($check['error_code'] ?? '') !== '') {
-                $detail = 'error_code='.(string) $check['error_code'];
-            }
+            $detail = ($check['error_code'] ?? '') === '' ? null : 'error_code='.(string) $check['error_code'];
             $facts[] = new OperationsCenterFact(
                 'runtime',
                 'runtime.'.$code,
@@ -92,7 +96,6 @@ final readonly class OperationsCenterService
     private function queueFacts(): array
     {
         $queueNames = [];
-
         $configured = config('operations.worker_heartbeat.queue_group');
         if (is_string($configured)) {
             foreach (explode(',', $configured) as $queue) {
@@ -172,30 +175,22 @@ final readonly class OperationsCenterService
     /** @return list<OperationsCenterFact> */
     private function outboxFacts(DateTimeImmutable $now): array
     {
-        $connection = $this->database->connection();
-        $nowString = $now->format('Y-m-d H:i:s.u');
-        $due = (int) $connection->table('outbox_messages')
-            ->whereNull('processed_at')
-            ->whereIn('dispatch_state', ['pending', 'retry'])
-            ->where('available_at', '<=', $nowString)
-            ->count();
-        $review = (int) $connection->table('outbox_messages')
-            ->whereNull('processed_at')
-            ->where('dispatch_state', 'review_required')
-            ->count();
+        $snapshot = $this->outbox->snapshot($now);
 
         return [
             new OperationsCenterFact(
                 'outbox',
                 'outbox.due_backlog',
-                $due === 0 ? 'empty' : 'observed',
-                $due,
+                $snapshot->dueBacklog === 0 ? 'empty' : 'observed',
+                $snapshot->dueBacklog,
+                null,
+                $snapshot->oldestDueAtUtc,
             ),
             new OperationsCenterFact(
                 'outbox',
                 'outbox.review_required',
-                $review === 0 ? 'empty' : 'manual_review',
-                $review,
+                $snapshot->reviewRequired === 0 ? 'empty' : 'manual_review',
+                $snapshot->reviewRequired,
             ),
         ];
     }
@@ -208,42 +203,25 @@ final readonly class OperationsCenterService
             $maxAge = 480;
         }
         $cutoff = $now->sub(new DateInterval('PT'.$maxAge.'S'));
+        $cutoffString = $cutoff->format('Y-m-d H:i:s.u');
+        $connection = $this->database->connection();
 
         /** @var object{last_seen_at:string}|null $scheduler */
-        $scheduler = $this->database->connection()->table('worker_heartbeats')
-            ->where('worker_id', 'scheduler')
-            ->first(['last_seen_at']);
+        $scheduler = $connection->table('worker_heartbeats')->where('worker_id', 'scheduler')->first(['last_seen_at']);
         $schedulerObserved = $scheduler === null ? null : $this->date($scheduler->last_seen_at);
         $schedulerState = $schedulerObserved === null
             ? 'unknown'
             : ($schedulerObserved < $cutoff ? 'degraded' : 'healthy');
 
-        /** @var list<object{last_seen_at:string}> $workers */
-        $workers = $this->database->connection()->table('worker_heartbeats')
+        $total = (int) $connection->table('worker_heartbeats')->where('worker_id', '<>', 'scheduler')->count();
+        $fresh = (int) $connection->table('worker_heartbeats')
             ->where('worker_id', '<>', 'scheduler')
-            ->get(['last_seen_at'])
-            ->all();
-        $fresh = 0;
-        $stale = 0;
-        $latest = null;
-        foreach ($workers as $worker) {
-            $observed = $this->date($worker->last_seen_at);
-            if ($observed === null) {
-                $stale++;
-
-                continue;
-            }
-            $latest = $latest === null || $observed > $latest ? $observed : $latest;
-            if ($observed < $cutoff) {
-                $stale++;
-            } else {
-                $fresh++;
-            }
-        }
-
-        $workerState = $workers === []
-            ? 'unknown'
-            : ($stale > 0 ? 'degraded' : 'healthy');
+            ->where('last_seen_at', '>=', $cutoffString)
+            ->count();
+        $stale = max(0, $total - $fresh);
+        $latest = $connection->table('worker_heartbeats')->where('worker_id', '<>', 'scheduler')->max('last_seen_at');
+        $latestObserved = $this->date($latest);
+        $workerState = $total === 0 ? 'unknown' : ($stale > 0 ? 'degraded' : 'healthy');
 
         return [
             new OperationsCenterFact(
@@ -258,9 +236,9 @@ final readonly class OperationsCenterService
                 'workers',
                 'workers.heartbeat',
                 $workerState,
-                count($workers),
+                $total,
                 'fresh='.$fresh.';stale='.$stale.';max_age_seconds='.$maxAge,
-                $latest,
+                $latestObserved,
             ),
         ];
     }
@@ -276,9 +254,7 @@ final readonly class OperationsCenterService
             ->where('started_at', '>=', $failedCutoff)
             ->where('state', 'failed')
             ->count();
-        $running = (int) $connection->table('scheduled_task_runs')
-            ->where('state', 'running')
-            ->count();
+        $running = (int) $connection->table('scheduled_task_runs')->where('state', 'running')->count();
         $staleRunning = (int) $connection->table('scheduled_task_runs')
             ->where('state', 'running')
             ->where('started_at', '<', $staleCutoff)
@@ -295,22 +271,8 @@ final readonly class OperationsCenterService
                 $historyCount === 0 ? 'no_durable_run_evidence' : null,
                 $latestObserved,
             ),
-            new OperationsCenterFact(
-                'scheduler',
-                'scheduler.failed_runs_24h',
-                $failed === 0 ? 'empty' : 'degraded',
-                $failed,
-                null,
-                $latestObserved,
-            ),
-            new OperationsCenterFact(
-                'scheduler',
-                'scheduler.running_runs',
-                $running === 0 ? 'empty' : 'observed',
-                $running,
-                null,
-                $latestObserved,
-            ),
+            new OperationsCenterFact('scheduler', 'scheduler.failed_runs_24h', $failed === 0 ? 'empty' : 'degraded', $failed, null, $latestObserved),
+            new OperationsCenterFact('scheduler', 'scheduler.running_runs', $running === 0 ? 'empty' : 'observed', $running, null, $latestObserved),
             new OperationsCenterFact(
                 'scheduler',
                 'scheduler.stale_running_runs',
@@ -323,305 +285,18 @@ final readonly class OperationsCenterService
     }
 
     /** @return list<OperationsCenterFact> */
-    private function telegramIngressFacts(): array
-    {
-        $failed = (int) $this->database->connection()->table('processed_telegram_updates')
-            ->whereIn('state', ['failed', 'failed_terminal'])
-            ->count();
-        $latest = $this->database->connection()->table('processed_telegram_updates')->max('received_at');
-
-        return [
-            new OperationsCenterFact(
-                'webhook',
-                'webhook.telegram_last_observed',
-                $latest === null ? 'unknown' : 'observed',
-                $latest === null ? 0 : 1,
-                null,
-                $this->date($latest),
-            ),
-            new OperationsCenterFact(
-                'webhook',
-                'webhook.telegram_failed_updates',
-                $failed === 0 ? 'empty' : 'manual_review',
-                $failed,
-                null,
-                $this->date($latest),
-            ),
-        ];
-    }
-
-    /** @return list<OperationsCenterFact> */
-    private function panelFacts(): array
-    {
-        /** @var list<object{provider_type:string,state:string,last_test_status:?string,last_panel_version:?string,last_tested_at:?string}> $rows */
-        $rows = $this->database->connection()->table('panel_connections')
-            ->orderBy('provider_type')
-            ->orderBy('id')
-            ->limit(100)
-            ->get([
-                'provider_type',
-                'state',
-                'last_test_status',
-                'last_panel_version',
-                'last_tested_at',
-            ])
-            ->all();
-
-        if ($rows === []) {
-            return [new OperationsCenterFact('panels', 'panels.inventory', 'empty', 0)];
-        }
-
-        $groups = [];
-        foreach ($rows as $row) {
-            $provider = preg_match('/\A[a-zA-Z0-9_.:-]{1,64}\z/', $row->provider_type) === 1
-                ? strtolower($row->provider_type)
-                : 'other';
-            $groups[$provider] ??= [
-                'count' => 0,
-                'failed' => 0,
-                'tested' => 0,
-                'versions' => [],
-                'latest' => null,
-            ];
-            $groups[$provider]['count']++;
-            if ($row->last_test_status === 'failed' || $row->last_test_status === 'failure') {
-                $groups[$provider]['failed']++;
-            }
-            if ($row->last_test_status !== null) {
-                $groups[$provider]['tested']++;
-            }
-            if ($row->last_panel_version !== null && mb_strlen($row->last_panel_version) <= 32) {
-                $groups[$provider]['versions'][$row->last_panel_version] = true;
-            }
-            $observed = $this->date($row->last_tested_at);
-            if ($observed !== null
-                && ($groups[$provider]['latest'] === null || $observed > $groups[$provider]['latest'])
-            ) {
-                $groups[$provider]['latest'] = $observed;
-            }
-        }
-
-        $facts = [];
-        foreach (array_slice($groups, 0, 20, true) as $provider => $group) {
-            $state = $group['failed'] > 0
-                ? 'degraded'
-                : ($group['tested'] > 0 ? 'observed' : 'unknown');
-            $versions = array_slice(array_keys($group['versions']), 0, 3);
-            $detail = 'provider='.$provider.';tested='.$group['tested'].';failed='.$group['failed'];
-            if ($versions !== []) {
-                $detail .= ';versions='.implode(',', $versions);
-            }
-            $facts[] = new OperationsCenterFact(
-                'panels',
-                'panels.provider.'.$provider,
-                $state,
-                (int) $group['count'],
-                mb_substr($detail, 0, 191),
-                $group['latest'],
-            );
-        }
-
-        return $facts;
-    }
-
-    /** @return list<OperationsCenterFact> */
-    private function paymentHealthFacts(DateTimeImmutable $now): array
-    {
-        /** @var list<object{method_code:string,healthy:int|bool,observed_at:string,expires_at:string}> $rows */
-        $rows = $this->database->connection()->table('payment_method_health_observations')
-            ->orderByDesc('observed_at')
-            ->orderByDesc('id')
-            ->limit(100)
-            ->get(['method_code', 'healthy', 'observed_at', 'expires_at'])
-            ->all();
-
-        $seen = [];
-        $facts = [];
-        foreach ($rows as $row) {
-            if (isset($seen[$row->method_code]) || count($facts) >= 20) {
-                continue;
-            }
-            $seen[$row->method_code] = true;
-            $code = preg_match('/\A[a-z][a-z0-9_.-]{1,63}\z/', $row->method_code) === 1
-                ? $row->method_code
-                : 'unknown';
-            $observed = $this->date($row->observed_at);
-            $expires = $this->date($row->expires_at);
-            $expired = $expires === null || $expires <= $now;
-            $healthy = (bool) $row->healthy;
-
-            $facts[] = new OperationsCenterFact(
-                'payments',
-                'payments.health.'.$code,
-                $expired ? 'unknown' : ($healthy ? 'healthy' : 'degraded'),
-                $healthy && ! $expired ? 1 : 0,
-                $expired ? 'observation_expired' : null,
-                $observed,
-            );
-        }
-
-        if ($facts === []) {
-            $facts[] = new OperationsCenterFact(
-                'payments',
-                'payments.health',
-                'unknown',
-                0,
-                'no_authoritative_health_observation',
-            );
-        }
-
-        return $facts;
-    }
-
-    /** @return list<OperationsCenterFact> */
-    private function cardToCardFacts(): array
-    {
-        /** @var list<object{provider_code:string,last_success_at:?string,last_failure_at:?string,last_failure_code:?string}> $rows */
-        $rows = $this->database->connection()->table('c2c_provider_cursors')
-            ->orderBy('provider_code')
-            ->limit(20)
-            ->get(['provider_code', 'last_success_at', 'last_failure_at', 'last_failure_code'])
-            ->all();
-
-        $facts = [];
-        foreach ($rows as $row) {
-            $provider = preg_match('/\A[a-z][a-z0-9_.-]{1,63}\z/', $row->provider_code) === 1
-                ? $row->provider_code
-                : 'unknown';
-            $success = $this->date($row->last_success_at);
-            $failure = $this->date($row->last_failure_at);
-            $state = $success === null && $failure === null
-                ? 'unknown'
-                : ($failure !== null && ($success === null || $failure > $success) ? 'degraded' : 'observed');
-            $observed = $success === null || ($failure !== null && $failure > $success) ? $failure : $success;
-            $detail = $row->last_failure_code === null
-                ? null
-                : 'last_failure_code='.mb_substr($row->last_failure_code, 0, 64);
-
-            $facts[] = new OperationsCenterFact(
-                'payments',
-                'payments.c2c_provider.'.$provider,
-                $state,
-                $state === 'degraded' ? 0 : 1,
-                $detail,
-                $observed,
-            );
-        }
-
-        $unmatched = (int) $this->database->connection()->table('c2c_bank_transactions as bank')
-            ->leftJoin('c2c_transaction_matches as matches', 'matches.c2c_bank_transaction_id', '=', 'bank.id')
-            ->leftJoin('c2c_match_reviews as reviews', 'reviews.c2c_bank_transaction_id', '=', 'bank.id')
-            ->where('bank.status', 'settled')
-            ->whereNull('matches.id')
-            ->whereNull('reviews.id')
-            ->count('bank.id');
-        $facts[] = new OperationsCenterFact(
-            'payments',
-            'payments.c2c_unmatched_settled',
-            $unmatched === 0 ? 'empty' : 'manual_review',
-            $unmatched,
-        );
-
-        if ($rows === []) {
-            $facts[] = new OperationsCenterFact(
-                'payments',
-                'payments.c2c_provider_health',
-                'unknown',
-                0,
-                'no_cursor_observation',
-            );
-        }
-
-        return $facts;
-    }
-
-    /** @return list<OperationsCenterFact> */
-    private function giftCardFacts(): array
-    {
-        $pendingCapture = (int) $this->database->connection()->table('gift_card_submissions')
-            ->whereIn('state', ['valid_unreserved', 'reserved', 'redeeming'])
-            ->count();
-        $manualReview = (int) $this->database->connection()->table('gift_card_submissions')
-            ->whereIn('state', ['pending_manual_review', 'provider_unavailable'])
-            ->count();
-        $reconciliation = (int) $this->database->connection()->table('gift_card_reconciliation_findings')
-            ->count();
-
-        return [
-            new OperationsCenterFact(
-                'payments',
-                'payments.gift_card_pending_capture',
-                $pendingCapture === 0 ? 'empty' : 'observed',
-                $pendingCapture,
-            ),
-            new OperationsCenterFact(
-                'payments',
-                'payments.gift_card_manual_review',
-                $manualReview === 0 ? 'empty' : 'manual_review',
-                $manualReview,
-            ),
-            new OperationsCenterFact(
-                'payments',
-                'payments.gift_card_reconciliation_findings',
-                $reconciliation === 0 ? 'empty' : 'manual_review',
-                $reconciliation,
-            ),
-        ];
-    }
-
-    /** @return list<OperationsCenterFact> */
-    private function provisioningFacts(): array
-    {
-        $review = (int) $this->database->connection()->table('provisioning_operations')
-            ->whereIn('state', ['uncertain_remote_result', 'failed_final', 'needs_review'])
-            ->count();
-
-        return [new OperationsCenterFact(
-            'provisioning',
-            'provisioning.manual_review',
-            $review === 0 ? 'empty' : 'manual_review',
-            $review,
-        )];
-    }
-
-    /** @return list<OperationsCenterFact> */
-    private function serviceSyncFacts(): array
-    {
-        $unresolved = (int) $this->database->connection()->table('service_sync_anomalies')
-            ->whereIn('state', ['open', 'manual_review', 'action_requested'])
-            ->count();
-
-        return [new OperationsCenterFact(
-            'provisioning',
-            'provisioning.sync_anomalies',
-            $unresolved === 0 ? 'empty' : 'manual_review',
-            $unresolved,
-        )];
-    }
-
-    /** @return list<OperationsCenterFact> */
     private function alertFacts(): array
     {
         $connection = $this->database->connection();
-        $warning = (int) $connection->table('alerts')
-            ->whereNull('resolved_at')
-            ->where('severity', 'warning')
-            ->count();
+        $warning = (int) $connection->table('alerts')->whereNull('resolved_at')->where('severity', 'warning')->count();
         $critical = (int) $connection->table('alerts')
             ->whereNull('resolved_at')
             ->whereIn('severity', ['critical', 'security'])
             ->count();
-        $deliveryFailed = (int) $connection->table('operational_alert_deliveries')
-            ->where('state', 'failed')
-            ->count();
+        $deliveryFailed = (int) $connection->table('operational_alert_deliveries')->where('state', 'failed')->count();
 
         return [
-            new OperationsCenterFact(
-                'alerts',
-                'alerts.unresolved_warning',
-                $warning === 0 ? 'empty' : 'observed',
-                $warning,
-            ),
+            new OperationsCenterFact('alerts', 'alerts.unresolved_warning', $warning === 0 ? 'empty' : 'observed', $warning),
             new OperationsCenterFact(
                 'alerts',
                 'alerts.unresolved_critical_security',
@@ -640,28 +315,109 @@ final readonly class OperationsCenterService
     /** @return list<OperationsCenterFact> */
     private function backupAndReleaseFacts(): array
     {
+        $facts = [];
         $backupEnabled = config('operations.backup.enabled') === true;
-        $releaseVersion = config('app.version');
-        $release = is_string($releaseVersion) && $releaseVersion !== ''
-            ? mb_substr($releaseVersion, 0, 64)
-            : null;
 
-        return [
-            new OperationsCenterFact(
+        try {
+            $backup = $this->backups->operationalStatus();
+            $facts[] = new OperationsCenterFact(
                 'backup',
                 'backup.runtime',
-                'unknown',
+                $backupEnabled ? ($backup['completed_count'] > 0 ? 'observed' : 'unknown') : 'empty',
                 $backupEnabled ? 1 : 0,
-                $backupEnabled ? 'enabled_without_live_status' : 'disabled',
-            ),
-            new OperationsCenterFact(
+                $backupEnabled
+                    ? ($backup['completed_count'] > 0 ? 'completed_evidence='.$backup['completed_count'] : 'enabled_without_completed_backup')
+                    : 'disabled',
+                $this->date($backup['latest_completed_at']),
+            );
+            $facts[] = new OperationsCenterFact(
+                'backup',
+                'backup.completed',
+                $backup['completed_count'] === 0 ? 'empty' : 'observed',
+                $backup['completed_count'],
+                $backup['latest_bytes'] === null ? null : 'latest_bytes='.$backup['latest_bytes'],
+                $this->date($backup['latest_completed_at']),
+            );
+        } catch (Throwable) {
+            $facts[] = new OperationsCenterFact('backup', 'backup.runtime', 'degraded', 0, 'status_unavailable');
+            $facts[] = new OperationsCenterFact('backup', 'backup.completed', 'unknown', 0, 'status_unavailable');
+        }
+
+        try {
+            $update = $this->updates->operationalStatus();
+            $release = $update['current_release_id'];
+            $releaseDetail = $release;
+            if ($release !== null && $update['application_version'] !== null) {
+                $releaseDetail .= ';app='.$update['application_version'];
+            }
+            $facts[] = new OperationsCenterFact(
                 'release',
                 'release.version',
                 $release === null ? 'unknown' : 'observed',
                 $release === null ? 0 : 1,
-                $release,
-            ),
-        ];
+                $releaseDetail === null ? null : mb_substr($releaseDetail, 0, 191),
+            );
+            $facts[] = new OperationsCenterFact(
+                'update',
+                'update.latest',
+                $this->operationState($update['latest_status'], $update['latest_failure_code']),
+                $update['latest_status'] === null ? 0 : 1,
+                $this->operationDetail($update['latest_status'], $update['latest_failure_code']),
+                $this->date($update['latest_completed_at']),
+            );
+        } catch (Throwable) {
+            $facts[] = new OperationsCenterFact('release', 'release.version', 'unknown', 0, 'status_unavailable');
+            $facts[] = new OperationsCenterFact('update', 'update.latest', 'degraded', 0, 'status_unavailable');
+        }
+
+        try {
+            $restore = $this->restores->operationalStatus();
+            $facts[] = new OperationsCenterFact(
+                'restore',
+                'restore.latest',
+                $this->operationState($restore['latest_status'], $restore['latest_failure_code']),
+                $restore['latest_status'] === null ? 0 : 1,
+                $this->operationDetail($restore['latest_status'], $restore['latest_failure_code']),
+                $this->date($restore['latest_completed_at']),
+            );
+        } catch (Throwable) {
+            $facts[] = new OperationsCenterFact('restore', 'restore.latest', 'degraded', 0, 'status_unavailable');
+        }
+
+        return $facts;
+    }
+
+    private function operationState(?string $status, ?string $failureCode): string
+    {
+        if ($status === null) {
+            return 'unknown';
+        }
+        if ($failureCode !== null || str_contains($status, 'failed')) {
+            return 'degraded';
+        }
+        if (str_contains($status, 'required')
+            || str_contains($status, 'review')
+            || str_contains($status, 'pending')
+            || str_contains($status, 'resume')
+        ) {
+            return 'manual_review';
+        }
+
+        return 'observed';
+    }
+
+    private function operationDetail(?string $status, ?string $failureCode): ?string
+    {
+        if ($status === null) {
+            return 'no_durable_report';
+        }
+
+        $detail = 'status='.$status;
+        if ($failureCode !== null) {
+            $detail .= ';failure_code='.$failureCode;
+        }
+
+        return mb_substr($detail, 0, 191);
     }
 
     private function date(mixed $value): ?DateTimeImmutable
