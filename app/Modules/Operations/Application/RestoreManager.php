@@ -489,6 +489,153 @@ final readonly class RestoreManager implements UpdateRecoveryRestore
         }
     }
 
+    /**
+     * @param array<string, mixed> $report
+     * @return array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool}
+     */
+    private function recoveryContext(array $report, string $updateRunId): array
+    {
+        $status = $this->requiredReportString($report, 'status');
+        if (! in_array($status, [
+            'restore_required',
+            'rollback_incompatible_restore_required',
+            'restore_recovery_failed_contained',
+        ], true)
+            || ($report['report_finalized'] ?? null) !== true
+            || ($report['restore_required'] ?? null) !== true
+        ) {
+            throw new RuntimeException('The update report is not eligible for controlled Restore recovery.');
+        }
+
+        $failedRelease = $this->requiredReportString($report, 'release_id');
+        $previousRelease = $this->requiredReportString($report, 'previous_release');
+        foreach ([$failedRelease, $previousRelease] as $releaseId) {
+            if (preg_match('/\\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\z/', $releaseId) !== 1
+                || str_contains($releaseId, '..')
+            ) {
+                throw new RuntimeException('The update recovery release identity is invalid.');
+            }
+        }
+
+        $previousApplicationVersion = $this->requiredReportString($report, 'previous_application_version');
+        if (strlen($previousApplicationVersion) > 64) {
+            throw new RuntimeException('The update recovery application identity is invalid.');
+        }
+
+        $backupId = $this->requiredReportString($report, 'pre_update_backup_id');
+        $backupCompletedAt = $this->requiredReportString($report, 'pre_update_backup_completed_at');
+        if (strlen($backupId) > 191 || strlen($backupCompletedAt) > 64) {
+            throw new RuntimeException('The update recovery backup identity is invalid.');
+        }
+
+        $adoptContainment = ($report['containment_retained'] ?? false) === true;
+        if ($status !== 'rollback_incompatible_restore_required'
+            && (! $adoptContainment
+                || ($report['maintenance_retained'] ?? false) !== true
+                || ($report['scheduler_mutation_fence_retained'] ?? false) !== true
+                || ($report['worker_quiescence_retained'] ?? false) !== true)
+        ) {
+            throw new RuntimeException('The retained update containment is not proven for recovery.');
+        }
+
+        return [
+            'update_run_id' => $updateRunId,
+            'failed_release' => $failedRelease,
+            'previous_release' => $previousRelease,
+            'previous_application_version' => $previousApplicationVersion,
+            'backup_id' => $backupId,
+            'backup_completed_at' => $backupCompletedAt,
+            'adopt_containment' => $adoptContainment,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $report
+     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool} $recovery
+     */
+    private function assertRecoveryReportMatches(array $report, array $recovery): void
+    {
+        foreach ([
+            'update_run_id' => $recovery['update_run_id'],
+            'release_id' => $recovery['failed_release'],
+            'previous_release' => $recovery['previous_release'],
+            'previous_application_version' => $recovery['previous_application_version'],
+            'pre_update_backup_id' => $recovery['backup_id'],
+            'pre_update_backup_completed_at' => $recovery['backup_completed_at'],
+        ] as $field => $expected) {
+            $actual = $this->requiredReportString($report, $field);
+            if (! hash_equals($expected, $actual)) {
+                throw new RuntimeException('The protected update recovery report changed unexpectedly.');
+            }
+        }
+    }
+
+    /**
+     * @param array{update_run_id:string,failed_release:string,previous_release:string,previous_application_version:string,backup_id:string,backup_completed_at:string,adopt_containment:bool} $recovery
+     */
+    private function recordUpdateRecoveryFailure(
+        array $recovery,
+        string $restoreRunId,
+        string $phase,
+        bool $maintenanceOwned,
+        bool $schedulerFenceHeld,
+        bool $workersQuiesced,
+        bool $containmentRetained,
+    ): void {
+        try {
+            $authoritative = $this->updateWorkspace->loadReport($recovery['update_run_id']);
+            $this->assertRecoveryReportMatches($authoritative, $recovery);
+            $adoptionFailed = $phase === 'maintenance'
+                && $recovery['adopt_containment']
+                && ! $maintenanceOwned;
+
+            $authoritative['status'] = $adoptionFailed
+                ? 'restore_recovery_adoption_failed'
+                : ($containmentRetained
+                    ? 'restore_recovery_failed_contained'
+                    : 'restore_recovery_failed_unproven');
+            $authoritative['restore_required'] = true;
+            $authoritative['report_finalized'] = true;
+            $authoritative['recovery_restore_run_id'] = $restoreRunId;
+            $authoritative['recovery_failure_code'] = $phase.'_failed';
+            $authoritative['recovery_maintenance_owned'] = $maintenanceOwned;
+            $authoritative['recovery_scheduler_fence_held'] = $schedulerFenceHeld;
+            $authoritative['recovery_workers_quiesced'] = $workersQuiesced;
+            $authoritative['recovery_containment_retained'] = $containmentRetained;
+            $authoritative['recovery_containment_adoption_proven'] = ! $adoptionFailed;
+            $authoritative['recovery_failed_at'] = $this->timestamp();
+
+            if (! $adoptionFailed) {
+                $authoritative['maintenance_retained'] = $maintenanceOwned;
+                $authoritative['scheduler_mutation_fence_retained'] = $schedulerFenceHeld;
+                $authoritative['worker_quiescence_retained'] = $workersQuiesced;
+                $authoritative['containment_retained'] = $containmentRetained;
+            }
+
+            $this->updateWorkspace->storeReport($recovery['update_run_id'], $authoritative);
+        } catch (Throwable) {
+            // Preserve the original Restore failure; protected recovery reporting is best-effort here.
+        }
+    }
+
+    /** @param array<string, mixed> $report */
+    private function requiredReportString(array $report, string $field): string
+    {
+        $value = $report[$field] ?? null;
+        if (! is_string($value) || $value === '') {
+            throw new RuntimeException('The protected update recovery report is incomplete.');
+        }
+
+        return $value;
+    }
+
+    private function databaseTimestamp(): string
+    {
+        return $this->clock->now()
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->format('Y-m-d H:i:s.u');
+    }
+
     /** @return array{maintenance_owned:bool,scheduler_fence_held:bool,workers_quiesced:bool} */
     private function retainContainment(string $restoreRunId): array
     {
