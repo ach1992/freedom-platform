@@ -8,6 +8,9 @@ interface ReleaseActivator
 {
     public function prepare(string $releaseId): string;
 
+    /** Resolve an existing release without mutating shared links or current. */
+    public function resolve(string $releaseId): string;
+
     /**
      * @return array{status: 'activated'|'already_active', release: string, previous_release: string|null}
      */
