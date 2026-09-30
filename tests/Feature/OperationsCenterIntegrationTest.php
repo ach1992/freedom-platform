@@ -258,7 +258,7 @@ final class OperationsCenterIntegrationTest extends TestCase
 
         DB::table('panel_connections')->insert([
             'code' => 'operations-sensitive-panel',
-            'provider_type' => 'xui',
+            'provider_type' => 'marzban',
             'name_fa' => 'پنل',
             'name_en' => 'Panel',
             'base_url' => 'https://secret-panel.example.test/private',
