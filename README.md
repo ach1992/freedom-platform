@@ -23,7 +23,7 @@ The Version 1 product scope includes:
 
 - PHP 8.4
 - Laravel 13.x
-- MariaDB 10.11 compatible baseline
+- MariaDB 10.11.9+ compatible baseline
 - Redis with authentication
 - Telegram Bot API
 - aaPanel / OpenLiteSpeed deployment target
@@ -32,7 +32,7 @@ The Version 1 product scope includes:
 
 For development setup and contribution workflow, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-For the technical documentation index, architecture, security, testing, execution infrastructure, and operations guidance, see [`docs/index.md`](docs/index.md).
+For the technical documentation index, architecture, security, testing, operations/handover, provider extension guidance, and generated schema/permission references, see [`docs/index.md`](docs/index.md).
 
 Repository and AI-agent working rules are in [`AGENTS.md`](AGENTS.md).
 

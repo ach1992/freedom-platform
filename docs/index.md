@@ -21,9 +21,36 @@ Git history and GitHub PR/Issue/CI history are the implementation archive. `docs
 - [`development/repository-map.md`](development/repository-map.md) — source/module/runtime navigation.
 - [`adr/`](adr/) — durable architecture decisions only.
 
-## Operations
+## Operations and release handover
 
 - [`09-deployment-runbook.md`](09-deployment-runbook.md) — deployment, backup/restore, update/rollback safety contract. Commands are executable only when the referenced implementation exists and the release task explicitly authorizes them.
+- [`operations-guide.md`](operations-guide.md) - Version 1 administrator/support/Telegram operations, lifecycle navigation, incident response, secret rotation, troubleshooting, and source-backed command map.
+- [`provider-extension-guide.md`](provider-extension-guide.md) - payment/SMS/panel adapter extension, idempotency/uncertainty/security boundaries, and protected live-acceptance distinction.
+
+## Generated release references
+
+- [`reference/data-dictionary.md`](reference/data-dictionary.md) - generated current-schema columns, relationships and unique constraints; regenerate/check with `scripts/docs/generate-release-references.php`.
+- [`reference/permission-catalog.md`](reference/permission-catalog.md) - generated permission/risk/approval/default-role catalog from the seeded access-control authority.
+
+## Version 1 final-documentation capability map
+
+This map keeps each mandatory final-documentation capability discoverable without copying its content into the index.
+
+| Capability | Canonical owner |
+| --- | --- |
+| Architecture overview | [`05-architecture-overview.md`](05-architecture-overview.md) |
+| Module map | [`development/repository-map.md`](development/repository-map.md) |
+| ERD/data dictionary | [`reference/data-dictionary.md`](reference/data-dictionary.md) |
+| State machines | [`specification/master-execution-prompt.md`](specification/master-execution-prompt.md) sections 9/21 plus the lifecycle map in [`operations-guide.md`](operations-guide.md) |
+| Permission catalog | [`reference/permission-catalog.md`](reference/permission-catalog.md) |
+| Payment/card/gift-card provider and panel adapter guidance | [`provider-extension-guide.md`](provider-extension-guide.md) |
+| Telegram UX, administrator and support manuals | [`operations-guide.md`](operations-guide.md) |
+| aaPanel/OpenLiteSpeed installation | [`09-deployment-runbook.md`](09-deployment-runbook.md) with handover navigation in [`operations-guide.md`](operations-guide.md) |
+| Update/rollback and backup/restore | [`09-deployment-runbook.md`](09-deployment-runbook.md) |
+| Incident, secret rotation and troubleshooting | [`operations-guide.md`](operations-guide.md) |
+| Development environment and coding standards | [`../CONTRIBUTING.md`](../CONTRIBUTING.md), [`../AGENTS.md`](../AGENTS.md), and [`05-architecture-overview.md`](05-architecture-overview.md) |
+| API/integration contracts | [`provider-extension-guide.md`](provider-extension-guide.md) plus the typed contract paths it references |
+| Changelog | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
 ## Development state and recovery
 
