@@ -96,48 +96,95 @@ final readonly class OperationsCenterService
     private function queueFacts(): array
     {
         $queueNames = [];
+        $inspectionReasons = [];
+        $queueGroups = [];
+
         $configured = config('operations.worker_heartbeat.queue_group');
-        if (is_string($configured)) {
-            foreach (explode(',', $configured) as $queue) {
-                $queue = trim($queue);
-                if ($queue !== '' && preg_match('/\A[a-zA-Z0-9_.:-]{1,64}\z/', $queue) === 1) {
-                    $queueNames[] = $queue;
-                }
-            }
+        if (is_string($configured) && trim($configured) !== '') {
+            $queueGroups[] = $configured;
         }
 
         $defaultQueue = config('queue.connections.redis.queue');
-        if (is_string($defaultQueue)
-            && $defaultQueue !== ''
-            && preg_match('/\A[a-zA-Z0-9_.:-]{1,64}\z/', $defaultQueue) === 1
-        ) {
-            $queueNames[] = $defaultQueue;
+        if (is_string($defaultQueue) && trim($defaultQueue) !== '') {
+            $queueGroups[] = $defaultQueue;
         }
 
-        /** @var list<string> $observedQueues */
-        $observedQueues = $this->database->connection()->table('worker_heartbeats')
+        // Queue identity is byte/case-sensitive in the application contract, while this
+        // column inherits the repository's case-insensitive MariaDB collation. Apply
+        // DISTINCT, ordering, and the overflow sentinel to the binary value so the database
+        // cannot discard legitimate raw identities before PHP performs bounded inspection.
+        /** @var list<mixed> $observedQueueGroups */
+        $observedQueueGroups = $this->database->connection()->table('worker_heartbeats')
             ->where('worker_id', '<>', 'scheduler')
+            ->selectRaw('CAST(queue AS BINARY) AS queue_identity')
             ->distinct()
-            ->orderBy('queue')
-            ->limit(20)
-            ->pluck('queue')
-            ->filter(static fn (mixed $queue): bool => is_string($queue) && $queue !== '')
+            ->orderBy('queue_identity')
+            ->limit(21)
+            ->pluck('queue_identity')
             ->values()
             ->all();
-        array_push($queueNames, ...$observedQueues);
-        $queueNames = array_slice(array_values(array_unique($queueNames)), 0, 20);
 
-        if ($queueNames === []) {
-            return [new OperationsCenterFact('queue', 'queue.backlog', 'unknown', 0, 'no_queue_identity')];
+        if (count($observedQueueGroups) > 20) {
+            $inspectionReasons['observed_groups_truncated'] = true;
+            $observedQueueGroups = array_slice($observedQueueGroups, 0, 20);
+        }
+
+        foreach ($observedQueueGroups as $queueGroup) {
+            if (! is_string($queueGroup) || trim($queueGroup) === '') {
+                $inspectionReasons['unsupported_queue_identity'] = true;
+
+                continue;
+            }
+
+            $queueGroups[] = $queueGroup;
+        }
+
+        foreach ($queueGroups as $queueGroup) {
+            $parsed = $this->queueGroupIdentities($queueGroup);
+            if (! $parsed['complete']) {
+                $inspectionReasons['unsupported_queue_identity'] = true;
+            }
+            array_push($queueNames, ...$parsed['identities']);
+        }
+
+        $queueNames = array_values(array_unique($queueNames, SORT_STRING));
+        if (count($queueNames) > 20) {
+            $inspectionReasons['queue_identities_truncated'] = true;
+            $queueNames = array_slice($queueNames, 0, 20);
         }
 
         $facts = [];
+        if ($inspectionReasons !== []) {
+            ksort($inspectionReasons);
+            $facts[] = new OperationsCenterFact(
+                'queue',
+                'queue.inspection',
+                'unknown',
+                count($queueNames),
+                implode(
+                    ';',
+                    array_map(
+                        static fn (string $reason): string => $reason.'=1',
+                        array_keys($inspectionReasons),
+                    ),
+                ),
+            );
+        }
+
+        if ($queueNames === []) {
+            $facts[] = new OperationsCenterFact('queue', 'queue.backlog', 'unknown', 0, 'no_queue_identity');
+
+            return $facts;
+        }
+
         foreach ($queueNames as $queueName) {
+            $factCode = $this->queueFactCode($queueName);
+
             try {
                 $size = $this->queues->connection()->size($queueName);
                 $facts[] = new OperationsCenterFact(
                     'queue',
-                    'queue.backlog.'.strtolower(str_replace(':', '-', $queueName)),
+                    $factCode,
                     $size === 0 ? 'empty' : 'observed',
                     max(0, $size),
                     'queue='.$queueName,
@@ -145,7 +192,7 @@ final readonly class OperationsCenterService
             } catch (Throwable) {
                 $facts[] = new OperationsCenterFact(
                     'queue',
-                    'queue.backlog.'.strtolower(str_replace(':', '-', $queueName)),
+                    $factCode,
                     'unknown',
                     0,
                     'queue='.$queueName,
@@ -154,6 +201,72 @@ final readonly class OperationsCenterService
         }
 
         return $facts;
+    }
+
+    /**
+     * @return array{identities:list<string>,complete:bool}
+     */
+    private function queueGroupIdentities(string $queueGroup): array
+    {
+        $identities = [];
+        $complete = true;
+
+        foreach (explode(',', $queueGroup) as $queue) {
+            $queue = trim($queue);
+            if ($queue === '' || preg_match('/\A[a-zA-Z0-9_.:-]{1,64}\z/', $queue) !== 1) {
+                $complete = false;
+
+                continue;
+            }
+
+            $identities[] = $queue;
+        }
+
+        return ['identities' => $identities, 'complete' => $complete];
+    }
+
+    private function queueFactCode(string $queueName): string
+    {
+        // Keep the established readable codes for canonical lowercase identities. Reserve q-
+        // for a reversible encoding whenever normalization could otherwise collapse identity.
+        if (preg_match('/\A[a-z0-9_.-]{1,64}\z/', $queueName) === 1
+            && ! str_starts_with($queueName, 'q-')
+        ) {
+            return 'queue.backlog.'.$queueName;
+        }
+
+        return 'queue.backlog.q-'.$this->queueIdentityBase32($queueName);
+    }
+
+    private function queueIdentityBase32(string $value): string
+    {
+        $alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+        $encoded = '';
+        $buffer = 0;
+        $bits = 0;
+
+        $bytes = unpack('C*', $value);
+        if ($bytes === false) {
+            throw new \RuntimeException('Queue identity encoding failed.');
+        }
+
+        foreach ($bytes as $byte) {
+            $buffer = ($buffer << 8) | $byte;
+            $bits += 8;
+
+            while ($bits >= 5) {
+                $bits -= 5;
+                $encoded .= $alphabet[($buffer >> $bits) & 31];
+            }
+
+            $buffer &= (1 << $bits) - 1;
+        }
+
+        if ($bits > 0) {
+            $encoded .= $alphabet[($buffer << (5 - $bits)) & 31];
+        }
+
+        return $encoded;
     }
 
     /** @return list<OperationsCenterFact> */

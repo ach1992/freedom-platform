@@ -50,12 +50,41 @@ final readonly class FilesystemUpdateWorkspace implements UpdateWorkspace
             $releaseId = $report['release_id'] ?? null;
             $mutationStarted = ($report['mutation_started'] ?? null) === true;
             $activationStarted = ($report['activation_started'] ?? null) === true;
+            $operation = $report['operation'] ?? null;
+            $currentReleaseId = $this->currentReleaseId();
+            $releaseIsCurrent = is_string($currentReleaseId)
+                && is_string($releaseId)
+                && hash_equals($currentReleaseId, $releaseId);
+
+            $rollbackCompletedElsewhere = false;
+            if ($operation === 'rollback'
+                && is_string($releaseId)
+                && is_string($currentReleaseId)
+                && is_string($report['previous_release'] ?? null)
+                && hash_equals($currentReleaseId, $report['previous_release'])
+            ) {
+                $installed = $this->installedIdentity();
+                $rollbackCompletedElsewhere = is_array($installed)
+                    && is_string($installed['release_id'] ?? null)
+                    && is_string($installed['rolled_back_from'] ?? null)
+                    && hash_equals($currentReleaseId, $installed['release_id'])
+                    && hash_equals($releaseId, $installed['rolled_back_from']);
+            }
+
+            $rollbackShapeIsSafe = ($report['staging_path'] ?? null) === null
+                && ($report['release_published'] ?? false) === false;
+            $operationStateIsRecoverable = match ($operation) {
+                'update' => ! $releaseIsCurrent,
+                'rollback' => $rollbackShapeIsSafe
+                    && ($releaseIsCurrent || $rollbackCompletedElsewhere),
+                default => false,
+            };
 
             if (! is_string($releaseId)
                 || ! $this->validReleaseId($releaseId)
                 || $mutationStarted
                 || $activationStarted
-                || hash_equals((string) ($this->currentReleaseId() ?? ''), $releaseId)
+                || ! $operationStateIsRecoverable
             ) {
                 throw new RuntimeException('A previous update has unresolved mutation state and requires operator recovery.');
             }

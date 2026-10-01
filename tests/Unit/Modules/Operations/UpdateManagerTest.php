@@ -7,6 +7,7 @@ namespace Tests\Unit\Modules\Operations;
 use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
+use App\Modules\Operations\Application\Contracts\UpdateOperationLock;
 use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
 use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
 use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
@@ -41,6 +42,7 @@ final class UpdateManagerTest extends TestCase
         self::assertSame($fixture->package->toSchemaSha256, $fixture->safety->schema);
         self::assertSame('backup-001', $result->preUpdateBackupId);
         self::assertSame([
+            'operation.lock.enter',
             'recover',
             'package.verify',
             'executor.prerequisites',
@@ -70,6 +72,7 @@ final class UpdateManagerTest extends TestCase
             'workspace.prune',
             'maintenance.leave',
             'fence.leave',
+            'operation.lock.leave',
         ], $fixture->events->events);
         self::assertSame('1.1.0', $fixture->workspace->identity['release_id'] ?? null);
         self::assertFalse($fixture->maintenance->retained);
@@ -435,6 +438,7 @@ final class UpdateManagerTest extends TestCase
             $fixture->releases,
             $fixture->maintenance,
             $fixture->fence,
+            new FakeUpdateOperationLock($fixture->events),
             $fixture->recovery,
             new FixedUpdateClock,
             new FixedUpdateRandom,
@@ -536,6 +540,21 @@ final class UpdateEventLog
     }
 }
 
+final class FakeUpdateOperationLock implements UpdateOperationLock
+{
+    public function __construct(private readonly UpdateEventLog $events) {}
+
+    public function synchronized(Closure $operation): mixed
+    {
+        $this->events->add('operation.lock.enter');
+
+        try {
+            return $operation();
+        } finally {
+            $this->events->add('operation.lock.leave');
+        }
+    }
+}
 final class FakeUpdatePackageVerifier implements UpdatePackageVerifier
 {
     public bool $extractFailure = false;

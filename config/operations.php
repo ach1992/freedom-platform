@@ -2,6 +2,23 @@
 
 declare(strict_types=1);
 
+$backupEnvironmentPath = base_path('.env');
+$sharedEnvironmentPath = dirname(base_path(), 2).'/shared/.env';
+if (is_link($backupEnvironmentPath)
+    && readlink($backupEnvironmentPath) === '../../shared/.env'
+    && is_file($sharedEnvironmentPath)
+    && ! is_link($sharedEnvironmentPath)
+) {
+    $resolvedBackupEnvironmentPath = realpath($backupEnvironmentPath);
+    $resolvedSharedEnvironmentPath = realpath($sharedEnvironmentPath);
+    if (is_string($resolvedBackupEnvironmentPath)
+        && is_string($resolvedSharedEnvironmentPath)
+        && $resolvedBackupEnvironmentPath === $resolvedSharedEnvironmentPath
+    ) {
+        $backupEnvironmentPath = $resolvedSharedEnvironmentPath;
+    }
+}
+
 return [
     'worker_heartbeat' => [
         'enabled' => filter_var(env('WORKER_HEARTBEAT_ENABLED', false), FILTER_VALIDATE_BOOL),
@@ -31,7 +48,7 @@ return [
         'dump_binary' => env('BACKUP_MARIADB_DUMP_BINARY', '/usr/bin/mariadb-dump'),
         'process_timeout_seconds' => (int) env('BACKUP_PROCESS_TIMEOUT_SECONDS', 900),
         'config_files' => [
-            'environment' => base_path('.env'),
+            'environment' => $backupEnvironmentPath,
         ],
         'private_directories' => [
             'application' => storage_path('app/private'),

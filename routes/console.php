@@ -17,7 +17,7 @@ Schedule::call(function (): void {
 
 Schedule::command('operations:check-worker-heartbeats', [
     '--max-age' => max(1, (int) config('operations.worker_heartbeat.stale_after_seconds', 480)),
-    '--json' => true,
+    '--json',
 ])
     ->name('operations.check-worker-heartbeats')
     ->everyMinute()
@@ -28,7 +28,7 @@ Schedule::command('operations:check-worker-heartbeats', [
 
 Schedule::command('operations:dispatch-outbox', [
     '--limit' => 100,
-    '--json' => true,
+    '--json',
 ])
     ->name('operations.dispatch-outbox')
     ->everyMinute()
@@ -39,7 +39,7 @@ Schedule::command('operations:dispatch-outbox', [
 
 Schedule::command('operations:deliver-alerts', [
     '--limit' => 25,
-    '--json' => true,
+    '--json',
 ])
     ->name('operations.deliver-alerts')
     ->everyMinute()
@@ -51,7 +51,7 @@ Schedule::command('operations:deliver-alerts', [
 Schedule::command('wallet:maintenance', [
     '--hold-limit' => 100,
     '--wallet-limit' => 200,
-    '--json' => true,
+    '--json',
 ])
     ->name('wallet.maintenance')
     ->everyFiveMinutes()
@@ -62,7 +62,7 @@ Schedule::command('wallet:maintenance', [
 
 Schedule::command('referrals:process-rewards', [
     '--limit' => 250,
-    '--json' => true,
+    '--json',
 ])
     ->name('referrals.process-rewards')
     ->everyFiveMinutes()
@@ -71,7 +71,7 @@ Schedule::command('referrals:process-rewards', [
 
 Schedule::command('customers:recalculate-tiers', [
     '--batch' => 500,
-    '--json' => true,
+    '--json',
 ])
     ->name('customers.recalculate-tiers')
     ->dailyAt('00:15')
@@ -80,7 +80,7 @@ Schedule::command('customers:recalculate-tiers', [
 
 Schedule::command('payments:purchase-maintenance', [
     '--limit' => 100,
-    '--json' => true,
+    '--json',
 ])
     ->name('payments.purchase-maintenance')
     ->everyFiveMinutes()
@@ -91,7 +91,7 @@ Schedule::command('payments:purchase-maintenance', [
 
 Schedule::command('payments:alternative-maintenance', [
     '--limit' => 50,
-    '--json' => true,
+    '--json',
 ])
     ->name('payments.alternative-maintenance')
     ->everyFiveMinutes()
@@ -102,7 +102,7 @@ Schedule::command('payments:alternative-maintenance', [
 
 Schedule::command('services:auto-renew', [
     '--limit' => config('auto_renew.batch_limit', 50),
-    '--json' => true,
+    '--json',
 ])
     ->name('services.auto-renew')
     ->everyFiveMinutes()
@@ -123,7 +123,7 @@ if ($serviceSyncInterval === false || 60 % $serviceSyncInterval !== 0) {
 $serviceSyncCron = $serviceSyncInterval === 60 ? '0 * * * *' : '*/'.$serviceSyncInterval.' * * * *';
 Schedule::command('services:sync', [
     '--limit' => config('service_sync.batch_limit', 50),
-    '--json' => true,
+    '--json',
 ])
     ->name('services.sync')
     ->cron($serviceSyncCron)
@@ -145,7 +145,7 @@ $serviceNotificationCron = $serviceNotificationInterval === 60
     : '*/'.$serviceNotificationInterval.' * * * *';
 Schedule::command('services:notifications', [
     '--limit' => config('service_notifications.batch_limit', 50),
-    '--json' => true,
+    '--json',
 ])
     ->name('services.notifications')
     ->cron($serviceNotificationCron)
@@ -158,7 +158,7 @@ Schedule::command('telegram:process-broadcasts', [
     '--activation-limit' => 10,
     '--recipient-limit' => 10,
     '--lifecycle-limit' => 10,
-    '--json' => true,
+    '--json',
 ])
     ->name('telegram.process-broadcasts')
     ->everyMinute()
@@ -170,7 +170,7 @@ Schedule::command('telegram:process-broadcasts', [
 
 Schedule::command('support:alerts:scan', [
     '--limit' => 100,
-    '--json' => true,
+    '--json',
 ])
     ->name('support.alerts.scan')
     ->everyMinute()
@@ -212,7 +212,7 @@ $backupEnabled = static fn (): bool => (bool) config('operations.backup.enabled'
 
 Schedule::command('operations:backup', [
     '--kind' => 'frequent_database',
-    '--json' => true,
+    '--json',
 ])
     ->name('operations.backup.frequent-database')
     ->cron($backupCron)
@@ -224,7 +224,7 @@ Schedule::command('operations:backup', [
 
 Schedule::command('operations:backup', [
     '--kind' => 'daily_full',
-    '--json' => true,
+    '--json',
 ])
     ->name('operations.backup.daily-full')
     ->dailyAt($backupDailyTime)
@@ -235,7 +235,7 @@ Schedule::command('operations:backup', [
 
 Schedule::command('reporting:run-schedules', [
     '--limit' => 5,
-    '--json' => true,
+    '--json',
 ])
     ->name('reporting.run-schedules')
     ->everyMinute()

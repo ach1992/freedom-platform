@@ -134,6 +134,93 @@ final class FilesystemUpdateWorkspaceTest extends TestCase
     }
 
     /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
+    public function test_interrupted_pre_mutation_rollback_is_finalized_when_source_release_remains_active(): void
+    {
+        $root = $this->deployment('recover-rollback');
+        $workspace = new FilesystemUpdateWorkspace($root);
+        $runId = '20260930T010209Z-0123456789abcdef';
+
+        try {
+            $this->release($root, '1.1.0');
+            symlink('releases/1.1.0', $root.'/current');
+            $report = $this->report($runId, '1.1.0');
+            $report['operation'] = 'rollback';
+            $report['previous_release'] = '1.0.0';
+            $workspace->storeReport($runId, $report);
+
+            $workspace->recoverInterruptedPreMutationRuns();
+
+            self::assertSame('1.1.0', $workspace->currentReleaseId());
+            $recovered = $this->readReport($root, $runId);
+            self::assertSame('interrupted_pre_mutation_recovered', $recovered['status']);
+            self::assertTrue($recovered['report_finalized']);
+            self::assertSame('interrupted_before_mutation', $recovered['failure_code']);
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
+    public function test_interrupted_pre_mutation_rollback_is_finalized_when_an_equivalent_rollback_already_completed(): void
+    {
+        $root = $this->deployment('recover-rollback-completed');
+        $workspace = new FilesystemUpdateWorkspace($root);
+        $runId = '20260930T010210Z-0123456789abcdef';
+        $schema = str_repeat('a', 64);
+
+        try {
+            $this->release($root, '1.0.0');
+            $this->release($root, '1.1.0');
+            symlink('releases/1.0.0', $root.'/current');
+            $workspace->storeInstalledIdentity([
+                'version' => 1,
+                'release_id' => '1.0.0',
+                'application_version' => '1.0.0',
+                'schema_sha256' => $schema,
+                'rolled_back_from' => '1.1.0',
+            ]);
+            $report = $this->report($runId, '1.1.0');
+            $report['operation'] = 'rollback';
+            $report['previous_release'] = '1.0.0';
+            $workspace->storeReport($runId, $report);
+
+            $workspace->recoverInterruptedPreMutationRuns();
+
+            self::assertSame('1.0.0', $workspace->currentReleaseId());
+            $recovered = $this->readReport($root, $runId);
+            self::assertSame('interrupted_pre_mutation_recovered', $recovered['status']);
+            self::assertTrue($recovered['report_finalized']);
+            self::assertSame('interrupted_before_mutation', $recovered['failure_code']);
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
+    public function test_interrupted_pre_mutation_rollback_rejects_changed_active_release_without_equivalent_identity(): void
+    {
+        $root = $this->deployment('recover-rollback-changed');
+        $workspace = new FilesystemUpdateWorkspace($root);
+        $runId = '20260930T010211Z-0123456789abcdef';
+
+        try {
+            $this->release($root, '1.0.0');
+            $this->release($root, '1.1.0');
+            symlink('releases/1.0.0', $root.'/current');
+            $report = $this->report($runId, '1.1.0');
+            $report['operation'] = 'rollback';
+            $report['previous_release'] = '1.0.0';
+            $workspace->storeReport($runId, $report);
+
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('requires operator recovery');
+            $workspace->recoverInterruptedPreMutationRuns();
+        } finally {
+            $this->removeTree($root);
+        }
+    }
+
+    /** @requirement UPD-001 RUN-002 OPS-003 QUA-001 */
     public function test_interrupted_mutation_is_never_auto_recovered_or_reported_successfully(): void
     {
         $root = $this->deployment('recover-mutation');

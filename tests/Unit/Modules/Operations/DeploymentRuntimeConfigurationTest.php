@@ -9,6 +9,87 @@ use Tests\TestCase;
 /** @requirement RUN-001 RUN-002 RUN-003 RUN-004 OPS-003 QUA-011 */
 final class DeploymentRuntimeConfigurationTest extends TestCase
 {
+    public function test_backup_environment_path_resolves_the_canonical_shared_release_link(): void
+    {
+        $originalBasePath = base_path();
+        $fixture = storage_path('framework/testing/operations-config-canonical-'.bin2hex(random_bytes(4)));
+        $release = $fixture.'/releases/test-release';
+        $shared = $fixture.'/shared';
+        mkdir($release, 0700, true);
+        mkdir($shared, 0700, true);
+        file_put_contents($shared.'/.env', "APP_ENV=testing\n");
+        symlink('../../shared/.env', $release.'/.env');
+
+        try {
+            $this->app->setBasePath($release);
+            /** @var array<string, mixed> $operations */
+            $operations = require $originalBasePath.'/config/operations.php';
+
+            self::assertSame(
+                realpath($shared.'/.env'),
+                $operations['backup']['config_files']['environment'],
+            );
+        } finally {
+            $this->app->setBasePath($originalBasePath);
+            $this->removeTree($fixture);
+        }
+    }
+
+    public function test_backup_environment_path_does_not_resolve_an_unapproved_symlink(): void
+    {
+        $originalBasePath = base_path();
+        $fixture = storage_path('framework/testing/operations-config-unapproved-'.bin2hex(random_bytes(4)));
+        $release = $fixture.'/releases/test-release';
+        $unapproved = $fixture.'/unapproved';
+        mkdir($release, 0700, true);
+        mkdir($unapproved, 0700, true);
+        file_put_contents($unapproved.'/.env', "APP_ENV=testing\n");
+        symlink('../../unapproved/.env', $release.'/.env');
+
+        try {
+            $this->app->setBasePath($release);
+            /** @var array<string, mixed> $operations */
+            $operations = require $originalBasePath.'/config/operations.php';
+
+            self::assertSame(
+                $release.'/.env',
+                $operations['backup']['config_files']['environment'],
+            );
+        } finally {
+            $this->app->setBasePath($originalBasePath);
+            $this->removeTree($fixture);
+        }
+    }
+
+    public function test_backup_environment_path_rejects_a_symlinked_shared_environment_target(): void
+    {
+        $originalBasePath = base_path();
+        $fixture = storage_path('framework/testing/operations-config-shared-link-'.bin2hex(random_bytes(4)));
+        $release = $fixture.'/releases/test-release';
+        $shared = $fixture.'/shared';
+        $outside = $fixture.'/outside';
+        mkdir($release, 0700, true);
+        mkdir($shared, 0700, true);
+        mkdir($outside, 0700, true);
+        file_put_contents($outside.'/.env', "APP_ENV=testing\n");
+        symlink('../outside/.env', $shared.'/.env');
+        symlink('../../shared/.env', $release.'/.env');
+
+        try {
+            $this->app->setBasePath($release);
+            /** @var array<string, mixed> $operations */
+            $operations = require $originalBasePath.'/config/operations.php';
+
+            self::assertSame(
+                $release.'/.env',
+                $operations['backup']['config_files']['environment'],
+            );
+        } finally {
+            $this->app->setBasePath($originalBasePath);
+            $this->removeTree($fixture);
+        }
+    }
+
     public function test_supervisor_template_assigns_unique_heartbeat_identity_to_every_worker_group(): void
     {
         $configuration = (string) file_get_contents(base_path('deploy/supervisor/freedom-platform.conf'));
@@ -53,5 +134,27 @@ final class DeploymentRuntimeConfigurationTest extends TestCase
         $this->assertCount(1, $lines);
         $this->assertStringContainsString('artisan schedule:run', $lines[0]);
         $this->assertStringContainsString('/www/server/php/84/bin/php', $lines[0]);
+    }
+
+    private function removeTree(string $path): void
+    {
+        if (is_link($path) || is_file($path)) {
+            @unlink($path);
+
+            return;
+        }
+
+        if (! is_dir($path)) {
+            return;
+        }
+
+        foreach (scandir($path) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $this->removeTree($path.'/'.$name);
+        }
+
+        @rmdir($path);
     }
 }

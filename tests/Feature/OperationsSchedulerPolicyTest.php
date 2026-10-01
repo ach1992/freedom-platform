@@ -12,6 +12,40 @@ use Tests\TestCase;
 /** @requirement OPS-003 QUA-004 */
 final class OperationsSchedulerPolicyTest extends TestCase
 {
+    public function test_no_value_console_flags_are_rendered_without_values(): void
+    {
+        $expected = [
+            'operations.check-worker-heartbeats',
+            'operations.dispatch-outbox',
+            'operations.deliver-alerts',
+            'wallet.maintenance',
+            'referrals.process-rewards',
+            'customers.recalculate-tiers',
+            'payments.purchase-maintenance',
+            'payments.alternative-maintenance',
+            'services.auto-renew',
+            'services.sync',
+            'services.notifications',
+            'telegram.process-broadcasts',
+            'support.alerts.scan',
+            'operations.backup.frequent-database',
+            'operations.backup.daily-full',
+            'reporting.run-schedules',
+        ];
+
+        $events = collect($this->app->make(Schedule::class)->events())
+            ->filter(static fn (Event $event): bool => is_string($event->description))
+            ->keyBy(static fn (Event $event): string => $event->description);
+
+        foreach ($expected as $name) {
+            self::assertTrue($events->has($name), 'Missing scheduled task '.$name);
+            /** @var Event $event */
+            $event = $events->get($name);
+            self::assertStringContainsString('--json', $event->command, $name.' must retain JSON output.');
+            self::assertStringNotContainsString('--json=', $event->command, $name.' must pass --json as a no-value flag.');
+        }
+    }
+
     public function test_critical_scheduler_overlap_locks_have_explicit_bounded_ttls(): void
     {
         $expected = [

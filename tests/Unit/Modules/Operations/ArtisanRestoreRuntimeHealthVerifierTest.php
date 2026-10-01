@@ -10,6 +10,56 @@ use Tests\TestCase;
 
 final class ArtisanRestoreRuntimeHealthVerifierTest extends TestCase
 {
+    /** @var array<string, array{process:string|false,env_exists:bool,env:mixed,server_exists:bool,server:mixed}> */
+    private array $originalEnvironment = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        foreach ([
+            'TELEGRAM_LIFECYCLE_DB_PASSWORD',
+            'DB_PASSWORD',
+            'REDIS_PASSWORD',
+            'DB_HOST',
+            'APP_ENV',
+        ] as $name) {
+            $this->originalEnvironment[$name] = [
+                'process' => getenv($name),
+                'env_exists' => array_key_exists($name, $_ENV),
+                'env' => $_ENV[$name] ?? null,
+                'server_exists' => array_key_exists($name, $_SERVER),
+                'server' => $_SERVER[$name] ?? null,
+            ];
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        foreach ($this->originalEnvironment as $name => $state) {
+            if ($state['process'] === false) {
+                putenv($name);
+            } else {
+                putenv($name.'='.$state['process']);
+            }
+
+            if ($state['env_exists']) {
+                $_ENV[$name] = $state['env'];
+            } else {
+                unset($_ENV[$name]);
+            }
+
+            if ($state['server_exists']) {
+                $_SERVER[$name] = $state['server'];
+            } else {
+                unset($_SERVER[$name]);
+            }
+        }
+
+        $this->originalEnvironment = [];
+        parent::tearDown();
+    }
+
     /** @requirement BAK-002 OPS-001 SEC-001 QUA-001 */
     public function test_health_check_runs_in_fresh_process_without_inherited_application_environment(): void
     {
