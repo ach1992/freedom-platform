@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Customers\Application\CustomerWalletTransferRecipient;
 use App\Modules\Customers\Application\CustomerWalletTransferRecipientDiscoveryService;
@@ -1014,7 +1015,7 @@ final readonly class TelegramWalletTransferNavigationHandler
 
     private function formatIrr(int $amount): string
     {
-        return number_format($amount, 0, '.', ',');
+        return IrrTomanFormatter::format($amount);
     }
 
     private function locale(int $userId): string
