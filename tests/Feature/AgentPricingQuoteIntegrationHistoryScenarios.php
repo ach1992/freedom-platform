@@ -14,11 +14,63 @@ use App\Modules\Agents\Domain\AgentPricingState;
 use App\Modules\Orders\Application\QuoteAgentPricingContext;
 use App\Modules\Orders\Application\QuoteService;
 use App\Modules\Orders\Domain\QuoteOverrideSource;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 trait AgentPricingQuoteIntegrationHistoryScenarios
 {
+    public function test_quote_time_rule_selection_queries_only_latest_version_per_rule(): void
+    {
+        $owner = $this->ownerAdministrator();
+        $offering = $this->quoteOffering();
+        $pricingService = $this->app->make(AgentPricingService::class);
+        $this->activePricingProfile($pricingService, $owner, 'quote-agent-cardinality', true);
+        $this->activePricingRule(
+            $pricingService,
+            $owner,
+            'quote-agent-cardinality',
+            'default',
+            new AgentPricingRuleDefinition(AgentPricingState::Active, 850_000),
+        );
+        foreach ([840_000, 830_000, 820_000, 810_000] as $index => $price) {
+            $this->revisePricingRule(
+                $pricingService,
+                $owner,
+                'quote-agent-cardinality',
+                'default',
+                new AgentPricingRuleDefinition(AgentPricingState::Active, $price),
+                'cardinality-v'.($index + 2),
+            );
+        }
+
+        $queries = [];
+        DB::listen(static function (QueryExecuted $query) use (&$queries): void {
+            if (str_contains(strtolower($query->sql), 'agent_pricing_rule_versions')) {
+                $queries[] = strtolower($query->sql);
+            }
+        });
+
+        $agent = $this->agentSubject('quote-agent-cardinality');
+        $quote = $this->app->make(QuoteService::class)->create(
+            'agent.quote.cardinality.000001',
+            $agent,
+            $offering['id'],
+            $this->pricing(null, 0),
+            $this->correlation('cardinality'),
+            new QuoteAgentPricingContext($agent, AgentPricingAction::Purchase),
+        );
+
+        self::assertSame(810_000, $quote->finalPriceIrr);
+        self::assertSame(5, $quote->agentPricing?->ruleVersion);
+        $selection = array_values(array_filter(
+            $queries,
+            static fn (string $sql): bool => str_contains($sql, 'select max(latest.version)')
+                && str_contains($sql, 'latest.agent_pricing_rule_id = r.id'),
+        ));
+        self::assertCount(1, $selection);
+    }
+
     public function test_historical_quote_replay_is_stable_after_later_profile_and_rule_revision_and_new_quote_uses_new_resolution(): void
     {
         $owner = $this->ownerAdministrator();

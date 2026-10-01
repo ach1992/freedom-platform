@@ -22,6 +22,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -54,6 +55,35 @@ final class PromotionUsageReservationFoundationTest extends TestCase
         $this->seed();
         $this->clock = new MutablePromotionUsageClock(new DateTimeImmutable('now', new DateTimeZone('UTC')));
         $this->app->instance(Clock::class, $this->clock);
+    }
+
+    public function test_capacity_check_uses_database_aggregates_instead_of_materializing_reservations(): void
+    {
+        $userId = $this->usageUser();
+        $offering = $this->usageOffering(suffix: 'aggregate-capacity');
+        $this->usageRule($offering['id'], 'promo.usage.aggregate', 100_000, 5, 2);
+        [$resolution, $quote] = $this->pair($userId, $offering['id'], 'promo.usage.aggregate', 100_000, 'aggregate-capacity');
+
+        $queries = [];
+        DB::listen(static function (QueryExecuted $query) use (&$queries): void {
+            $sql = strtolower($query->sql);
+            if (str_contains($sql, 'promotion_usage_reservations')
+                && str_contains($sql, 'count(*)')
+                && str_contains($sql, 'sum(case when')) {
+                $queries[] = $sql;
+            }
+        });
+
+        $this->service()->reserve(
+            'usage.reserve.aggregate.000001',
+            $resolution->resolutionPublicId,
+            $quote->quotePublicId,
+            new PromotionUsageContext($userId),
+        );
+
+        self::assertCount(1, $queries);
+        self::assertStringContainsString('total_active', $queries[0]);
+        self::assertStringContainsString('user_active', $queries[0]);
     }
 
     public function test_reserve_binds_resolution_and_quote_with_exact_replay_and_conflict(): void
