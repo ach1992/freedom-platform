@@ -24,6 +24,9 @@ Secret values are write-only operational state. Never paste them into Chat, Git,
 
 Known workflow/configuration identifiers include:
 
+- `MARZBAN_TEST_ORIGIN`
+- `MARZBAN_TEST_USERNAME`
+- `MARZBAN_TEST_PASSWORD`
 - `PASARGUARD_TEST_ORIGIN`
 - `PASARGUARD_TEST_API_KEY`
 - `PASARGUARD_TEST_USERNAME`
@@ -49,15 +52,15 @@ Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-st
 
 ### Staging Readiness
 
-`.github/workflows/staging-readiness-runtime.yml` defines the read-only runtime readiness path where/when a trusted staging runner is registered. It is triggered only through the `staging_readiness` repository-dispatch event, so GitHub sources the workflow and ref from the default branch instead of a caller-selected branch/tag. The dispatch payload must include `confirmation=READ_ONLY_STAGING_CHECK`; do not add `workflow_dispatch` or another branch-selectable trigger. The workflow must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
+`.github/workflows/staging-readiness-runtime.yml` defines the read-only runtime readiness path through a pinned GitHub-hosted runner and the protected `STAGING_*` SSH target inputs. It is triggered only through the `staging_readiness` repository-dispatch event, so GitHub sources the workflow and ref from the default branch instead of a caller-selected branch/tag. The dispatch payload must include `confirmation=READ_ONLY_STAGING_CHECK`; do not add `workflow_dispatch` or another branch-selectable trigger. Remote execution is a fixed source-owned probe with strict host-key verification against `STAGING_KNOWN_HOSTS`; a host-key mismatch is a trust-boundary failure and must not be bypassed with trust-on-first-use or relaxed SSH checking. The workflow must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
 
 ### Provider Readiness - Read Only
 
-`.github/workflows/provider-readiness.yml` defines the manual read-only PasarGuard readiness path where/when it is registered and uses only the provider test secret identifiers required by that exact workflow revision.
+`.github/workflows/provider-readiness.yml` defines the manual read-only readiness path for the pinned Marzban `0.8.4` and PasarGuard `5.2.1` contracts. It runs on the pinned GitHub-hosted Ubuntu runner, accepts only the explicit `READ_ONLY_PROVIDER_CHECK` confirmation plus a bounded provider selector, and consumes only the selected provider's test credential identifiers in that provider's steps. Readiness may authenticate and read version/capability/target-discovery endpoints, but it must not create, update, suspend, rotate, or delete a remote service.
 
 ### Provider Live Acceptance - PasarGuard
 
-`.github/workflows/provider-live-acceptance.yml` defines a privileged disposable provider-mutation path where/when it is deliberately registered for a controlled acceptance task. It is not normal CI. The definition uses GitHub Environment `provider-live-acceptance`, explicit confirmation, branch guards, and only the current workflow-defined inputs/credentials.
+`.github/workflows/provider-live-acceptance.yml` currently defines the privileged disposable PasarGuard provider-mutation path where/when it is deliberately registered for a controlled acceptance task. It is not normal CI. The definition uses GitHub Environment `provider-live-acceptance`, explicit confirmation, branch guards, and only the current workflow-defined inputs/credentials. Environment binding is not proof that reviewers, wait timers, or branch restrictions are actually configured; verify the live Environment protection state immediately before any provider mutation as required above.
 
 Do not promote/enable a privileged provider workflow merely to discover whether credentials exist. Do not run a mutation workflow merely to discover whether credentials exist.
 
