@@ -63,6 +63,8 @@ required_files=(
     scripts/ci/verify-readonly-staging-workflow.sh
     scripts/ci/MarzbanReadinessProbe.php
     scripts/ci/marzban-readonly-probe.php
+    scripts/ci/PasarGuardLiveAcceptance.php
+    scripts/ci/pasarguard-live-acceptance.php
     scripts/ci/MarzbanLiveAcceptance.php
     scripts/ci/marzban-live-acceptance.php
     scripts/ci/scan-git-secrets.sh
