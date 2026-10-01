@@ -1,14 +1,22 @@
-name: Provider Live Acceptance - PasarGuard
+name: Provider Live Acceptance
 
 on:
   workflow_dispatch:
     inputs:
+      provider:
+        description: Select the disposable provider contract to exercise.
+        required: true
+        default: pasarguard
+        type: choice
+        options:
+          - pasarguard
+          - marzban
       confirm:
-        description: Type MUTATE_DISPOSABLE_PASARGUARD_V5_2_1 to authorize the disposable live mutation sequence.
+        description: Type the exact provider-specific MUTATE_DISPOSABLE_* sentinel documented by the selected job.
         required: true
         type: string
       group_id:
-        description: Optional enabled PasarGuard group ID. Leave empty to select the lowest enabled group deterministically.
+        description: PasarGuard only - optional enabled group ID. Leave empty to select the lowest enabled group deterministically.
         required: false
         type: string
 
@@ -16,13 +24,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: provider-live-pasarguard-${{ github.ref_name }}
+  group: provider-live-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   pasarguard:
     name: PasarGuard v5.2.1 guarded live acceptance
-    if: ${{ github.ref_name == 'main' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
+    if: ${{ github.ref_name == 'main' && inputs.provider == 'pasarguard' && inputs.confirm == 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' }}
     environment:
       name: provider-live-acceptance
     runs-on: [self-hosted, Linux, X64, freedom-provider-acceptance]
@@ -30,8 +38,6 @@ jobs:
     env:
       PHP_ROOT: /www/server/php/84
       COMPOSER_BIN: /usr/local/bin/composer
-      PASARGUARD_TEST_ORIGIN: ${{ secrets.PASARGUARD_TEST_ORIGIN }}
-      PASARGUARD_TEST_API_KEY: ${{ secrets.PASARGUARD_TEST_API_KEY }}
       PASARGUARD_LIVE_RUN_ID: ${{ github.run_id }}
       PASARGUARD_LIVE_CONFIRM: ${{ inputs.confirm }}
       PASARGUARD_LIVE_GROUP_ID: ${{ inputs.group_id }}
@@ -39,8 +45,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Validate protected live configuration
+      - name: Validate protected PasarGuard configuration
         shell: bash
+        env:
+          PASARGUARD_TEST_ORIGIN: ${{ secrets.PASARGUARD_TEST_ORIGIN }}
+          PASARGUARD_TEST_API_KEY: ${{ secrets.PASARGUARD_TEST_API_KEY }}
         run: |
           set -euo pipefail
           test -x "$PHP_ROOT/bin/php"
@@ -58,17 +67,79 @@ jobs:
 
       - name: Execute guarded PasarGuard live acceptance
         shell: bash
+        env:
+          PASARGUARD_TEST_ORIGIN: ${{ secrets.PASARGUARD_TEST_ORIGIN }}
+          PASARGUARD_TEST_API_KEY: ${{ secrets.PASARGUARD_TEST_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p build/evidence/provider-live
           "$PHP_ROOT/bin/php" scripts/ci/pasarguard-live-acceptance.php \
             2>&1 | tee build/evidence/provider-live/pasarguard.txt
 
-      - name: Upload sanitized live evidence
+      - name: Upload sanitized PasarGuard live evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provider-live-pasarguard-${{ github.run_id }}
-          path: build/evidence/provider-live
-          if-no-files-found: error
+          path: build/evidence/provider-live/pasarguard.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  marzban:
+    name: Marzban v0.8.4 guarded live acceptance
+    if: ${{ github.ref_name == 'main' && inputs.provider == 'marzban' && inputs.confirm == 'MUTATE_DISPOSABLE_MARZBAN_V0_8_4' }}
+    environment:
+      name: provider-live-acceptance
+    runs-on: [self-hosted, Linux, X64, freedom-provider-acceptance]
+    timeout-minutes: 10
+    env:
+      PHP_ROOT: /www/server/php/84
+      COMPOSER_BIN: /usr/local/bin/composer
+      MARZBAN_LIVE_RUN_ID: ${{ github.run_id }}
+      MARZBAN_LIVE_CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate protected Marzban configuration
+        shell: bash
+        env:
+          MARZBAN_TEST_ORIGIN: ${{ secrets.MARZBAN_TEST_ORIGIN }}
+          MARZBAN_TEST_USERNAME: ${{ secrets.MARZBAN_TEST_USERNAME }}
+          MARZBAN_TEST_PASSWORD: ${{ secrets.MARZBAN_TEST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -x "$PHP_ROOT/bin/php"
+          test -x "$COMPOSER_BIN"
+          test -n "${MARZBAN_TEST_ORIGIN:-}" || { echo 'MARZBAN_TEST_ORIGIN is not configured.' >&2; exit 1; }
+          test -n "${MARZBAN_TEST_USERNAME:-}" || { echo 'MARZBAN_TEST_USERNAME is not configured.' >&2; exit 1; }
+          test -n "${MARZBAN_TEST_PASSWORD:-}" || { echo 'MARZBAN_TEST_PASSWORD is not configured.' >&2; exit 1; }
+          test "$MARZBAN_LIVE_CONFIRM" = 'MUTATE_DISPOSABLE_MARZBAN_V0_8_4'
+          "$PHP_ROOT/bin/php" -m | grep -Fx curl >/dev/null
+
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$COMPOSER_BIN" install --no-interaction --prefer-dist --no-progress --no-scripts
+
+      - name: Execute guarded Marzban live acceptance
+        shell: bash
+        env:
+          MARZBAN_TEST_ORIGIN: ${{ secrets.MARZBAN_TEST_ORIGIN }}
+          MARZBAN_TEST_USERNAME: ${{ secrets.MARZBAN_TEST_USERNAME }}
+          MARZBAN_TEST_PASSWORD: ${{ secrets.MARZBAN_TEST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/provider-live
+          "$PHP_ROOT/bin/php" scripts/ci/marzban-live-acceptance.php \
+            2>&1 | tee build/evidence/provider-live/marzban.txt
+
+      - name: Upload sanitized Marzban live evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-live-marzban-${{ github.run_id }}
+          path: build/evidence/provider-live/marzban.txt
+          if-no-files-found: warn
           retention-days: 14
