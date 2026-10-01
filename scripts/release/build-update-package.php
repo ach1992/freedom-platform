@@ -15,7 +15,6 @@ require dirname(__DIR__, 2).'/vendor/autoload.php';
 
 const RELEASE_AUTHORITY = 'freedom_platform_release_v1';
 
-/** @return string */
 function run(array $command, ?string $cwd = null): string
 {
     $descriptors = [
