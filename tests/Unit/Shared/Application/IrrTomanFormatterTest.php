@@ -41,9 +41,15 @@ final class IrrTomanFormatterTest extends TestCase
         );
     }
 
-    public function test_unsupported_locale_and_invalid_decimal_fail_closed(): void
+    public function test_unsupported_locale_fails_closed(): void
     {
         $this->expectException(InvalidArgumentException::class);
         IrrTomanFormatter::unit('de');
+    }
+
+    public function test_invalid_decimal_irr_fails_closed(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        IrrTomanFormatter::formatDecimalIrr('12,500');
     }
 }
