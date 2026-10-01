@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\AccessControl\Application\AdministratorAccessManagementQueryService;
 use App\Modules\AccessControl\Application\AdministratorSearchPermissions;
 use App\Modules\AccessControl\Application\AdministratorUserPermissionAuthorizer;
@@ -35,6 +34,7 @@ use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
 use App\Shared\Application\Clock;
+use App\Shared\Application\IrrTomanFormatter;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;

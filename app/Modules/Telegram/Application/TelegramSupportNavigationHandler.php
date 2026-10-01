@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Localization\Application\LocalizationTemplateCatalog;
 use App\Modules\Support\Application\SupportTicketCreateRequest;
@@ -20,6 +19,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjecti
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedPaymentIntentProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceReferenceResolver;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use Closure;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;

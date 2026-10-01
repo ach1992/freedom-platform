@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCatalog;
@@ -12,6 +11,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceReconfigurationManager;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Shared\Application\Clock;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use RuntimeException;
