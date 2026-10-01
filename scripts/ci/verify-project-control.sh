@@ -61,6 +61,8 @@ required_files=(
     scripts/ci/select-feature-shard.sh
     scripts/ci/test-feature-sharding.sh
     scripts/ci/verify-readonly-staging-workflow.sh
+    scripts/ci/MarzbanReadinessProbe.php
+    scripts/ci/marzban-readonly-probe.php
     scripts/ci/scan-git-secrets.sh
     scripts/ci/test-secret-scan.sh
     scripts/docs/generate-release-references.php
@@ -427,7 +429,7 @@ grep -F 'pasarguard-readonly-probe.php' "$provider_readonly" >/dev/null \
     || fail 'provider-readiness must retain the bounded PasarGuard read-only probe'
 grep -F 'marzban-readonly-probe.php' "$provider_readonly" >/dev/null \
     || fail 'provider-readiness must retain the bounded Marzban read-only probe'
-grep -F 'scripts/ci/MarzbanReadinessProbe.php' scripts/ci/marzban-readonly-probe.php >/dev/null \
+grep -F 'MarzbanReadinessProbe.php' scripts/ci/marzban-readonly-probe.php >/dev/null \
     || fail 'Marzban readiness entrypoint must delegate to the tested readiness contract'
 grep -F 'secrets.PASARGUARD_TEST_ORIGIN' "$provider_readonly" >/dev/null \
     || fail 'provider-readiness lost the PasarGuard protected origin input'
