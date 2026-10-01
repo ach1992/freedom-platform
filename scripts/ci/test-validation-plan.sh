@@ -62,7 +62,9 @@ assert_plan release_docs CONTROL true false false false false false false false 
 assert_plan release_reference_generator APPLICATION true false false false true false false false false false scripts/docs/generate-release-references.php
 assert_plan governance_only CONTROL true false false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
 assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness-runtime.yml
+assert_plan provider_readonly_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/provider-readiness.yml
 assert_plan provider_mutation_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/provider-live-acceptance.yml
+assert_plan provider_readiness_scripts OPERATIONS false false false false false false false false false true scripts/ci/pasarguard-readonly-probe.php scripts/ci/MarzbanReadinessProbe.php scripts/ci/marzban-readonly-probe.php
 assert_plan application_source APPLICATION false false false true true true false true false false app/Modules/Orders/Application/OrderService.php
 assert_plan localization_catalog APPLICATION false false false true true false false false false false resources/lang/fa/telegram.php
 assert_plan feature_tests APPLICATION false false false false true false false true false false tests/Feature/OrderTest.php

@@ -61,6 +61,8 @@ required_files=(
     scripts/ci/select-feature-shard.sh
     scripts/ci/test-feature-sharding.sh
     scripts/ci/verify-readonly-staging-workflow.sh
+    scripts/ci/MarzbanReadinessProbe.php
+    scripts/ci/marzban-readonly-probe.php
     scripts/ci/scan-git-secrets.sh
     scripts/ci/test-secret-scan.sh
     scripts/docs/generate-release-references.php
@@ -236,8 +238,8 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Generic CI is intentionally GitHub-hosted. Staging readiness is default-branch repository-dispatch only;
-# provider workflows remain manual self-hosted operational contracts. All remain dormant unless an explicitly trusted runner is connected.
+# Generic CI and read-only staging/provider readiness use pinned GitHub-hosted runners.
+# Live provider mutation remains a manual self-hosted protected contract and stays dormant without explicitly trusted execution infrastructure.
 test ! -e .github/workflows/staging-readiness.yml \
     || fail 'retired branch-selectable staging-readiness workflow path must remain absent'
 test -s .github/workflows/staging-readiness-runtime.yml \
@@ -279,14 +281,24 @@ for workflow in "${workflow_files[@]}"; do
             bash scripts/ci/verify-readonly-staging-workflow.sh "$workflow" >/dev/null \
                 || fail 'read-only staging readiness workflow failed its bounded SSH/read-only contract verifier'
             ;;
-        .github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
+        .github/workflows/provider-readiness.yml)
+            while IFS= read -r runner_line; do
+                trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
+                [[ "$trimmed" == 'runs-on: ubuntu-24.04' ]] \
+                    || fail "read-only provider readiness must use the pinned GitHub-hosted Ubuntu runner: $workflow: $trimmed"
+            done <<< "$runner_lines"
+            if grep -F 'self-hosted' "$workflow" >/dev/null; then
+                fail 'read-only provider readiness must not depend on a self-hosted runner'
+            fi
+            ;;
+        .github/workflows/provider-live-acceptance.yml)
             while IFS= read -r runner_line; do
                 trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
                 [[ "$trimmed" == runs-on:\ \[*\] ]] \
-                    || fail "provider operational workflow runner selector must remain an explicit label list: $workflow: $trimmed"
+                    || fail "provider live workflow runner selector must remain an explicit label list: $workflow: $trimmed"
                 for required_label in self-hosted Linux X64; do
                     selector_has_label "$trimmed" "$required_label" \
-                        || fail "provider operational workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
+                        || fail "provider live workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
                 done
             done <<< "$runner_lines"
             ;;
@@ -414,11 +426,37 @@ grep -F 'READ_ONLY_PROVIDER_CHECK' "$provider_readonly" >/dev/null \
 grep -F 'contents: read' "$provider_readonly" >/dev/null \
     || fail 'provider-readiness must retain read-only repository permissions'
 grep -F 'pasarguard-readonly-probe.php' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must use the bounded read-only probe'
+    || fail 'provider-readiness must retain the bounded PasarGuard read-only probe'
+grep -F 'marzban-readonly-probe.php' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness must retain the bounded Marzban read-only probe'
+grep -F 'MarzbanReadinessProbe.php' scripts/ci/marzban-readonly-probe.php >/dev/null \
+    || fail 'Marzban readiness entrypoint must delegate to the tested readiness contract'
 grep -F 'secrets.PASARGUARD_TEST_ORIGIN' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness lost the protected origin input'
+    || fail 'provider-readiness lost the PasarGuard protected origin input'
 grep -F 'secrets.PASARGUARD_TEST_API_KEY' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness lost the protected API-key input'
+    || fail 'provider-readiness lost the PasarGuard protected API-key input'
+for secret in MARZBAN_TEST_ORIGIN MARZBAN_TEST_USERNAME MARZBAN_TEST_PASSWORD; do
+    grep -F "secrets.$secret" "$provider_readonly" >/dev/null \
+        || fail "provider-readiness lost required Marzban protected input: $secret"
+done
+mapfile -t provider_readonly_secrets < <(grep -oE 'secrets\.[A-Z0-9_]+' "$provider_readonly" | sed 's/^secrets\.//' | sort -u)
+expected_provider_readonly_secrets=(
+    MARZBAN_TEST_ORIGIN
+    MARZBAN_TEST_PASSWORD
+    MARZBAN_TEST_USERNAME
+    PASARGUARD_TEST_API_KEY
+    PASARGUARD_TEST_ORIGIN
+)
+[[ "${provider_readonly_secrets[*]}" == "${expected_provider_readonly_secrets[*]}" ]] \
+    || fail "provider-readiness secret allowlist drifted: ${provider_readonly_secrets[*]}"
+grep -F 'shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240' "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness must pin setup-php to the reviewed immutable commit'
+grep -F "options:" "$provider_readonly" >/dev/null \
+    || fail 'provider-readiness must expose an explicit provider selector'
+for provider in pasarguard marzban all; do
+    grep -Fx "          - $provider" "$provider_readonly" >/dev/null \
+        || fail "provider-readiness selector lost expected option: $provider"
+done
 if grep -Eq '^[[:space:]]*(push|pull_request|pull_request_target|schedule|workflow_run):' "$provider_readonly"; then
     fail 'provider-readiness may not gain an automatic trigger'
 fi

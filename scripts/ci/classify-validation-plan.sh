@@ -130,7 +130,7 @@ else
                 runtime=true
                 ;;
 
-            scripts/ci/PasarGuardLiveAcceptance.php|scripts/ci/pasarguard-live-acceptance.php|scripts/ci/pasarguard-readonly-probe.php)
+            scripts/ci/PasarGuardLiveAcceptance.php|scripts/ci/pasarguard-live-acceptance.php|scripts/ci/pasarguard-readonly-probe.php|scripts/ci/MarzbanReadinessProbe.php|scripts/ci/marzban-readonly-probe.php)
                 operations=true
                 ;;
 
