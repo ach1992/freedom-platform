@@ -48,7 +48,7 @@ Public fork pull requests may execute generic CI only on GitHub-hosted runners. 
 
 ### Optional self-hosted runners
 
-Self-hosted runners remain a supported capability for a future private repository or for a separately trusted private operational boundary. Self-hosted runner display names are inventory only, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy custom label strings into multiple documents or use display names as routing dependencies.
+Self-hosted runners remain a supported capability for a future private repository or for a separately trusted private operational boundary, but **no current repository workflow depends on them**. Self-hosted runner display names are inventory only, never a workflow contract. If this capability is re-authorized later, jobs route by labels and the exact `runs-on` selector in that future workflow revision is authoritative; do not copy custom label strings into multiple documents or use display names as routing dependencies.
 
 A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload. A runner does not need to support every workload. When this source repository is public, repository-level self-hosted runners must remain disconnected; retaining host installations for later private re-registration is allowed, but a dormant installation is not an active workflow capability.
 
@@ -61,6 +61,8 @@ The repository has no dependency on a particular external Worker product.
 ### Staging/deployment targets
 
 Deployment/staging hosts are runtime targets, not developer checkouts or project-recovery sources. Privileged/live operations are governed by the owning task/release and [`../09-deployment-runbook.md`](../09-deployment-runbook.md), not by the existence of shell access.
+
+For protected provider live acceptance, the current execution model is deliberately **not** a standing Actions/self-hosted-runner route. The repository owns the guarded provider harnesses and their deterministic tests; the owning release task selects an Owner-approved disposable/non-production host and an approved operational control channel (for example the connected `AI_Server_Agent` when that exact host is attached) only when the live gate is current. The exact candidate and harness command are source-controlled; host connection state, temporary credentials, and runtime inventory remain operational state.
 
 ## Toolchain ownership
 
