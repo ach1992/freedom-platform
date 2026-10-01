@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
@@ -482,7 +483,9 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
                 'reference' => $case->reference ?? $this->translation($key.'not_available', $locale),
                 'amount' => $case->amount === null
                     ? $this->translation($key.'not_available', $locale)
-                    : number_format($case->amount).' '.($case->currency ?? ''),
+                    : (($case->currency ?? '') === 'IRR'
+                        ? IrrTomanFormatter::format($case->amount).' '.IrrTomanFormatter::unit($locale)
+                        : number_format($case->amount).' '.($case->currency ?? '')),
                 'private' => $this->translation($key.($case->privateEvidenceAvailable ? 'yes' : 'no'), $locale),
             ]);
             $open = $this->callbacks->issue(
