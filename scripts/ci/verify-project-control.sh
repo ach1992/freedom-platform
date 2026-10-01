@@ -7,26 +7,6 @@ fail() {
     exit 1
 }
 
-selector_has_label() {
-    local selector=$1
-    local required=$2
-    local body label
-    local -a labels
-
-    body=${selector#runs-on: }
-    body=${body#\[}
-    body=${body%\]}
-    IFS=',' read -r -a labels <<< "$body"
-
-    for label in "${labels[@]}"; do
-        label=${label#"${label%%[![:space:]]*}"}
-        label=${label%"${label##*[![:space:]]}"}
-        [[ "$label" == "$required" ]] && return 0
-    done
-
-    return 1
-}
-
 required_files=(
     README.md
     AGENTS.md
@@ -242,8 +222,7 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Generic CI and read-only staging/provider readiness use pinned GitHub-hosted runners.
-# Live provider mutation remains a manual self-hosted protected contract and stays dormant without explicitly trusted execution infrastructure.
+# Current repository workflows use pinned GitHub-hosted execution. Privileged provider acceptance uses source-owned operational harnesses rather than a standing self-hosted workflow.
 test ! -e .github/workflows/staging-readiness.yml \
     || fail 'retired branch-selectable staging-readiness workflow path must remain absent'
 test -s .github/workflows/staging-readiness-runtime.yml \
