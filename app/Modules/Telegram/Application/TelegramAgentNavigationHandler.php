@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentApplicationSubmissionRejected;
 use App\Modules\Agents\Application\AgentChangeContext;
@@ -14,6 +13,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
