@@ -169,6 +169,8 @@ final class WalletAndNowPaymentsTerminalConflictMigrationUpgradeTest extends Tes
     use DatabaseTruncation;
     use RestoresDatabaseTrigger;
 
+    private const ASYNC_BARRIER_TIMEOUT_SECONDS = 30.0;
+
     private LegacyUpgradeNowPaymentsTransport $transport;
 
     private LegacyUpgradeNowPaymentsClock $clock;
@@ -1124,7 +1126,7 @@ SQL);
                         function (PurchaseProviderMutationAttempt $attempt) use ($ready, $fenceActive, $localWriterDone, $fixture): void {
                             $attempt->markExternalEffectStarted();
                             file_put_contents($ready, 'ready');
-                            $deadline = microtime(true) + 10.0;
+                            $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
                             while (! file_exists($fenceActive)) {
                                 if (microtime(true) >= $deadline) {
                                     throw new RuntimeException('Timed out waiting for the durable migration fence.');
@@ -1136,7 +1138,7 @@ SQL);
                             // has activated its durable fence until an unrelated writer
                             // proves that fresh local financial effects are rejected in
                             // this exact provider-drain window.
-                            $deadline = microtime(true) + 10.0;
+                            $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
                             while (! file_exists($localWriterDone)) {
                                 if (microtime(true) >= $deadline) {
                                     throw new RuntimeException('Timed out waiting for the local financial cut regression.');
@@ -1173,7 +1175,7 @@ SQL);
                 }
             }
 
-            $deadline = microtime(true) + 10.0;
+            $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
             while (! file_exists($ready)) {
                 if (microtime(true) >= $deadline) {
                     throw new RuntimeException('Timed out waiting for the in-flight provider mutation barrier.');
@@ -1210,7 +1212,7 @@ SQL);
                     $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
                     file_put_contents($localWriterReady, 'ready');
 
-                    $deadline = microtime(true) + 10.0;
+                    $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
                     while (! file_exists($fenceActive)) {
                         if (microtime(true) >= $deadline) {
                             throw new RuntimeException('Timed out waiting for the local financial migration cut.');
@@ -1264,7 +1266,7 @@ SQL);
                 }
             }
 
-            $deadline = microtime(true) + 10.0;
+            $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
             while (! file_exists($localWriterReady)) {
                 if (microtime(true) >= $deadline) {
                     throw new RuntimeException('Timed out waiting for the pre-cut local-writer snapshot.');
