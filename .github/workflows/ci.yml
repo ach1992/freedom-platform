@@ -591,17 +591,31 @@ jobs:
           set -euo pipefail
           mkdir -p build/evidence/tests
           docker compose -f docker-compose.ci.yml restart redis
+          published_redis=$(docker compose -f docker-compose.ci.yml port redis 6379)
+          [[ "$published_redis" == *":$REDIS_PORT" ]] || {
+            echo "Redis published port drifted after restart: expected $REDIS_PORT, observed $published_redis" >&2
+            exit 1
+          }
           redis_ready=false
           for attempt in {1..30}; do
-            if docker compose -f docker-compose.ci.yml exec -T redis \
-              redis-cli --no-auth-warning -a ci-only-redis-password ping | grep -qx PONG; then
+            if php -r '
+              try {
+                  $redis = new Redis();
+                  $redis->connect((string) getenv("REDIS_HOST"), (int) getenv("REDIS_PORT"), 1.0);
+                  $redis->auth((string) getenv("REDIS_PASSWORD"));
+                  $redis->ping();
+                  exit(0);
+              } catch (Throwable) {
+                  exit(1);
+              }
+            '; then
               redis_ready=true
               break
             fi
             sleep 1
           done
           [[ "$redis_ready" == true ]] || {
-            echo 'Redis did not become healthy after restart.' >&2
+            echo 'Redis host endpoint did not become reachable after restart.' >&2
             docker compose -f docker-compose.ci.yml ps >&2
             exit 1
           }
