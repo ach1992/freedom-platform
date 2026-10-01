@@ -69,7 +69,7 @@ return [
 وضعیت قفل معرفی: :referral_locked',
         ],
         'account' => [
-            'view' => "حساب من\n\nشناسه حساب: :public_id\nنوع حساب: :account_type\nوضعیت: :account_status\nسطح: :tier\nتأیید تلفن: :phone_verification\nتأیید هویت: :identity_verification\nاطلاعات هویتی:\n:identity_items\nتاریخ عضویت: :joined_at\nآخرین مشاهده: :last_seen_at\n\nکیف پول\nموجودی قابل استفاده نقدی: :cash_available ریال\nمبلغ در حال نگهداری: :cash_holds ریال\nموجودی تشویقی قابل استفاده: :promotional_available ریال\n\nمعرفی\nکد معرفی شما: :referral_token\nلینک معرفی شما: :referral_link\nمعرف ثبت شده: :has_inviter\nوضعیت قفل معرفی: :referral_locked",
+            'view' => "حساب من\n\nشناسه حساب: :public_id\nنوع حساب: :account_type\nوضعیت: :account_status\nسطح: :tier\nتأیید تلفن: :phone_verification\nتأیید هویت: :identity_verification\nاطلاعات هویتی:\n:identity_items\nتاریخ عضویت: :joined_at\nآخرین مشاهده: :last_seen_at\n\nکیف پول\nموجودی قابل استفاده نقدی: :cash_available تومان\nمبلغ در حال نگهداری: :cash_holds تومان\nموجودی تشویقی قابل استفاده: :promotional_available تومان\n\nمعرفی\nکد معرفی شما: :referral_token\nلینک معرفی شما: :referral_link\nمعرف ثبت شده: :has_inviter\nوضعیت قفل معرفی: :referral_locked",
             'identity_item' => '• :type — :masked (:state)',
             'identity_none' => '• موردی ثبت نشده است',
             'not_available' => 'ثبت نشده',
@@ -302,7 +302,7 @@ return [
                 'item' => "#:number — :kind\nشناسه: :id\nوضعیت: :state\nمالک: :owner\nارائه‌دهنده: :provider\nمرجع: :reference\nمبلغ: :amount",
                 'not_available' => 'ثبت نشده',
                 'masked_suffix' => ' (پنهان‌شده)',
-                'amount' => ':amount ریال',
+                'amount' => ':amount تومان',
                 'kinds' => [
                     'user' => 'کاربر',
                     'order' => 'سفارش',
@@ -359,11 +359,11 @@ return [
                 'message-buttons-authorization-lost' => 'مجوز دکمه‌های پیام مستقیم تغییر کرده است. هدف را دوباره بررسی کنید.',
             ],
             'usdt_rate' => [
-                'view' => "نرخ دستی USDT\n\nنرخ فعلی: :rate ریال برای هر USDT\nمنبع: :source\nنسخه مدیریت‌شده: :version\n\nاین نرخ مشترک برای پرداخت مستقیم USDT و طبق سیاست فعلی مالک، به‌عنوان نرخ مبنای قیمت‌گذاری USD در NOWPayments استفاده می‌شود.",
+                'view' => "نرخ دستی USDT\n\nنرخ فعلی: :rate تومان برای هر USDT\nمنبع: :source\nنسخه مدیریت‌شده: :version\n\nاین نرخ مشترک برای پرداخت مستقیم USDT و طبق سیاست فعلی مالک، به‌عنوان نرخ مبنای قیمت‌گذاری USD در NOWPayments استفاده می‌شود.",
                 'unset' => "نرخ دستی USDT\n\nدر حال حاضر نرخ مدیریت‌شده یا مقدار پیش‌فرض راه‌اندازی در دسترس نیست.\n\nاین تنظیم، نرخ مشترک پرداخت مستقیم USDT و مبنای قیمت‌گذاری USD در NOWPayments است.",
                 'edit_button' => 'تغییر نرخ',
                 'prompt' => "تغییر نرخ دستی USDT\n\nنرخ جدید IRR برای هر USDT را فقط به‌صورت عدد ارسال کنید.\nمثال: 900000\n\nاعداد فارسی و عربی نیز پذیرفته می‌شوند.",
-                'confirm' => "تأیید تغییر نرخ دستی USDT\n\nنرخ جدید: :rate ریال برای هر USDT\n\nاین نرخ بر قیمت‌گذاری‌های بعدیِ پرداخت مستقیم USDT و پروکسی USD در NOWPayments اثر می‌گذارد. پرداخت‌ها و اسنپ‌شات‌های قبلی بازنویسی نمی‌شوند.\n\nتا زمانی که دکمه «تأیید تغییر نرخ» را نزنید، هیچ تغییری ثبت نمی‌شود.",
+                'confirm' => "تأیید تغییر نرخ دستی USDT\n\nنرخ جدید: :rate تومان برای هر USDT\n\nاین نرخ بر قیمت‌گذاری‌های بعدیِ پرداخت مستقیم USDT و پروکسی USD در NOWPayments اثر می‌گذارد. پرداخت‌ها و اسنپ‌شات‌های قبلی بازنویسی نمی‌شوند.\n\nتا زمانی که دکمه «تأیید تغییر نرخ» را نزنید، هیچ تغییری ثبت نمی‌شود.",
                 'confirm_button' => 'تأیید تغییر نرخ',
                 'invalid' => "مقدار نرخ معتبر نیست یا خارج از محدوده مجاز تنظیمات است.\n\nیک عدد معتبر IRR برای هر USDT ارسال کنید.",
                 'updated_notice' => 'نرخ مدیریت‌شده با موفقیت ثبت شد.',
@@ -383,7 +383,7 @@ return [
             'list_item' => '#:number — :plan
 دسته‌بندی: :category
 نوع سرویس: :mode
-قیمت پایه: :price ریال
+قیمت پایه: :price تومان
 مدت: :duration روز',
             'empty' => 'خرید سرویس
 
@@ -397,7 +397,7 @@ return [
 دسته‌بندی: :category
 پلن: :plan
 نوع سرویس: :mode
-قیمت پایه: :price ریال
+قیمت پایه: :price تومان
 مدت: :duration روز
 حجم: :data
 تعداد دستگاه: :devices
@@ -493,25 +493,25 @@ return [
             'auto_renew' => [
                 'button' => 'تمدید خودکار',
                 'overview' => "تمدید خودکار\n\nوضعیت: :status\n:notice\nبسته تمدید موردنظر را انتخاب کنید. مبلغ نهایی در زمان ثبت تنظیمات توسط همان مسیر قیمت‌گذاری رسمی محاسبه می‌شود.",
-                'enabled' => 'فعال — بسته :package — قیمت پذیرفته‌شده :price ریال',
+                'enabled' => 'فعال — بسته :package — قیمت پذیرفته‌شده :price تومان',
                 'disabled' => 'غیرفعال',
                 'stale' => 'وضعیت یا بسته انتخابی تغییر کرده است؛ اطلاعات فعلی دوباره بارگذاری شد.',
-                'package_button' => ':name — :price ریال',
+                'package_button' => ':name — :price تومان',
                 'disable_button' => 'غیرفعال‌کردن تمدید خودکار',
-                'confirm_enable' => "فعال‌کردن تمدید خودکار با بسته «:name» را تأیید می‌کنید؟\nقیمت فعلی بسته: :price ریال. قیمت پذیرفته‌شده و سیاست تغییر قیمت به‌صورت نسخه‌دار ثبت می‌شود.",
+                'confirm_enable' => "فعال‌کردن تمدید خودکار با بسته «:name» را تأیید می‌کنید؟\nقیمت فعلی بسته: :price تومان. قیمت پذیرفته‌شده و سیاست تغییر قیمت به‌صورت نسخه‌دار ثبت می‌شود.",
                 'confirm_disable' => "غیرفعال‌کردن تمدید خودکار برای بسته «:name» را تأیید می‌کنید؟\nاین کار تمدیدهای بعدی را متوقف می‌کند و سابقه قبلی حفظ می‌شود.",
                 'confirm_button' => 'تأیید تمدید خودکار',
-                'result_enabled' => 'تمدید خودکار فعال شد. بسته: :package — قیمت پذیرفته‌شده: :price ریال.',
+                'result_enabled' => 'تمدید خودکار فعال شد. بسته: :package — قیمت پذیرفته‌شده: :price تومان.',
                 'result_disabled' => 'تمدید خودکار غیرفعال شد. بسته ثبت‌شده: :package.',
             ],
             'reconfiguration' => [
                 'button' => 'تغییر پلن / سرور / پروتکل',
                 'offering_list' => "تغییر سرویس\n\nپلن مقصد را انتخاب کنید. :notice",
-                'offering_button' => ':name — :price ریال',
+                'offering_button' => ':name — :price تومان',
                 'route_list' => 'سرور مقصد را انتخاب کنید. فقط مقصدهای سازگار، فعال و دارای ظرفیت نمایش داده می‌شوند.',
                 'route_auto' => 'انتخاب خودکار سرور',
                 'protocol_list' => 'پروتکل مقصد را انتخاب کنید.',
-                'preview' => "پیش‌نمایش تغییر سرویس\n\nپلن فعلی: :source_plan\nپلن مقصد: :target_plan\nسرور مقصد: :server\nپروتکل مقصد: :protocol\nاختلاف قیمت: :difference ریال\nهزینه عملیات: :fee ریال\nمبلغ نهایی: :total ریال",
+                'preview' => "پیش‌نمایش تغییر سرویس\n\nپلن فعلی: :source_plan\nپلن مقصد: :target_plan\nسرور مقصد: :server\nپروتکل مقصد: :protocol\nاختلاف قیمت: :difference تومان\nهزینه عملیات: :fee تومان\nمبلغ نهایی: :total تومان",
                 'confirm_paid' => 'ادامه به پرداخت',
                 'confirm_free' => 'تأیید تغییر رایگان',
                 'stale' => 'گزینه انتخابی دیگر معتبر نیست؛ گزینه‌های فعلی دوباره بارگذاری شدند.',
