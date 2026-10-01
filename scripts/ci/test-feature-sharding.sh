@@ -4,6 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 selector="$root/scripts/ci/select-feature-shard.sh"
+planner="$root/scripts/ci/feature-test-shard-plan.sh"
 weigher="$root/scripts/ci/feature-test-weight.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
@@ -13,8 +14,9 @@ fail() {
     exit 1
 }
 
-[[ -s "$selector" ]] || fail 'Feature shard selector is missing'
-[[ -s "$weigher" ]] || fail 'Feature test weight helper is missing'
+for helper in "$selector" "$planner" "$weigher"; do
+    [[ -s "$helper" ]] || fail "required Feature sharding helper is missing: $helper"
+done
 
 all="$tmpdir/all"
 find "$root/tests/Feature" -type f -name '*Test.php' -printf '%P\n' | sed 's#^#tests/Feature/#' | sort > "$all"
@@ -44,28 +46,32 @@ weight_for() {
 
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
-        [[ -f "$root/$path" ]] || fail "selector returned missing file: $path"
+        [[ -f "$root/$path" ]] || fail "planner returned missing file: $path"
         paths+=("$root/$path")
     done < "$list"
 
     (("${#paths[@]}" > 0)) || fail 'cannot weigh an empty Feature shard'
 
-    local records=()
-    mapfile -t records < <(bash "$weigher" "${paths[@]}")
-
     local total=0
     local record
-    for record in "${records[@]}"; do
+    while IFS= read -r record; do
         local padded_weight=${record%%$'\t'*}
         total=$((total + 10#$padded_weight))
-    done
+    done < <(bash "$weigher" "${paths[@]}")
 
     printf '%s\n' "$total"
 }
 
 verify_shards() {
     local count=$1
+    local plan="$tmpdir/plan-$count"
+    local repeat="$tmpdir/plan-$count-repeat"
     local combined="$tmpdir/combined-$count"
+
+    bash "$planner" "$count" > "$plan"
+    bash "$planner" "$count" > "$repeat"
+    cmp -s "$plan" "$repeat" || fail "$count-way Feature shard plan must be deterministic"
+    [[ -s "$plan" ]] || fail "$count-way Feature shard plan must not be empty"
     : > "$combined"
 
     local min_weight=0
@@ -75,11 +81,7 @@ verify_shards() {
 
     for ((index = 0; index < count; index++)); do
         local shard="$tmpdir/shard-$count-$index"
-        local repeat="$tmpdir/shard-$count-$index-repeat"
-
-        bash "$selector" "$count" "$index" > "$shard"
-        bash "$selector" "$count" "$index" > "$repeat"
-        cmp -s "$shard" "$repeat" || fail "$count-way shard $index assignment must be deterministic"
+        awk -F $'\t' -v shard="$index" '$1 == shard {print $2}' "$plan" > "$shard"
         [[ -s "$shard" ]] || fail "$count-way shard $index must be non-empty"
 
         cat "$shard" >> "$combined"
@@ -102,6 +104,10 @@ verify_shards() {
     combined_count=$(wc -l < "$combined")
     unique_count=$(sort -u "$combined" | wc -l)
     ((combined_count == unique_count)) || fail "$count-way shards must not duplicate Feature test entry files"
+
+    local representative="$tmpdir/representative-$count"
+    bash "$selector" "$count" "$((count - 1))" > "$representative"
+    cmp -s "$representative" "$tmpdir/shard-$count-$((count - 1))"         || fail "$count-way selector must return the planner assignment for the requested shard"
 
     ((min_weight > 0)) || fail 'shard static weight must be positive'
     if ((max_weight * 100 > min_weight * 115)); then
