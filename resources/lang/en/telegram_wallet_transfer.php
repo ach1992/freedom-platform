@@ -11,10 +11,10 @@ return [
     'amount_invalid' => "The transfer amount is invalid.\n\nRecipient: :recipient\nSend a positive IRR integer.",
     'amount_unavailable' => "That transfer cannot be prepared under the current balance or transfer policy.\n\nRecipient: :recipient\nYou can send a different amount.",
     'amount_expired' => "The previous confirmation expired and its hold was released.\n\nRecipient: :recipient\nSend an amount again.",
-    'confirm' => "Confirm wallet transfer\n\nRecipient: :recipient\nAmount: :amount IRR\nFee: :fee IRR\nTotal debit: :total IRR\nAvailable after hold: :available IRR\nConfirmation expires: :expires_at\n\nCurrent policy and recipient/account state are revalidated when you confirm.",
+    'confirm' => "Confirm wallet transfer\n\nRecipient: :recipient\nAmount: :amount Toman\nFee: :fee Toman\nTotal debit: :total Toman\nAvailable after hold: :available Toman\nConfirmation expires: :expires_at\n\nCurrent policy and recipient/account state are revalidated when you confirm.",
     'confirm_button' => 'Confirm transfer',
     'cancel_button' => 'Cancel transfer',
-    'completed_sender' => "Wallet transfer completed.\n\nRecipient: :recipient\nAmount: :amount IRR\nFee: :fee IRR\n\nReplay will not create another ledger effect.",
-    'completed_recipient' => "You received :amount IRR in your cash wallet.\nSender reference: …:sender",
+    'completed_sender' => "Wallet transfer completed.\n\nRecipient: :recipient\nAmount: :amount Toman\nFee: :fee Toman\n\nReplay will not create another ledger effect.",
+    'completed_recipient' => "You received :amount Toman in your cash wallet.\nSender reference: …:sender",
     'home' => 'Home',
 ];
