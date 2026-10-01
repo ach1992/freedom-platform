@@ -240,7 +240,12 @@ final readonly class OperationsCenterService
         $buffer = 0;
         $bits = 0;
 
-        foreach (unpack('C*', $value) as $byte) {
+        $bytes = unpack('C*', $value);
+        if ($bytes === false) {
+            throw new \RuntimeException('Queue identity encoding failed.');
+        }
+
+        foreach ($bytes as $byte) {
             $buffer = ($buffer << 8) | $byte;
             $bits += 8;
 
