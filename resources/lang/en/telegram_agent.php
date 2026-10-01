@@ -24,7 +24,7 @@ return [
         'empty' => 'There are no eligible paid Agent purchases waiting for Order materialization.',
         'review_button' => 'Review :count selected',
         'cancel_button' => 'Cancel',
-        'review' => "Review Bulk Purchase\n\nSelected: :count\nTotal captured amount: :total IRR\n\n:items\n\nConfirm to materialize these accepted purchase settlements through the canonical bulk Order authority.",
+        'review' => "Review Bulk Purchase\n\nSelected: :count\nTotal captured amount: :total Toman\n\n:items\n\nConfirm to materialize these accepted purchase settlements through the canonical bulk Order authority.",
         'more_items' => '... and :count more selected purchases',
         'confirm_button' => 'Confirm bulk purchase',
         'result' => "Bulk Purchase Result\n\nBulk Order: :bulk_order\nSucceeded: :succeeded\nFailed: :failed\nReplay/recovery: :replayed",
@@ -44,7 +44,7 @@ return [
     ],
     'report' => [
         'button' => 'Agent report',
-        'summary' => "Agent Report\n\nPeriod: :period\nPurchases: :purchase_count\nGross paid: :spending_irr IRR\nMaterialized sales/orders: :sales_count\nGross materialized order value: :sales_irr IRR\nPurchased services: :service_count\nRecent offerings: :recent",
+        'summary' => "Agent Report\n\nPeriod: :period\nPurchases: :purchase_count\nGross paid: :spending_irr Toman\nMaterialized sales/orders: :sales_count\nGross materialized order value: :sales_irr Toman\nPurchased services: :service_count\nRecent offerings: :recent",
         'period' => [
             'today' => 'Today',
             '7d' => 'Last 7 days',
