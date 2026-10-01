@@ -10,6 +10,7 @@ use App\Modules\Operations\Application\Contracts\UpdateWorkspace;
 use App\Modules\Operations\Application\OperationalAlertLifecycleService;
 use App\Modules\Operations\Application\OperationsCenterActionService;
 use App\Modules\Operations\Application\OperationsCenterService;
+use App\Modules\Operations\Application\WorkerHeartbeatService;
 use App\Modules\Operations\Infrastructure\FilesystemBackupRepository;
 use App\Modules\Operations\Infrastructure\FilesystemRestoreWorkspace;
 use App\Modules\Operations\Infrastructure\FilesystemUpdateWorkspace;
@@ -334,6 +335,145 @@ final class OperationsCenterIntegrationTest extends TestCase
         }
         foreach ($snapshot->facts as $fact) {
             self::assertStringNotContainsString(',', $fact->code);
+        }
+    }
+
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_keeps_distinct_queue_fact_codes_for_normalization_collision_inputs(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        $now = now('UTC');
+
+        config()->set('operations.worker_heartbeat.queue_group', '');
+        config()->set('queue.connections.redis.queue', '');
+
+        foreach (['a-b', 'a:b'] as $index => $queue) {
+            DB::table('worker_heartbeats')->insert([
+                'worker_id' => 'operations-collision-worker-'.$index,
+                'queue' => $queue,
+                'host_hash' => hash('sha256', 'operations-collision-worker-'.$index),
+                'release_version' => 'test',
+                'boot_id' => null,
+                'last_seen_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        $dashFact = $snapshot->fact('queue.backlog.a-b');
+        self::assertNotNull($dashFact);
+        self::assertSame('queue=a-b', $dashFact->detail);
+
+        $colonFacts = array_values(array_filter(
+            $snapshot->facts,
+            static fn ($fact): bool => $fact->detail === 'queue=a:b',
+        ));
+        self::assertCount(1, $colonFacts);
+        self::assertStringStartsWith('queue.backlog.q-', $colonFacts[0]->code);
+        self::assertNotSame($dashFact->code, $colonFacts[0]->code);
+        self::assertNull($snapshot->fact('queue.inspection'));
+    }
+
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_marks_expanded_queue_identity_overflow_incomplete(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+
+        config()->set('operations.worker_heartbeat.queue_group', '');
+        config()->set('queue.connections.redis.queue', '');
+
+        $queueGroup = implode(',', array_map(
+            static fn (int $index): string => sprintf('queue-%02d', $index),
+            range(1, 21),
+        ));
+        self::assertLessThanOrEqual(191, strlen($queueGroup));
+
+        $this->app->make(WorkerHeartbeatService::class)->record(
+            'operations-expanded-overflow-worker',
+            $queueGroup,
+            'test',
+        );
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        $inspection = $snapshot->fact('queue.inspection');
+        self::assertNotNull($inspection);
+        self::assertSame('unknown', $inspection->state);
+        self::assertStringContainsString('queue_identities_truncated=1', (string) $inspection->detail);
+
+        $backlogFacts = array_values(array_filter(
+            $snapshot->facts,
+            static fn ($fact): bool => str_starts_with($fact->code, 'queue.backlog.'),
+        ));
+        self::assertCount(20, $backlogFacts);
+        self::assertNull($snapshot->fact('queue.backlog.queue-21'));
+    }
+
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_marks_observed_queue_group_overflow_incomplete(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        $now = now('UTC');
+
+        config()->set('operations.worker_heartbeat.queue_group', '');
+        config()->set('queue.connections.redis.queue', '');
+
+        $rows = [];
+        for ($index = 1; $index <= 21; $index++) {
+            $rows[] = [
+                'worker_id' => sprintf('operations-group-overflow-worker-%02d', $index),
+                'queue' => sprintf('observed-%02d', $index),
+                'host_hash' => hash('sha256', 'operations-group-overflow-worker-'.$index),
+                'release_version' => 'test',
+                'boot_id' => null,
+                'last_seen_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+        DB::table('worker_heartbeats')->insert($rows);
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        $inspection = $snapshot->fact('queue.inspection');
+        self::assertNotNull($inspection);
+        self::assertSame('unknown', $inspection->state);
+        self::assertStringContainsString('observed_groups_truncated=1', (string) $inspection->detail);
+
+        $backlogFacts = array_values(array_filter(
+            $snapshot->facts,
+            static fn ($fact): bool => str_starts_with($fact->code, 'queue.backlog.'),
+        ));
+        self::assertCount(20, $backlogFacts);
+    }
+
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_surfaces_writer_accepted_unrepresentable_queue_identity(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+
+        config()->set('operations.worker_heartbeat.queue_group', '');
+        config()->set('queue.connections.redis.queue', '');
+
+        $queue = str_repeat('a', 65);
+        $this->app->make(WorkerHeartbeatService::class)->record(
+            'operations-reader-boundary-worker',
+            $queue,
+            'test',
+        );
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        $inspection = $snapshot->fact('queue.inspection');
+        self::assertNotNull($inspection);
+        self::assertSame('unknown', $inspection->state);
+        self::assertStringContainsString('unsupported_queue_identity=1', (string) $inspection->detail);
+        self::assertSame('unknown', $snapshot->fact('queue.backlog')?->state);
+
+        foreach ($snapshot->facts as $fact) {
+            self::assertNotSame('queue='.$queue, $fact->detail);
         }
     }
 
