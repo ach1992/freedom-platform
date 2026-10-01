@@ -32,11 +32,11 @@ final class IrrTomanFormatterTest extends TestCase
     public function test_irr_currency_is_presented_as_toman_while_other_currency_is_preserved(): void
     {
         self::assertSame(
-            ['amount' => '125.1', 'unit' => 'تومان'],
+            ['amount' => '125.1', 'currency' => 'تومان'],
             IrrTomanFormatter::forCurrency(1_251, 'IRR', 'fa'),
         );
         self::assertSame(
-            ['amount' => '1,251', 'unit' => 'USD'],
+            ['amount' => '1,251', 'currency' => 'USD'],
             IrrTomanFormatter::forCurrency(1_251, 'USD', 'en'),
         );
     }
