@@ -17,7 +17,7 @@ final class ReleasePackageBuilderTest extends TestCase
         mkdir($root, 0700, true);
 
         try {
-            $result = $this->run([
+            $result = $this->runCommand([
                 PHP_BINARY,
                 base_path('scripts/release/build-update-package.php'),
                 base_path('release/0.9.0-rc.1.json'),
@@ -69,7 +69,7 @@ final class ReleasePackageBuilderTest extends TestCase
     }
 
     /** @param list<string> $command */
-    private function run(array $command): string
+    private function runCommand(array $command): string
     {
         $process = proc_open($command, [
             1 => ['pipe', 'w'],
