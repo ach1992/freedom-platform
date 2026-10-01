@@ -36,7 +36,7 @@ final readonly class MarzbanReadinessProbe
     }
 
     /**
-     * @param array<string, mixed> $config
+     * @param  array<string, mixed>  $config
      * @return array{
      *     provider: string,
      *     version: string,
@@ -133,7 +133,7 @@ final readonly class MarzbanReadinessProbe
     }
 
     /**
-     * @param array<string, mixed> $config
+     * @param  array<string, mixed>  $config
      * @return array{0:string,1:string,2:string,3:string}
      */
     private function validateConfig(array $config): array
