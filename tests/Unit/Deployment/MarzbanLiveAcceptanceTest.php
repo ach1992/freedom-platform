@@ -178,6 +178,63 @@ final class MarzbanLiveAcceptanceTest extends TestCase
         self::assertSame(0, $mutationCount);
     }
 
+    public function test_uncertain_create_is_not_retried_when_cleanup_proves_no_remote_service(): void
+    {
+        $createCount = 0;
+        $userLookupCount = 0;
+
+        $transport = static function (
+            string $method,
+            string $url,
+            array $headers,
+            ?array $payload,
+            bool $form,
+        ) use (&$createCount, &$userLookupCount): PanelHttpExchange {
+            $path = (string) parse_url($url, PHP_URL_PATH);
+
+            if ($method === 'POST' && $path === '/api/admin/token') {
+                return new PanelHttpExchange(200, ['access_token' => 'safe-bearer-token'], false, false);
+            }
+            if ($method === 'GET' && $path === '/api/system') {
+                return new PanelHttpExchange(200, ['version' => '0.8.4'], false, false);
+            }
+            if ($method === 'GET' && $path === '/api/inbounds') {
+                return new PanelHttpExchange(200, ['vless' => [['tag' => 'vless-main']]], false, false);
+            }
+            if ($method === 'GET' && str_starts_with($path, '/api/user/')) {
+                $userLookupCount++;
+
+                return new PanelHttpExchange(404, ['detail' => 'not found'], false, false);
+            }
+            if ($method === 'POST' && $path === '/api/user') {
+                $createCount++;
+
+                return new PanelHttpExchange(null, null, false, true);
+            }
+
+            return new PanelHttpExchange(404, ['detail' => 'unexpected'], false, false);
+        };
+
+        $runner = new MarzbanLiveAcceptance($transport);
+
+        try {
+            $runner->run([
+                'origin' => 'https://panel.example',
+                'username' => 'marzban-admin',
+                'password' => 'super-secret-password',
+                'run_id' => 'unit-uncertain-create',
+                'confirm' => MarzbanLiveAcceptance::CONFIRMATION,
+                'now' => new DateTimeImmutable('2026-08-08T00:00:00+00:00'),
+            ]);
+            self::fail('Expected uncertain create outcome.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('marzban_create_service_transport_uncertain', $exception->getMessage());
+        }
+
+        self::assertSame(1, $createCount);
+        self::assertSame(2, $userLookupCount);
+    }
+
     public function test_confirmation_mismatch_performs_no_request(): void
     {
         $requestCount = 0;
