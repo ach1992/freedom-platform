@@ -57,6 +57,8 @@ final class InstallerEnvironmentWriterTest extends TestCase
         $this->assertIsArray($allowedKeys);
         $this->assertIsArray($nonPersistableKeys);
         $this->assertContains('TELEGRAM_BOT_USERNAME', $allowedKeys);
+        $this->assertContains('BUSINESS_TIMEZONE', $allowedKeys);
+        $this->assertNotContains('APP_TIMEZONE', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_PASSWORD', $allowedKeys);

@@ -16,41 +16,16 @@ fail() {
 ((shard_index >= 0 && shard_index < shard_count)) || fail 'shard_index must be smaller than shard_count'
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-feature_root="$root/tests/Feature"
-[[ -d "$feature_root" ]] || fail 'tests/Feature does not exist'
+planner="$root/scripts/ci/feature-test-shard-plan.sh"
+[[ -s "$planner" ]] || fail 'Feature shard planner does not exist'
 
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-
-while IFS= read -r -d '' path; do
-    rel=${path#"$root/"}
-    lines=$(wc -l < "$path")
-    printf '%012d\t%s\n' "$lines" "$rel"
-done < <(find "$feature_root" -type f -name '*Test.php' -print0) | sort -k2,2 > "$tmp"
-
-[[ -s "$tmp" ]] || fail 'no Feature tests were found'
-
-total=0
-while IFS=$'\t' read -r padded_lines rel; do
-    [[ -n "$padded_lines" && -n "$rel" ]] || fail 'invalid weighted Feature test record'
-    total=$((total + 10#$padded_lines))
-done < "$tmp"
-((total > 0)) || fail 'Feature test static weight must be positive'
-
-cumulative=0
 selected=0
-while IFS=$'\t' read -r padded_lines rel; do
-    lines=$((10#$padded_lines))
-    midpoint_twice=$((2 * cumulative + lines))
-    assigned=$((midpoint_twice * shard_count / (2 * total)))
-    ((assigned < shard_count)) || assigned=$((shard_count - 1))
-
+while IFS=$'\t' read -r assigned rel; do
+    [[ "$assigned" =~ ^[0-9]+$ && -n "$rel" ]] || fail 'invalid Feature shard plan record'
     if ((assigned == shard_index)); then
         printf '%s\n' "$rel"
         selected=$((selected + 1))
     fi
-
-    cumulative=$((cumulative + lines))
-done < "$tmp"
+done < <(bash "$planner" "$shard_count")
 
 ((selected > 0)) || fail "Feature shard $shard_index/$shard_count is empty"

@@ -4,6 +4,8 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 selector="$root/scripts/ci/select-feature-shard.sh"
+planner="$root/scripts/ci/feature-test-shard-plan.sh"
+weigher="$root/scripts/ci/feature-test-weight.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -12,11 +14,25 @@ fail() {
     exit 1
 }
 
+for helper in "$selector" "$planner" "$weigher"; do
+    [[ -s "$helper" ]] || fail "required Feature sharding helper is missing: $helper"
+done
+
 all="$tmpdir/all"
 find "$root/tests/Feature" -type f -name '*Test.php' -printf '%P\n' | sed 's#^#tests/Feature/#' | sort > "$all"
 [[ -s "$all" ]] || fail 'repository has no Feature tests'
 if grep -Ev 'Test\.php$' "$all" >/dev/null; then
     fail 'sharding input must contain PHPUnit test entry files only'
+fi
+
+composed="tests/Feature/AgentPricingQuoteIntegrationTest.php"
+[[ -f "$root/$composed" ]] || fail 'trait-composed Feature regression fixture is missing'
+entry_lines=$(wc -l < "$root/$composed")
+expanded_record=$(bash "$weigher" "$composed")
+expanded_weight=${expanded_record%%$'\t'*}
+expanded_weight=$((10#$expanded_weight))
+if ((expanded_weight <= entry_lines)); then
+    fail "trait-composed Feature weight must exceed entry-file LOC: entry=$entry_lines expanded=$expanded_weight"
 fi
 
 one="$tmpdir/one"
@@ -25,30 +41,50 @@ cmp -s "$all" "$one" || fail '1/1 shard must contain the complete Feature suite'
 
 weight_for() {
     local list=$1
-    local total=0
+    local paths=()
     local path
+
     while IFS= read -r path; do
         [[ -n "$path" ]] || continue
-        [[ -f "$root/$path" ]] || fail "selector returned missing file: $path"
-        total=$((total + $(wc -l < "$root/$path")))
+        [[ -f "$root/$path" ]] || fail "planner returned missing file: $path"
+        paths+=("$root/$path")
     done < "$list"
+
+    (("${#paths[@]}" > 0)) || fail 'cannot weigh an empty Feature shard'
+
+    local total=0
+    local record
+    while IFS= read -r record; do
+        local padded_weight=${record%%$'\t'*}
+        total=$((total + 10#$padded_weight))
+    done < <(bash "$weigher" "${paths[@]}")
+
     printf '%s\n' "$total"
 }
 
 verify_shards() {
     local count=$1
-    local ordered="$tmpdir/ordered-$count"
-    : > "$ordered"
+    local plan="$tmpdir/plan-$count"
+    local repeat="$tmpdir/plan-$count-repeat"
+    local combined="$tmpdir/combined-$count"
+
+    bash "$planner" "$count" > "$plan"
+    bash "$planner" "$count" > "$repeat"
+    cmp -s "$plan" "$repeat" || fail "$count-way Feature shard plan must be deterministic"
+    [[ -s "$plan" ]] || fail "$count-way Feature shard plan must not be empty"
+    : > "$combined"
 
     local min_weight=0
     local max_weight=0
     local weights=()
     local index
+
     for ((index = 0; index < count; index++)); do
         local shard="$tmpdir/shard-$count-$index"
-        bash "$selector" "$count" "$index" > "$shard"
+        awk -F $'\t' -v shard="$index" '$1 == shard {print $2}' "$plan" > "$shard"
         [[ -s "$shard" ]] || fail "$count-way shard $index must be non-empty"
-        cat "$shard" >> "$ordered"
+
+        cat "$shard" >> "$combined"
 
         local weight
         weight=$(weight_for "$shard")
@@ -61,11 +97,22 @@ verify_shards() {
         fi
     done
 
-    cmp -s "$all" "$ordered" \
-        || fail "$count-way shards must cover every Feature test exactly once in contiguous suite order"
+    cmp -s "$all" "$combined" || fail "$count-way shards must preserve global Feature order and cover every test exactly once"
+
+    local combined_count
+    local unique_count
+    combined_count=$(wc -l < "$combined")
+    unique_count=$(sort -u "$combined" | wc -l)
+    ((combined_count == unique_count)) || fail "$count-way shards must not duplicate Feature test entry files"
+
+    local representative="$tmpdir/representative-$count"
+    bash "$selector" "$count" "$((count - 1))" > "$representative"
+    cmp -s "$representative" "$tmpdir/shard-$count-$((count - 1))"         || fail "$count-way selector must return the planner assignment for the requested shard"
+
     ((min_weight > 0)) || fail 'shard static weight must be positive'
-    ((max_weight * 100 <= min_weight * 115)) \
-        || fail "$count-way shard static weights are imbalanced: ${weights[*]}"
+    if ((max_weight * 100 > min_weight * 115)); then
+        fail "$count-way shard static weights are imbalanced: ${weights[*]}"
+    fi
 
     printf 'Feature %s-way sharding invariants passed: weights %s\n' "$count" "${weights[*]}"
 }

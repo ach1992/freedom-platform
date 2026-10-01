@@ -52,6 +52,8 @@ required_files=(
     scripts/ci/test-integration.sh
     scripts/ci/classify-validation-plan.sh
     scripts/ci/test-validation-plan.sh
+    scripts/ci/feature-test-weight.sh
+    scripts/ci/feature-test-shard-plan.sh
     scripts/ci/select-feature-shard.sh
     scripts/ci/test-feature-sharding.sh
     scripts/ci/verify-readonly-staging-workflow.sh

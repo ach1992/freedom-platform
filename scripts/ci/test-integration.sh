@@ -30,7 +30,6 @@ install -m 0644 docker/mariadb/ci-init.sql "${fixture_dir}/ci-init.sql"
 
 export APP_ENV=testing
 export APP_DEBUG=false
-export APP_TIMEZONE=UTC
 export BUSINESS_TIMEZONE=Asia/Tehran
 export APP_KEY='base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
 export DB_CONNECTION=mysql
