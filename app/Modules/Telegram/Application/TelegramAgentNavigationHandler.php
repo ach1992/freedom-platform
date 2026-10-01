@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Agents\Application\AgentApplicationService;
 use App\Modules\Agents\Application\AgentApplicationSubmissionRejected;
 use App\Modules\Agents\Application\AgentChangeContext;
@@ -674,9 +675,9 @@ final readonly class TelegramAgentNavigationHandler
         $text = $this->translation('telegram_agent.report.summary', $locale, [
             'period' => $this->reportPeriodLabel($period, $locale),
             'purchase_count' => (string) $report->purchaseCount,
-            'spending_irr' => number_format($report->grossSpendingIrr, 0, '.', ','),
+            'spending_irr' => IrrTomanFormatter::format($report->grossSpendingIrr),
             'sales_count' => (string) $report->salesCount,
-            'sales_irr' => number_format($report->grossSalesIrr, 0, '.', ','),
+            'sales_irr' => IrrTomanFormatter::format($report->grossSalesIrr),
             'service_count' => (string) $report->purchasedServiceCount,
             'recent' => $recent,
         ]);
