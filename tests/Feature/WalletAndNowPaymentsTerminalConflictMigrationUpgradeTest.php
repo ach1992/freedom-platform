@@ -695,7 +695,7 @@ final class WalletAndNowPaymentsTerminalConflictMigrationUpgradeTest extends Tes
                         }
 
                         $paused = true;
-                        file_put_contents($rollbackReady, 'checked-under-exclusive-provider-pool');
+                        $this->publishProcessState($rollbackReady, 'checked-under-exclusive-provider-pool');
                         $deadline = microtime(true) + 10.0;
                         while (! file_exists($rollbackRelease)) {
                             if (microtime(true) >= $deadline) {
@@ -706,11 +706,11 @@ final class WalletAndNowPaymentsTerminalConflictMigrationUpgradeTest extends Tes
                     });
 
                     $this->providerAttemptMigration()->down();
-                    file_put_contents($rollbackDone, 'removed');
+                    $this->publishProcessState($rollbackDone, 'removed');
                     pcntl_exec('/bin/true');
                     exit(0);
                 } catch (Throwable $exception) {
-                    file_put_contents($rollbackDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($rollbackDone, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -744,7 +744,7 @@ final class WalletAndNowPaymentsTerminalConflictMigrationUpgradeTest extends Tes
                     if (! DB::connection()->getSchemaBuilder()->hasTable('purchase_provider_mutation_attempts')) {
                         throw new RuntimeException('Provider caller did not observe attempt authority before slot entry.');
                     }
-                    file_put_contents($providerPreflight, 'authority-visible-before-slot-entry');
+                    $this->publishProcessState($providerPreflight, 'authority-visible-before-slot-entry');
 
                     try {
                         $this->app->make(PurchaseProviderMutationBarrier::class)->runForPaymentIntent(
@@ -755,21 +755,21 @@ final class WalletAndNowPaymentsTerminalConflictMigrationUpgradeTest extends Tes
                                 file_put_contents($externalEffect, 'external-effect');
                             },
                         );
-                        file_put_contents($providerDone, 'escaped');
+                        $this->publishProcessState($providerDone, 'escaped');
                         pcntl_exec('/bin/false');
                         exit(1);
                     } catch (Throwable $exception) {
                         if (file_exists($externalEffect)) {
-                            file_put_contents($providerDone, 'error|external-effect-reached|'.$exception->getMessage());
+                            $this->publishProcessState($providerDone, 'error|external-effect-reached|'.$exception->getMessage());
                             pcntl_exec('/bin/false');
                             exit(1);
                         }
-                        file_put_contents($providerDone, 'blocked|'.$exception::class.'|'.$exception->getMessage());
+                        $this->publishProcessState($providerDone, 'blocked|'.$exception::class.'|'.$exception->getMessage());
                         pcntl_exec('/bin/true');
                         exit(0);
                     }
                 } catch (Throwable $exception) {
-                    file_put_contents($providerDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($providerDone, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -1125,7 +1125,7 @@ SQL);
                         'test:inflight-provider-drain',
                         function (PurchaseProviderMutationAttempt $attempt) use ($ready, $fenceActive, $localWriterDone, $fixture): void {
                             $attempt->markExternalEffectStarted();
-                            file_put_contents($ready, 'ready');
+                            $this->publishProcessState($ready, 'ready');
                             $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
                             while (! file_exists($fenceActive)) {
                                 if (microtime(true) >= $deadline) {
@@ -1166,10 +1166,10 @@ SQL);
                     );
 
                     pcntl_exec('/bin/true');
-                    file_put_contents($ready, 'error|pcntl_exec');
+                    $this->publishProcessState($ready, 'error|pcntl_exec');
                     exit(1);
                 } catch (Throwable $exception) {
-                    file_put_contents($ready, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($ready, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -1210,7 +1210,7 @@ SQL);
                     // READ COMMITTED isolation. A separate regression below isolates
                     // stale REPEATABLE READ snapshot versus locking-current-read behavior.
                     $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
-                    file_put_contents($localWriterReady, 'ready');
+                    $this->publishProcessState($localWriterReady, 'ready');
 
                     $deadline = microtime(true) + self::ASYNC_BARRIER_TIMEOUT_SECONDS;
                     while (! file_exists($fenceActive)) {
@@ -1256,11 +1256,11 @@ SQL);
                     } catch (Throwable) {
                         $blocked++;
                     }
-                    file_put_contents($localWriterDone, 'blocked:'.$blocked);
+                    $this->publishProcessState($localWriterDone, 'blocked:'.$blocked);
                     pcntl_exec($blocked === 3 ? '/bin/true' : '/bin/false');
                     exit($blocked === 3 ? 0 : 1);
                 } catch (Throwable $exception) {
-                    file_put_contents($localWriterDone, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($localWriterDone, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -1629,7 +1629,7 @@ SQL),
                                 if ($connectionId < 1) {
                                     throw new RuntimeException('Session-loss provider connection ID is unavailable.');
                                 }
-                                file_put_contents($ready, 'ready:'.$connectionId);
+                                $this->publishProcessState($ready, 'ready:'.$connectionId);
 
                                 $deadline = microtime(true) + 10.0;
                                 while (! file_exists($release)) {
@@ -1670,12 +1670,12 @@ SQL),
                             $fixture['payment_intent_public_id'],
                         ]);
                         $state = $statement->fetchColumn();
-                        file_put_contents($childState, is_string($state) ? $state : 'missing');
+                        $this->publishProcessState($childState, is_string($state) ? $state : 'missing');
                         pcntl_exec($state === 'reconciliation_required' ? '/bin/true' : '/bin/false');
                         exit($state === 'reconciliation_required' ? 0 : 1);
                     }
                 } catch (Throwable $exception) {
-                    file_put_contents($childState, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($childState, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -1845,7 +1845,7 @@ SQL),
                         }
 
                         $paused = true;
-                        file_put_contents($barrier, 'ready');
+                        $this->publishProcessState($barrier, 'ready');
                         usleep(250000);
                     });
 
@@ -1862,10 +1862,10 @@ SQL),
                     }
 
                     pcntl_exec('/bin/true');
-                    file_put_contents($barrier, 'error|pcntl_exec');
+                    $this->publishProcessState($barrier, 'error|pcntl_exec');
                     exit(1);
                 } catch (Throwable $exception) {
-                    file_put_contents($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -1960,17 +1960,17 @@ SQL),
                         'expired',
                         'inflight-contradictory',
                     );
-                    file_put_contents($barrier, 'ready');
+                    $this->publishProcessState($barrier, 'ready');
                     usleep(250000);
                     $pdo->commit();
 
                     // Replace the forked process so inherited Laravel/PDO resources
                     // cannot emit COM_QUIT against the parent's database sessions.
                     pcntl_exec('/bin/true');
-                    file_put_contents($barrier, 'error|pcntl_exec');
+                    $this->publishProcessState($barrier, 'error|pcntl_exec');
                     exit(1);
                 } catch (Throwable $exception) {
-                    file_put_contents($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
+                    $this->publishProcessState($barrier, 'error|'.$exception::class.'|'.$exception->getMessage());
                     pcntl_exec('/bin/false');
                     exit(1);
                 }
@@ -2918,7 +2918,7 @@ SQL),
                 $connection->beginTransaction();
 
                 $writer();
-                file_put_contents($ready, 'ready');
+                $this->publishProcessState($ready, 'ready');
                 $deadline = microtime(true) + 10.0;
                 while (! file_exists($release)) {
                     if (microtime(true) >= $deadline) {
@@ -2928,7 +2928,7 @@ SQL),
                 }
 
                 $connection->commit();
-                file_put_contents($done, 'committed');
+                $this->publishProcessState($done, 'committed');
                 pcntl_exec('/bin/true');
                 exit(0);
             } catch (Throwable $exception) {
@@ -2939,7 +2939,7 @@ SQL),
                 } catch (Throwable) {
                     // Preserve the original child failure below.
                 }
-                file_put_contents($done, 'error|'.$exception::class.'|'.$exception->getMessage());
+                $this->publishProcessState($done, 'error|'.$exception::class.'|'.$exception->getMessage());
                 pcntl_exec('/bin/false');
                 exit(1);
             }
@@ -3011,6 +3011,24 @@ SQL);
             @unlink($ready);
             @unlink($release);
             @unlink($done);
+        }
+    }
+
+    private function publishProcessState(string $path, string $state): void
+    {
+        $temporary = $path.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(4));
+
+        try {
+            $written = file_put_contents($temporary, $state);
+            if ($written !== strlen($state)) {
+                throw new RuntimeException('Could not publish complete process-state handoff.');
+            }
+
+            if (! rename($temporary, $path)) {
+                throw new RuntimeException('Could not atomically publish process-state handoff.');
+            }
+        } finally {
+            @unlink($temporary);
         }
     }
 
