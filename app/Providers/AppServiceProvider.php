@@ -131,6 +131,7 @@ use App\Modules\Telegram\Application\TelegramReportingBroadcastMetricsSource;
 use App\Modules\Telegram\Application\TelegramReportingExportDeliveryGateway;
 use App\Modules\Telegram\Application\TelegramReportingTextDeliveryGateway;
 use App\Modules\Wallet\Application\Contracts\PurchaseWalletRefundAuthority;
+use App\Shared\Infrastructure\Logging\RedactingLogManager;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\ServiceProvider;
@@ -143,6 +144,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->singleton('log', static fn ($app): RedactingLogManager => new RedactingLogManager($app));
         $this->app->bind(TelegramBackupArtifactPresentationSource::class, BackupTelegramArtifactPresentationSource::class);
         $this->app->bind(TelegramReportingExportPresentationSource::class, ReportingTelegramExportPresentationSource::class);
         $this->app->bind(ReportingBroadcastMetricsSource::class, TelegramReportingBroadcastMetricsSource::class);

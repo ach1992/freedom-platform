@@ -79,6 +79,7 @@ final readonly class HttpTelegramBotApi implements TelegramBotApi
                 ->acceptJson()
                 ->timeout($this->configuration->apiTimeoutSeconds)
                 ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
+                ->withoutRedirecting()
                 ->retry(2, 200, throw: false)
                 ->post($this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/'.$method, $payload);
 

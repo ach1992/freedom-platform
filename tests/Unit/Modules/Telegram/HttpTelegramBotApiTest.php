@@ -6,8 +6,12 @@ namespace Tests\Unit\Modules\Telegram;
 
 use App\Modules\Telegram\Infrastructure\HttpTelegramBotApi;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
+use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Mockery;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -34,6 +38,26 @@ final class HttpTelegramBotApiTest extends TestCase
         self::assertTrue($info->targetsExpectedUrl);
         self::assertFalse($info->lastErrorPresent);
         Http::assertSentCount(2);
+    }
+
+    public function test_client_disables_redirect_following_at_transport_boundary(): void
+    {
+        $pending = Mockery::mock(PendingRequest::class);
+        $pending->shouldReceive('acceptJson')->once()->andReturnSelf();
+        $pending->shouldReceive('timeout')->once()->andReturnSelf();
+        $pending->shouldReceive('connectTimeout')->once()->andReturnSelf();
+        $pending->shouldReceive('withoutRedirecting')->once()->andReturnSelf();
+        $pending->shouldReceive('retry')->once()->andReturnSelf();
+        $pending->shouldReceive('post')->once()->andReturn(new Response(new Psr7Response(
+            200,
+            ['Content-Type' => 'application/json'],
+            json_encode(['ok' => true, 'result' => ['url' => '', 'pending_update_count' => 0]], JSON_THROW_ON_ERROR),
+        )));
+
+        $factory = Mockery::mock(Factory::class);
+        $factory->shouldReceive('asJson')->once()->andReturn($pending);
+
+        (new HttpTelegramBotApi($factory, $this->configuration()))->webhookInfo();
     }
 
     public function test_client_throws_generic_error_without_exposing_token(): void

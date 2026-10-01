@@ -9,10 +9,14 @@ use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\TelegramMembershipEvidence;
 use App\Modules\Telegram\Infrastructure\HttpTelegramMembershipLookup;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
+use GuzzleHttp\Psr7\Response as Psr7Response;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Request;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
+use Mockery;
 use ReflectionClass;
 use RuntimeException;
 use Tests\TestCase;
@@ -141,6 +145,34 @@ final class HttpTelegramMembershipLookupTest extends TestCase
                 && $request['chat_id'] === -1009876543210
                 && $request['user_id'] === 912345678;
         });
+    }
+
+    public function test_membership_client_disables_redirect_following_at_transport_boundary(): void
+    {
+        $pending = Mockery::mock(PendingRequest::class);
+        $pending->shouldReceive('acceptJson')->once()->andReturnSelf();
+        $pending->shouldReceive('timeout')->once()->andReturnSelf();
+        $pending->shouldReceive('connectTimeout')->once()->andReturnSelf();
+        $pending->shouldReceive('withoutRedirecting')->once()->andReturnSelf();
+        $pending->shouldReceive('post')->once()->andReturn(new Response(new Psr7Response(
+            200,
+            ['Content-Type' => 'application/json'],
+            json_encode([
+                'ok' => true,
+                'result' => [
+                    'user' => ['id' => 900001],
+                    'status' => 'member',
+                ],
+            ], JSON_THROW_ON_ERROR),
+        )));
+
+        $factory = Mockery::mock(Factory::class);
+        $factory->shouldReceive('asJson')->once()->andReturn($pending);
+
+        $result = (new HttpTelegramMembershipLookup($factory, $this->configuration()))
+            ->lookup(-1001234567890, 900001);
+
+        self::assertSame(TelegramMembershipEvidence::Member, $result->evidence);
     }
 
     public function test_invalid_local_identities_fail_before_any_provider_request(): void
