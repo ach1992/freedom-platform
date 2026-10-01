@@ -153,7 +153,8 @@ final class DatabaseOutboxDispatcherTest extends TestCase
         ]);
     }
 
-    public function test_a_stale_lease_is_reclaimed_and_dispatched_once(): void
+    /** @requirement OPS-003 QUA-010 */
+    public function test_a_stale_lease_from_a_killed_worker_is_reclaimed_and_dispatched_once(): void
     {
         $id = $this->publish('order:6:paid:v1');
         app(DatabaseManager::class)->connection()->table('outbox_messages')->where('id', $id)->update([

@@ -44,6 +44,44 @@ final class RecordingBackupTelegramDeliveryQueue implements BackupTelegramDelive
     }
 }
 
+final class InterruptingBackupTelegramDeliveryQueue implements BackupTelegramDeliveryQueue
+{
+    /** @var list<array<string,int|string>> */
+    public array $calls = [];
+
+    public function __construct(private readonly int $failOnCall) {}
+
+    public function queue(
+        int $recipientChatId,
+        string $backupId,
+        string $item,
+        int $partIndex,
+        int $partCount,
+        int $contentBytes,
+        string $contentSha256,
+        string $requestKey,
+        string $correlationId,
+    ): string {
+        $this->calls[] = [
+            'recipient_chat_id' => $recipientChatId,
+            'backup_id' => $backupId,
+            'item' => $item,
+            'part_index' => $partIndex,
+            'part_count' => $partCount,
+            'content_bytes' => $contentBytes,
+            'content_sha256' => $contentSha256,
+            'request_key' => $requestKey,
+            'correlation_id' => $correlationId,
+        ];
+
+        if (count($this->calls) === $this->failOnCall) {
+            throw new RuntimeException('Simulated interrupted backup Telegram queueing.');
+        }
+
+        return 'operation-'.substr(hash('sha256', $requestKey), 0, 20);
+    }
+}
+
 final readonly class FixedBackupTelegramOwnerDestinationResolver implements BackupTelegramOwnerDestinationResolver
 {
     /** @return array{user_id:int,recipient_chat_id:int} */
@@ -111,6 +149,58 @@ final class BackupTelegramExportServiceTest extends TestCase
                 self::assertSame($offset + 1, $call['part_index']);
                 self::assertLessThanOrEqual(10, $call['content_bytes']);
             }
+        } finally {
+            $this->removeTree($base);
+        }
+    }
+
+    /** @requirement BAK-001 OPS-003 QUA-010 */
+    public function test_interrupted_telegram_export_keeps_local_backup_authoritative_and_replay_stable(): void
+    {
+        $base = $this->directory('interrupted-export');
+        $root = $base.'/backups';
+        $repository = new FilesystemBackupRepository($root);
+        $backupId = '20260929T050500Z-2222222222222222';
+        $artifact = '0123456789ABCDEFGHIJklmnopqrstu';
+        $this->completedBackup($repository, $backupId, $artifact);
+        $before = $repository->completedArtifactMetadata($backupId);
+        $interrupted = new InterruptingBackupTelegramDeliveryQueue(3);
+        $service = new BackupTelegramExportService(
+            $this->configuration($root, true, 10),
+            $repository,
+            new FixedBackupTelegramOwnerDestinationResolver,
+            $interrupted,
+        );
+
+        try {
+            try {
+                $service->queue($backupId);
+                self::fail('Interrupted Telegram export queueing must surface its failure.');
+            } catch (RuntimeException $exception) {
+                self::assertSame('Simulated interrupted backup Telegram queueing.', $exception->getMessage());
+            }
+
+            self::assertCount(3, $interrupted->calls);
+            self::assertSame($before, $repository->completedArtifactMetadata($backupId));
+            self::assertSame($artifact, $repository->readArtifactSlice($backupId, 0, strlen($artifact)));
+
+            $replayQueue = new RecordingBackupTelegramDeliveryQueue;
+            $replay = new BackupTelegramExportService(
+                $this->configuration($root, true, 10),
+                $repository,
+                new FixedBackupTelegramOwnerDestinationResolver,
+                $replayQueue,
+            );
+            $receipt = $replay->queue($backupId);
+
+            self::assertSame(4, $receipt->partCount);
+            self::assertCount(5, $replayQueue->calls);
+            foreach ($interrupted->calls as $index => $call) {
+                self::assertSame($call['request_key'], $replayQueue->calls[$index]['request_key']);
+                self::assertSame($call['correlation_id'], $replayQueue->calls[$index]['correlation_id']);
+                self::assertSame($call['content_sha256'], $replayQueue->calls[$index]['content_sha256']);
+            }
+            self::assertSame($before, $repository->completedArtifactMetadata($backupId));
         } finally {
             $this->removeTree($base);
         }
