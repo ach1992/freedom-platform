@@ -1,0 +1,22 @@
+{
+  "release_id": "1.0.0",
+  "application_version": "1.0.0",
+  "upgrade": {
+    "from_release": "0.9.0-rc.1",
+    "from_application_version": "0.9.0-rc.1",
+    "from_schema_sha256": "fd2627b917f53dd848d88012d2b48d1508c3731c82e853e8b219544973612a6e",
+    "to_schema_sha256": "fd2627b917f53dd848d88012d2b48d1508c3731c82e853e8b219544973612a6e"
+  },
+  "runtime": {
+    "php_min": "8.4.0",
+    "php_max_exclusive": "9.0.0"
+  },
+  "framework": {
+    "laravel_major": 13
+  },
+  "rollback": {
+    "previous_code_compatible_schema_sha256": [
+      "fd2627b917f53dd848d88012d2b48d1508c3731c82e853e8b219544973612a6e"
+    ]
+  }
+}

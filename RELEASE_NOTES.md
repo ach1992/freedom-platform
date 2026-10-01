@@ -1,30 +1,43 @@
-# Freedom Platform 0.9.0-rc.1
+# Freedom Platform 1.0.0
 
-Release candidate for Phase 0.9.0. This artifact is for release validation and packaging; it does not authorize production deployment or public activation.
+Final Version 1 release source prepared for Phase 1.0 release acceptance.
+
+Building or validating this package does not itself authorize GitHub Release publication, production deployment, traffic activation, or protected live-provider mutation. Those remain explicit Phase 1.0 gates.
 
 ## Upgrade boundary
 
-- Predecessor source identity: `a099c9866ddc9240333c942a415d1a59cc6a608f`
-- Predecessor application version: `0.8.0`
-- Target application version: `0.9.0-rc.1`
+- Predecessor release: `0.9.0-rc.1`
+- Predecessor application version: `0.9.0-rc.1`
+- Target application version: `1.0.0`
 - Predecessor and target migration identity: `fd2627b917f53dd848d88012d2b48d1508c3731c82e853e8b219544973612a6e`
-- No migration changed between the accepted Phase 0.8 baseline and this RC source boundary.
+- No migration changed between the accepted frozen RC source and this release-source preparation boundary.
 
-## Phase 0.9 highlights
+The final production package remains subject to final-candidate rebuild and validation after all Phase 1.0 source/documentation changes have converged.
 
-- Hardened Telegram outbound redirect handling and emergency-log redaction.
-- Bounded Agent Pricing historical-version selection and Promotion reservation-capacity queries.
-- Reconciled runtime configuration and CI contracts, including fail-on-risky PHPUnit behavior and truthful Feature sharding.
-- Restored explicit Toman presentation for user-facing Iranian-fiat amounts while preserving canonical IRR storage/input/payment authority.
-- Hardened FULL-suite timing evidence and added explicit chaos/recovery coverage for Redis restart, killed-worker recovery, interrupted backup export, and reordered bank observations.
-- Completed release-level requirement, security/dependency, regression, performance-baseline, chaos/recovery, and target-like rehearsal reconciliation for Phase 0.9.
+## Version 1 scope
+
+Freedom Platform 1.0.0 provides the Telegram-first Version 1 product boundary defined by the canonical specification, including:
+
+- customer, agent/reseller, and administrator journeys;
+- catalog, offering, panel-target, provisioning, renewal, add-on, trial, and service lifecycle controls;
+- wallet, card-to-card, gift-card, USDT, Zarinpal, and NOWPayments payment authorities;
+- transaction-safe/idempotent financial, provisioning, provider, webhook, and queue processing;
+- Persian-first localized Telegram UX with English fallback;
+- support, content, membership, broadcast, reporting, Operations Center, alerting, backup/restore, update/rollback, and recovery tooling;
+- Marzban/PasarGuard adapter contracts with protected live compatibility acceptance remaining a release gate.
+
+## Package trust and compatibility
+
+The update package uses the Version 1 `freedom_platform_release_v1` contract.
+
+Before any archive parsing, `PharUpdatePackageVerifier` requires the complete package SHA-256 supplied through the trusted release channel. It then verifies the manifest, exact payload checksum list, Composer lock identity, migration/schema identity, runtime requirements, rollback compatibility, archive shape, and extracted payload.
+
+This is the specification's permitted trusted-checksum mechanism; no package is trusted from its embedded metadata alone.
 
 ## Validation boundary
 
-The release package must be built from one frozen exact commit and must pass the repository-owned `PharUpdatePackageVerifier` using its complete-package SHA-256 before any update preflight.
-
-Performance evidence for this RC is a baseline only. It is not a production capacity certification because Owner-approved capacity targets have not been defined.
+The final `1.0.0` artifact must be rebuilt from the exact immutable final `main` candidate after Phase 1.0 source/documentation work converges and must pass the complete applicable release checks, target-like rehearsal, and protected provider acceptance required by Phase #13.
 
 ## Deployment
 
-Production deployment, live provider/customer/financial mutation, public cutover, and destructive restore/update remain separately gated and are not authorized by this RC.
+Production publication/deployment and post-deployment acceptance require explicit Owner approval after the final candidate and release evidence are complete.
