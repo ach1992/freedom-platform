@@ -23,7 +23,7 @@ return [
     'approval_pending' => 'This correction requires independent approval. An approval request has been created. After another authorized administrator approves it through Admin Access, retry execution here.',
     'execute_button' => 'Execute correction',
     'retry_button' => 'Retry after approval',
-    'correction_completed' => "Correction completed\n\nDirection: :direction\nAmount: :amount Toman\nAvailable balance after: :available IRR.",
+    'correction_completed' => "Correction completed\n\nDirection: :direction\nAmount: :amount Toman\nAvailable balance after: :available Toman.",
     'correction_unavailable' => 'The correction cannot be prepared or executed in the current wallet/permission state.',
     'correction_stale' => 'The confirmed correction preview is no longer current. Start a new correction so balances and approval policy are re-evaluated.',
     'direction_credit' => 'credit',
