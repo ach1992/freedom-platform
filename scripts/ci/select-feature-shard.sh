@@ -77,7 +77,8 @@ for ((i = 0; i < count; i++)); do
             remaining_shards=$((remaining_shards - 1))
         else
             remaining_weight=$((total - consumed))
-            target=$(((remaining_weight + remaining_shards - 1) / remaining_shards))
+            partition_budget=$((current_load + remaining_weight))
+            target=$(((partition_budget + remaining_shards - 1) / remaining_shards))
             without_current=$(abs_diff "$current_load" "$target")
             with_current=$(abs_diff "$((current_load + weight))" "$target")
 
