@@ -21,37 +21,44 @@ weigher="$root/scripts/ci/feature-test-weight.sh"
 [[ -d "$feature_root" ]] || fail 'tests/Feature does not exist'
 [[ -s "$weigher" ]] || fail 'Feature test weight helper does not exist'
 
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
 
 feature_paths=()
 mapfile -d '' -t feature_paths < <(find "$feature_root" -type f -name '*Test.php' -print0)
 (("${#feature_paths[@]}" > 0)) || fail 'no Feature tests were found'
 
-bash "$weigher" "${feature_paths[@]}" | sort -k2,2 > "$tmp"
-[[ -s "$tmp" ]] || fail 'no weighted Feature tests were produced'
+weights="$tmpdir/weights"
+ranked="$tmpdir/ranked"
+assignments="$tmpdir/assignments"
+selected="$tmpdir/selected"
 
-total=0
+bash "$weigher" "${feature_paths[@]}" > "$weights"
+[[ -s "$weights" ]] || fail 'no weighted Feature tests were produced'
+
+sort -t $'\t' -k1,1nr -k2,2 "$weights" > "$ranked"
+
+loads=()
+for ((index = 0; index < shard_count; index++)); do
+    loads[index]=0
+done
+
+: > "$assignments"
 while IFS=$'\t' read -r padded_weight rel; do
     [[ -n "$padded_weight" && -n "$rel" ]] || fail 'invalid weighted Feature test record'
-    total=$((total + 10#$padded_weight))
-done < "$tmp"
-((total > 0)) || fail 'Feature test static weight must be positive'
-
-cumulative=0
-selected=0
-while IFS=$'\t' read -r padded_weight rel; do
     weight=$((10#$padded_weight))
-    midpoint_twice=$((2 * cumulative + weight))
-    assigned=$((midpoint_twice * shard_count / (2 * total)))
-    ((assigned < shard_count)) || assigned=$((shard_count - 1))
 
-    if ((assigned == shard_index)); then
-        printf '%s\n' "$rel"
-        selected=$((selected + 1))
-    fi
+    target=0
+    for ((index = 1; index < shard_count; index++)); do
+        if ((loads[index] < loads[target])); then
+            target=$index
+        fi
+    done
 
-    cumulative=$((cumulative + weight))
-done < "$tmp"
+    printf '%d\t%s\n' "$target" "$rel" >> "$assignments"
+    loads[target]=$((loads[target] + weight))
+done < "$ranked"
 
-((selected > 0)) || fail "Feature shard $shard_index/$shard_count is empty"
+awk -F $'\t' -v shard="$shard_index" '$1 == shard {print $2}' "$assignments" | sort > "$selected"
+[[ -s "$selected" ]] || fail "Feature shard $shard_index/$shard_count is empty"
+cat "$selected"
