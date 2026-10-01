@@ -33,7 +33,7 @@ final class IrrTomanFormatter
 
         $fractionToman = rtrim($lastWholeDigit.$fractionIrr, '0');
         $isZero = trim($wholeIrr, '0') === '' && trim($fractionIrr, '0') === '';
-        $sign = ($matches[1] ?? '') === '-' && ! $isZero ? '-' : '';
+        $sign = $matches[1] === '-' && ! $isZero ? '-' : '';
 
         return $sign.self::groupDigits($wholeToman)
             .($fractionToman === '' ? '' : '.'.$fractionToman);
@@ -76,7 +76,7 @@ final class IrrTomanFormatter
         }
         $fraction = rtrim($matches[3] ?? '', '0');
         $isZero = $whole === '0' && $fraction === '';
-        $sign = ($matches[1] ?? '') === '-' && ! $isZero ? '-' : '';
+        $sign = $matches[1] === '-' && ! $isZero ? '-' : '';
 
         return $sign.self::groupDigits($whole)
             .($fraction === '' ? '' : '.'.$fraction);
