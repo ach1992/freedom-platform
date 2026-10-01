@@ -13,6 +13,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentPurchaseCount;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentReport;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DateTimeImmutable;
 use DateTimeZone;
 use DomainException;
@@ -674,9 +675,9 @@ final readonly class TelegramAgentNavigationHandler
         $text = $this->translation('telegram_agent.report.summary', $locale, [
             'period' => $this->reportPeriodLabel($period, $locale),
             'purchase_count' => (string) $report->purchaseCount,
-            'spending_irr' => number_format($report->grossSpendingIrr, 0, '.', ','),
+            'spending_irr' => IrrTomanFormatter::format($report->grossSpendingIrr),
             'sales_count' => (string) $report->salesCount,
-            'sales_irr' => number_format($report->grossSalesIrr, 0, '.', ','),
+            'sales_irr' => IrrTomanFormatter::format($report->grossSalesIrr),
             'service_count' => (string) $report->purchasedServiceCount,
             'recent' => $recent,
         ]);

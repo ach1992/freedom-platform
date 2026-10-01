@@ -10,6 +10,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
 use App\Modules\Telegram\Application\Contracts\TelegramReportingExportPresentationSource;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use RuntimeException;
@@ -82,8 +83,8 @@ final readonly class TelegramProtectedPresentationResolver
             $reference->locale,
             [
                 'card_number' => $this->formatCardNumber($cardNumber),
-                'amount' => number_format($destination->payableAmountIrr, 0, '.', ','),
-                'currency' => 'IRR',
+                'amount' => IrrTomanFormatter::format($destination->payableAmountIrr),
+                'currency' => IrrTomanFormatter::unit($reference->locale),
                 'expires_at' => $destination->expiresAt->setTimezone(new \DateTimeZone('Asia/Tehran'))->format('Y-m-d H:i:s'),
             ],
         );

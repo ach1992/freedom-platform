@@ -8,6 +8,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerWalletTopUpPayment;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use InvalidArgumentException;
@@ -442,7 +443,7 @@ final readonly class TelegramWalletTopUpNavigationHandler
 
     private function formatIrr(int $amount): string
     {
-        return number_format($amount, 0, '.', ',');
+        return IrrTomanFormatter::format($amount);
     }
 
     private function queue(

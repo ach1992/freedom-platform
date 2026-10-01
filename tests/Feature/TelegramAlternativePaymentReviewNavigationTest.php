@@ -222,6 +222,8 @@ final class TelegramAlternativePaymentReviewNavigationTest extends TestCase
         self::assertStringContainsString($reviewPublicId, $list);
         self::assertStringContainsString($subjectPublicId, $list);
         self::assertStringContainsString('bank-ref-masked', $list);
+        self::assertStringContainsString('91,000 تومان', $list);
+        self::assertStringNotContainsString('910,000 IRR', $list);
 
         $open = $this->callbackToken(
             'navigation.admin.payment_reviews.select',
@@ -236,6 +238,8 @@ final class TelegramAlternativePaymentReviewNavigationTest extends TestCase
         $detail = $this->latestConfidentialPresentation();
         self::assertStringContainsString($reviewPublicId, $detail);
         self::assertStringContainsString($reservationPublicId, $detail);
+        self::assertStringContainsString('91,000 تومان', $detail);
+        self::assertStringNotContainsString('910,000 IRR', $detail);
 
         $evidence = $this->callbackToken(
             'navigation.admin.payment_reviews.evidence',

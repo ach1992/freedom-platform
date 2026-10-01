@@ -34,6 +34,7 @@ use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Modules\Wallet\Application\WalletSelfBalanceService;
 use App\Modules\Wallet\Application\WalletSelfBalanceSummary;
 use App\Shared\Application\Clock;
+use App\Shared\Application\IrrTomanFormatter;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -1518,7 +1519,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         $this->queueConfidential(
             $action,
             $this->translation('telegram.navigation.admin.usdt_rate.confirm', $locale, [
-                'rate' => $this->formatUsdtRateIrr($rateIrr),
+                'rate' => IrrTomanFormatter::formatDecimalIrr($rateIrr),
             ]),
             'nav-admin-usdt-rate-confirm-delivery:'.$requestKey,
             'usdt-rate-confirm',
@@ -1575,7 +1576,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             : (string) $rate->version;
 
         return $notice.$this->translation('telegram.navigation.admin.usdt_rate.view', $locale, [
-            'rate' => $this->formatUsdtRateIrr($rate->rateIrr),
+            'rate' => IrrTomanFormatter::formatDecimalIrr($rate->rateIrr),
             'source' => $source,
             'version' => $version,
         ]);
@@ -1611,17 +1612,6 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
         }
 
         return $normalized;
-    }
-
-    private function formatUsdtRateIrr(string $rate): string
-    {
-        if (preg_match('/\A([0-9]+)(?:\.([0-9]{1,8}))?\z/', $rate, $matches) !== 1) {
-            throw new RuntimeException('Telegram USDT rate presentation value is invalid.');
-        }
-        $fraction = rtrim($matches[2] ?? '', '0');
-        $formatted = number_format((int) $matches[1], 0, '.', ',');
-
-        return $fraction === '' ? $formatted : $formatted.'.'.$fraction;
     }
 
     private function usdtRateRequestKey(TelegramInteractionAction $action): string
@@ -2805,7 +2795,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $action,
             $this->translation('telegram.navigation.purchase.payment_methods.card_to_card_payment.instructions', $locale, [
                 'amount' => $this->formatIrr($reservation->payableAmountIrr),
-                'currency' => 'IRR',
+                'currency' => IrrTomanFormatter::unit($locale),
                 'card' => $reservation->maskedCardNumber,
                 'expires_at' => $this->formatBusinessDateTime($reservation->expiresAt),
             ]),
@@ -2883,7 +2873,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.confirm', $locale, [
                 'amount' => $this->formatIrr($reservation->amountIrr),
                 'available' => $this->formatIrr($reservation->availableBalanceAfterHoldIrr),
-                'currency' => 'IRR',
+                'currency' => IrrTomanFormatter::unit($locale),
             ]),
             'nav-purchase-wallet-confirm-delivery:'.$requestKey,
             'purchase-wallet-confirm',
@@ -2920,7 +2910,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             $this->translation('telegram.navigation.purchase.payment_methods.wallet_payment.paid', $locale, [
                 'order_id' => $paid->orderPublicId,
                 'amount' => $this->formatIrr($paid->amountIrr),
-                'currency' => 'IRR',
+                'currency' => IrrTomanFormatter::unit($locale),
             ]),
             'nav-purchase-wallet-paid-delivery:'.$requestKey,
             'purchase-wallet-paid',
@@ -4807,7 +4797,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
                 'quote_id' => $preview->quotePublicId,
                 'plan' => $this->purchasePlanLabel($preview->offering, $locale),
                 'final_price' => $this->formatIrr($preview->finalPriceIrr),
-                'currency' => $preview->currency,
+                'currency' => IrrTomanFormatter::unit($locale),
                 'expires_at' => $this->formatBusinessDateTime($preview->expiresAt),
             ]);
         }
@@ -4819,7 +4809,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             'effective_price' => $this->formatIrr($preview->effectivePriceIrr),
             'discount' => $this->formatIrr($preview->discountIrr),
             'final_price' => $this->formatIrr($preview->finalPriceIrr),
-            'currency' => $preview->currency,
+            'currency' => IrrTomanFormatter::unit($locale),
             'expires_at' => $this->formatBusinessDateTime($preview->expiresAt),
         ]);
     }
@@ -5422,7 +5412,7 @@ final readonly class TelegramNavigationHandler implements TelegramInteractionHan
             throw new RuntimeException('Telegram account balance cannot be negative.');
         }
 
-        return number_format($amount, 0, '.', ',');
+        return IrrTomanFormatter::format($amount);
     }
 
     private function formatBytes(?int $bytes, string $notAvailable): string

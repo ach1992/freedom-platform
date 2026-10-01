@@ -9,6 +9,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAgentBulkPurchase;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use RuntimeException;
@@ -610,7 +611,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
                 self::ACTION_TOGGLE,
                 ['settlement' => $candidate->purchaseSettlementPublicId],
                 'toggle-'.$candidate->purchaseSettlementPublicId,
-                $this->candidateButtonLabel($candidate, $selectedHere),
+                $this->candidateButtonLabel($candidate, $selectedHere, $locale),
                 $selectedHere ? TelegramInlineButtonStyle::Primary : null,
             )];
         }
@@ -665,7 +666,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
         foreach ($candidates as $index => $candidate) {
             $total += $candidate->amountIrr;
             if ($index < 10) {
-                $lines[] = ($index + 1).'. '.$candidate->offeringCode.' — '.number_format($candidate->amountIrr, 0, '.', ',').' IRR';
+                $lines[] = ($index + 1).'. '.$candidate->offeringCode.' — '.IrrTomanFormatter::format($candidate->amountIrr).' '.IrrTomanFormatter::unit($locale);
             }
         }
         if (count($candidates) > 10) {
@@ -675,7 +676,7 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
         }
         $text = $this->translation('telegram_agent.bulk.review', $locale, [
             'count' => (string) count($candidates),
-            'total' => number_format($total, 0, '.', ','),
+            'total' => IrrTomanFormatter::format($total),
             'items' => implode("\n", $lines),
         ]);
         $rows = [[
@@ -929,13 +930,13 @@ final readonly class TelegramAgentBulkPurchaseNavigationHandler
         }
     }
 
-    private function candidateButtonLabel(TelegramAgentBulkPurchaseCandidate $candidate, bool $selected): string
+    private function candidateButtonLabel(TelegramAgentBulkPurchaseCandidate $candidate, bool $selected, string $locale): string
     {
         $code = strlen($candidate->offeringCode) > 24
             ? substr($candidate->offeringCode, 0, 21).'...'
             : $candidate->offeringCode;
 
-        return ($selected ? '☑ ' : '☐ ').$code.' · '.number_format($candidate->amountIrr, 0, '.', ',').' IRR';
+        return ($selected ? '☑ ' : '☐ ').$code.' · '.IrrTomanFormatter::format($candidate->amountIrr).' '.IrrTomanFormatter::unit($locale);
     }
 
     /** @param array<string,int|string> $payload */

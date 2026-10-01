@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Reporting\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
+
 final class ReportTelegramFormatter
 {
     private const MAX_CHARACTERS = 3900;
@@ -58,6 +60,10 @@ final class ReportTelegramFormatter
 
     private function formatValue(int $value, string $unit): string
     {
+        if ($unit === 'IRR') {
+            return IrrTomanFormatter::format($value).' Toman';
+        }
+
         return number_format($value, 0, '.', ',').' '.$unit;
     }
 

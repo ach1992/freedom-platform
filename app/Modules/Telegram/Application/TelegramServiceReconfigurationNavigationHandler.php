@@ -11,6 +11,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceReconfigurationManager;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use App\Shared\Application\Clock;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use RuntimeException;
@@ -335,7 +336,7 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.services.reconfiguration.offering_button', $locale, [
                     'name' => $name,
-                    'price' => number_format($offering->basePriceIrr),
+                    'price' => IrrTomanFormatter::format($offering->basePriceIrr),
                 ]),
                 $callback->publicId,
                 TelegramInlineButtonStyle::Primary,
@@ -538,9 +539,9 @@ final readonly class TelegramServiceReconfigurationNavigationHandler
                 'target_plan' => $preview->targetOfferingCode,
                 'server' => $preview->targetSalesServerCode,
                 'protocol' => $preview->targetProtocolProfileCode,
-                'difference' => number_format($preview->priceDifferenceIrr),
-                'fee' => number_format($preview->operationFeeIrr),
-                'total' => number_format($preview->totalPriceIrr),
+                'difference' => IrrTomanFormatter::format($preview->priceDifferenceIrr),
+                'fee' => IrrTomanFormatter::format($preview->operationFeeIrr),
+                'total' => IrrTomanFormatter::format($preview->totalPriceIrr),
             ]),
             'preview',
             new TelegramInlineKeyboardSnapshot([

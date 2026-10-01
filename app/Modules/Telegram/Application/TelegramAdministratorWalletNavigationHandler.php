@@ -11,6 +11,7 @@ use App\Modules\Wallet\Application\AdministratorWalletCorrectionPreview;
 use App\Modules\Wallet\Application\AdministratorWalletOperationsService;
 use App\Modules\Wallet\Application\AdministratorWalletRefundCandidate;
 use App\Modules\Wallet\Domain\WalletCorrectionDirection;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use InvalidArgumentException;
@@ -1149,7 +1150,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
 
     private function formatIrr(int $amount): string
     {
-        return number_format($amount, 0, '.', ',');
+        return IrrTomanFormatter::format($amount);
     }
 
     private function queue(

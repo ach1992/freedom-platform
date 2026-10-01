@@ -8,6 +8,7 @@ use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramServiceAutoRenewPolicyManager;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use RuntimeException;
@@ -349,7 +350,7 @@ final readonly class TelegramServiceAutoRenewPolicyNavigationHandler
         if ($mode === null) {
             return $this->translation('telegram.navigation.admin.auto_renew_policy.unconfigured', $locale);
         }
-        $absoluteText = $absolute === null ? '-' : number_format($absolute).' IRR';
+        $absoluteText = $absolute === null ? '-' : IrrTomanFormatter::format($absolute).' '.IrrTomanFormatter::unit($locale);
         $percentageText = $percentage === null ? '-' : number_format($percentage).' bps';
 
         return $mode.' / abs='.$absoluteText.' / pct='.$percentageText;

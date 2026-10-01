@@ -19,6 +19,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedOrderProjecti
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedPaymentIntentProjection;
 use App\Modules\Telegram\Application\Contracts\TelegramSupportOwnedServiceReferenceResolver;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use Closure;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -1494,7 +1495,7 @@ final readonly class TelegramSupportNavigationHandler
                     'label' => $this->boundedButtonText($this->translation(
                         'telegram_support.business_reference.item',
                         $locale,
-                        ['id' => $item->publicId, 'amount' => number_format($item->amountIrr, 0, '.', ','), 'currency' => $item->currency],
+                        ['id' => $item->publicId, ...IrrTomanFormatter::forCurrency($item->amountIrr, $item->currency, $locale)],
                     )),
                 ];
             }
@@ -1516,7 +1517,7 @@ final readonly class TelegramSupportNavigationHandler
                     'label' => $this->boundedButtonText($this->translation(
                         'telegram_support.business_reference.item',
                         $locale,
-                        ['id' => $item->publicId, 'amount' => number_format($item->amountIrr, 0, '.', ','), 'currency' => $item->currency],
+                        ['id' => $item->publicId, ...IrrTomanFormatter::forCurrency($item->amountIrr, $item->currency, $locale)],
                     )),
                 ];
             }

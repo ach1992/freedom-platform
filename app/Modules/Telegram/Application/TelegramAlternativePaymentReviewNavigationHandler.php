@@ -8,6 +8,7 @@ use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Domain\TelegramDeliveryAction;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\DatabaseManager;
@@ -480,9 +481,7 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
                 'subject' => $case->subjectPublicId,
                 'provider' => $case->providerCode,
                 'reference' => $case->reference ?? $this->translation($key.'not_available', $locale),
-                'amount' => $case->amount === null
-                    ? $this->translation($key.'not_available', $locale)
-                    : number_format($case->amount).' '.($case->currency ?? ''),
+                'amount' => $this->reviewAmount($case, $locale),
                 'private' => $this->translation($key.($case->privateEvidenceAvailable ? 'yes' : 'no'), $locale),
             ]);
             $open = $this->callbacks->issue(
@@ -554,9 +553,7 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
             'subject' => $case->subjectPublicId,
             'provider' => $case->providerCode,
             'reference' => $case->reference ?? $this->translation($key.'not_available', $locale),
-            'amount' => $case->amount === null
-                ? $this->translation($key.'not_available', $locale)
-                : number_format($case->amount).' '.($case->currency ?? ''),
+            'amount' => $this->reviewAmount($case, $locale),
             'private' => $this->translation($key.($case->privateEvidenceAvailable ? 'yes' : 'no'), $locale),
             'candidates' => $candidates,
             'confirmations' => $case->minimumConfirmations === null
@@ -748,6 +745,17 @@ final readonly class TelegramAlternativePaymentReviewNavigationHandler
         }
 
         return [$kind, strtoupper($review)];
+    }
+
+    private function reviewAmount(TelegramAlternativePaymentReviewCase $case, string $locale): string
+    {
+        if ($case->amount === null) {
+            return $this->translation('telegram.navigation.admin.payment_reviews.not_available', $locale);
+        }
+
+        $presentation = IrrTomanFormatter::forCurrency($case->amount, $case->currency ?? '', $locale);
+
+        return trim($presentation['amount'].' '.$presentation['currency']);
     }
 
     private function locale(int $userId): string

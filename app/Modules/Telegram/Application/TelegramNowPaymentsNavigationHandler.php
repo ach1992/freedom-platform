@@ -10,6 +10,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseNowPaymen
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseOrder;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchasePaymentMethods;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use InvalidArgumentException;
@@ -447,7 +448,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 'pay_currency' => strtoupper((string) $state['nowpayments_pay_currency']),
                 'pay_address' => (string) $state['nowpayments_pay_address'],
                 'price_usd' => (string) $state['nowpayments_price_amount_usd'],
-                'rate_irr' => (string) $state['nowpayments_rate_irr'],
+                'rate_irr' => IrrTomanFormatter::formatDecimalIrr((string) $state['nowpayments_rate_irr']),
                 'rate_source' => (string) $state['nowpayments_rate_source'],
             ]),
             'payment',

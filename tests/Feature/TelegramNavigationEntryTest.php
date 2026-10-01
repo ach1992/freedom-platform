@@ -2577,8 +2577,8 @@ final class TelegramNavigationEntryTest extends TestCase
         self::assertStringNotContainsString('national_id', $presentation);
         self::assertStringContainsString($userPublicId, $presentation);
         self::assertStringContainsString('******7891', $presentation);
-        self::assertStringContainsString('700,000', $presentation);
-        self::assertStringContainsString('125,000', $presentation);
+        self::assertStringContainsString('موجودی قابل استفاده نقدی: 70,000 تومان', $presentation);
+        self::assertStringContainsString('موجودی تشویقی قابل استفاده: 12,500 تومان', $presentation);
         self::assertStringContainsString($referralToken, $presentation);
         self::assertStringContainsString($referralLink, $presentation);
         self::assertStringNotContainsString($rawNationalId, $presentation);
@@ -4694,7 +4694,7 @@ SQL);
         $catalogPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('خرید سرویس', $catalogPresentation);
         self::assertStringContainsString('پلن خرید — نسخه پایه', $catalogPresentation);
-        self::assertStringContainsString('900,000', $catalogPresentation);
+        self::assertStringContainsString('90,000 تومان', $catalogPresentation);
         self::assertSame($before, $this->purchaseMutationCounts());
 
         $item = DB::table('telegram_interaction_callbacks')
@@ -4719,6 +4719,7 @@ SQL);
         self::assertStringNotContainsString('panel_connection_id', $common);
         self::assertStringNotContainsString('پلن خرید — نسخه پایه', $common);
         self::assertStringNotContainsString('900,000', $common);
+        self::assertStringNotContainsString('90,000 تومان', $common);
 
         $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
         $processor->process('123456789', 6953);
@@ -4853,8 +4854,8 @@ SQL);
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('پیش‌فاکتور خرید سرویس', $presentation);
         self::assertStringContainsString(str_pad('01K', 26, '0'), $presentation);
-        self::assertStringContainsString('900,000 IRR', $presentation);
-        self::assertStringContainsString('تخفیف: 0 IRR', $presentation);
+        self::assertStringContainsString('90,000 تومان', $presentation);
+        self::assertStringContainsString('تخفیف: 0 تومان', $presentation);
         self::assertStringContainsString('هنوز هیچ پرداخت، رزرو ظرفیت، سفارش یا پروویژنینگی ایجاد نشده است.', $presentation);
         self::assertSame($before, $this->purchaseMutationCounts());
 
@@ -4907,7 +4908,7 @@ SQL);
         self::assertCount(2, $quotes->calls);
         $englishPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('Service Purchase Quote', $englishPresentation);
-        self::assertStringContainsString('Final amount: 900,000 IRR', $englishPresentation);
+        self::assertStringContainsString('Final amount: 90,000 Toman', $englishPresentation);
         self::assertStringContainsString('No payment, capacity reservation, order, or provisioning has been created yet.', $englishPresentation);
         self::assertStringNotContainsString('پیش‌فاکتور خرید سرویس', $englishPresentation);
 
@@ -5101,8 +5102,8 @@ SQL);
 
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('پیش‌فاکتور خرید سرویس', $presentation);
-        self::assertStringContainsString('تخفیف: 90,000 IRR', $presentation);
-        self::assertStringContainsString('مبلغ نهایی: 810,000 IRR', $presentation);
+        self::assertStringContainsString('تخفیف: 9,000 تومان', $presentation);
+        self::assertStringContainsString('مبلغ نهایی: 81,000 تومان', $presentation);
         self::assertStringNotContainsString($rawCode, $presentation);
         $common = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
         self::assertStringNotContainsString($rawCode, $common);
@@ -5508,7 +5509,7 @@ SQL);
         $durable = $this->navigationCommonDurableEvidence($sessionId, 9740);
         self::assertStringNotContainsString('4242424242424242', $durable);
         self::assertStringContainsString(str_pad('01R', 26, '0'), $durable);
-        self::assertStringContainsString('911,000', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('91,100 تومان', $this->latestConfidentialPresentation());
         self::assertStringContainsString('424242******4242', $this->latestConfidentialPresentation());
         self::assertStringContainsString('تسویه فقط با شواهد معتبر بانکی', $this->latestConfidentialPresentation());
 
@@ -5576,7 +5577,7 @@ SQL);
         self::assertArrayNotHasKey('ledger_account_id', $confirmPayload);
         self::assertArrayNotHasKey('available_balance_irr', $confirmPayload);
         self::assertStringContainsString('تأیید پرداخت با کیف پول', $this->latestConfidentialPresentation());
-        self::assertStringContainsString('910,000', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('91,000 تومان', $this->latestConfidentialPresentation());
         self::assertStringNotContainsString('ledger_account_id', $this->navigationCommonDurableEvidence($sessionId, 9730));
         self::assertStringNotContainsString('wallet_account_id', $this->navigationCommonDurableEvidence($sessionId, 9730));
 
@@ -8361,7 +8362,7 @@ SQL);
         $this->accept($this->callbackPayload(7003, $telegramUserId, 'navigation_admin_rate', 'fa', $rateToken));
         $processor->process('123456789', 7003);
         $ratePresentation = $this->latestConfidentialPresentation();
-        self::assertStringContainsString('900,000', $ratePresentation);
+        self::assertStringContainsString('90,000 تومان', $ratePresentation);
         self::assertStringContainsString('USDT', $ratePresentation);
         self::assertStringContainsString('NOWPayments', $ratePresentation);
         self::assertStringNotContainsString('payments.usdt.manage', $ratePresentation);
@@ -8407,7 +8408,7 @@ SQL);
         );
         $confirmPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('تأیید تغییر نرخ', $confirmPresentation);
-        self::assertStringContainsString('910,000', $confirmPresentation);
+        self::assertStringContainsString('91,000 تومان', $confirmPresentation);
         self::assertStringContainsString('NOWPayments', $confirmPresentation);
         self::assertStringContainsString('هیچ تغییری ثبت نمی‌شود', $confirmPresentation);
 
@@ -8481,7 +8482,7 @@ SQL);
         self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
         $updatedPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('با موفقیت ثبت شد', $updatedPresentation);
-        self::assertStringContainsString('910,000', $updatedPresentation);
+        self::assertStringContainsString('91,000 تومان', $updatedPresentation);
     }
 
     public function test_admin_usdt_rate_confirmation_reauthorizes_after_permission_revocation(): void
@@ -9497,7 +9498,7 @@ SQL);
         self::assertStringContainsString('Agent Report', $presentation);
         self::assertStringContainsString('Period: Last 30 days', $presentation);
         self::assertStringContainsString('Purchases: 0', $presentation);
-        self::assertStringContainsString('Gross paid: 0 IRR', $presentation);
+        self::assertStringContainsString('Gross paid: 0 Toman', $presentation);
         self::assertStringContainsString('Materialized sales/orders: 0', $presentation);
         self::assertStringContainsString('Purchased services: 0', $presentation);
         self::assertSame(4, DB::table('telegram_interaction_callbacks')

@@ -69,7 +69,7 @@ Inviter set: :has_inviter
 Referral locked: :referral_locked',
         ],
         'account' => [
-            'view' => "My Account\n\nAccount ID: :public_id\nType: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\nIdentity items:\n:identity_items\nJoined: :joined_at\nLast seen: :last_seen_at\n\nWallet\nCash available: :cash_available IRR\nCash on hold: :cash_holds IRR\nPromotional available: :promotional_available IRR\n\nReferral\nYour referral code: :referral_token\nYour referral link: :referral_link\nInviter set: :has_inviter\nReferral locked: :referral_locked",
+            'view' => "My Account\n\nAccount ID: :public_id\nType: :account_type\nStatus: :account_status\nTier: :tier\nPhone verification: :phone_verification\nIdentity verification: :identity_verification\nIdentity items:\n:identity_items\nJoined: :joined_at\nLast seen: :last_seen_at\n\nWallet\nCash available: :cash_available Toman\nCash on hold: :cash_holds Toman\nPromotional available: :promotional_available Toman\n\nReferral\nYour referral code: :referral_token\nYour referral link: :referral_link\nInviter set: :has_inviter\nReferral locked: :referral_locked",
             'identity_item' => '• :type — :masked (:state)',
             'identity_none' => '• None',
             'not_available' => 'Not available',
@@ -302,7 +302,7 @@ Preview buttons intentionally execute no real action.',
                 'item' => "#:number — :kind\nID: :id\nState: :state\nOwner: :owner\nProvider: :provider\nReference: :reference\nAmount: :amount",
                 'not_available' => 'Not available',
                 'masked_suffix' => ' (masked)',
-                'amount' => ':amount IRR',
+                'amount' => ':amount Toman',
                 'kinds' => [
                     'user' => 'User',
                     'order' => 'Order',
@@ -359,11 +359,11 @@ Preview buttons intentionally execute no real action.',
                 'message-buttons-authorization-lost' => 'Direct-message button authorization changed. Review the target again.',
             ],
             'usdt_rate' => [
-                'view' => "Manual USDT Rate\n\nCurrent rate: :rate IRR per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",
+                'view' => "Manual USDT Rate\n\nCurrent rate: :rate Toman per USDT\nSource: :source\nManaged version: :version\n\nThe same rate is used for direct USDT and, under the current Owner policy, as the USD pricing proxy for NOWPayments.",
                 'unset' => "Manual USDT Rate\n\nNo managed rate or bootstrap fallback is currently available.\n\nThis setting is the shared direct-USDT rate and the USD pricing proxy for NOWPayments.",
                 'edit_button' => 'Change rate',
                 'prompt' => "Change Manual USDT Rate\n\nSend the new IRR amount per USDT as a number only.\nExample: 900000\n\nPersian and Arabic digits are also accepted.",
-                'confirm' => "Confirm Manual USDT Rate Change\n\nNew rate: :rate IRR per USDT\n\nThis rate affects future direct-USDT pricing and the NOWPayments USD pricing proxy. Existing payment snapshots are not rewritten.\n\nNo change is saved until you press “Confirm rate change”.",
+                'confirm' => "Confirm Manual USDT Rate Change\n\nNew rate: :rate Toman per USDT\n\nThis rate affects future direct-USDT pricing and the NOWPayments USD pricing proxy. Existing payment snapshots are not rewritten.\n\nNo change is saved until you press “Confirm rate change”.",
                 'confirm_button' => 'Confirm rate change',
                 'invalid' => "The rate is invalid or outside the configured allowed bounds.\n\nSend a valid IRR amount per USDT.",
                 'updated_notice' => 'The managed rate was saved successfully.',
@@ -383,7 +383,7 @@ Page :page of :total_pages — :total_items available option(s)',
             'list_item' => '#:number — :plan
 Category: :category
 Mode: :mode
-Base price: :price IRR
+Base price: :price Toman
 Duration: :duration days',
             'empty' => 'Buy Service
 
@@ -397,7 +397,7 @@ No currently eligible service offering is available for your account.',
 Category: :category
 Plan: :plan
 Mode: :mode
-Base price: :price IRR
+Base price: :price Toman
 Duration: :duration days
 Data: :data
 Device limit: :devices
@@ -493,25 +493,25 @@ This is a recorded commercial snapshot only. No payment, capacity reservation, o
             'auto_renew' => [
                 'button' => 'Auto-renew',
                 'overview' => "Auto-renew\n\nStatus: :status\n:notice\nChoose a renewal package. The accepted price is calculated through the same canonical pricing path when the setting is saved.",
-                'enabled' => 'Enabled — package :package — accepted price :price IRR',
+                'enabled' => 'Enabled — package :package — accepted price :price Toman',
                 'disabled' => 'Disabled',
                 'stale' => 'The Service state or selected package changed; current information was reloaded.',
-                'package_button' => ':name — :price IRR',
+                'package_button' => ':name — :price Toman',
                 'disable_button' => 'Disable auto-renew',
-                'confirm_enable' => "Confirm auto-renew with package “:name”?\nCurrent package price: :price IRR. The accepted price and price-change policy are versioned by the canonical authority.",
+                'confirm_enable' => "Confirm auto-renew with package “:name”?\nCurrent package price: :price Toman. The accepted price and price-change policy are versioned by the canonical authority.",
                 'confirm_disable' => "Confirm disabling auto-renew for package “:name”?\nFuture automatic renewals stop while prior history is preserved.",
                 'confirm_button' => 'Confirm auto-renew',
-                'result_enabled' => 'Auto-renew is enabled. Package: :package — accepted price: :price IRR.',
+                'result_enabled' => 'Auto-renew is enabled. Package: :package — accepted price: :price Toman.',
                 'result_disabled' => 'Auto-renew is disabled. Recorded package: :package.',
             ],
             'reconfiguration' => [
                 'button' => 'Change plan / server / protocol',
                 'offering_list' => "Change Service\n\nChoose the target plan. :notice",
-                'offering_button' => ':name — :price IRR',
+                'offering_button' => ':name — :price Toman',
                 'route_list' => 'Choose the target server. Only compatible, active routes with capacity are shown.',
                 'route_auto' => 'Select server automatically',
                 'protocol_list' => 'Choose the target protocol.',
-                'preview' => "Service change preview\n\nCurrent plan: :source_plan\nTarget plan: :target_plan\nTarget server: :server\nTarget protocol: :protocol\nPrice difference: :difference IRR\nOperation fee: :fee IRR\nTotal: :total IRR",
+                'preview' => "Service change preview\n\nCurrent plan: :source_plan\nTarget plan: :target_plan\nTarget server: :server\nTarget protocol: :protocol\nPrice difference: :difference Toman\nOperation fee: :fee Toman\nTotal: :total Toman",
                 'confirm_paid' => 'Continue to payment',
                 'confirm_free' => 'Confirm free change',
                 'stale' => 'The selected option is no longer valid; current options were reloaded.',
