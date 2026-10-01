@@ -35,6 +35,7 @@ final readonly class HttpTelegramMembershipLookup implements TelegramMembershipL
                 ->acceptJson()
                 ->timeout($this->configuration->apiTimeoutSeconds)
                 ->connectTimeout(min(5, $this->configuration->apiTimeoutSeconds))
+                ->withoutRedirecting()
                 ->post(
                     $this->configuration->apiBaseUrl.'/bot'.$this->configuration->botToken.'/getChatMember',
                     [
