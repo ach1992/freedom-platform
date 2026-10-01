@@ -10,13 +10,11 @@ This document is the canonical safety contract for **deployment and privileged/l
 
 A deployed tree, staging host, persistent execution workspace, or Actions checkout is never a second project source of truth. Execute operational actions only when the owning task/release authorizes them and the implementation exists on the exact GitHub revision.
 
-## GitHub repository Environments
+## Protected operational boundary
 
-GitHub repository Environments are operational approval/secret boundaries consumed by workflows using `environment:`. They are separate from Actions runner infrastructure and from transient checkouts.
+Privileged/live acceptance is an operational action, not ordinary CI. An execution tool, connected host, repository secret, or checked-out branch never grants mutation authority by itself.
 
-A workflow referencing an Environment does not prove that reviewers, wait timers, or deployment-branch restrictions are configured. Immediately before privileged/live use, verify both the exact workflow source and the live Environment protection settings. Missing/unreadable protection settings must be treated as unknown or absent for the decision that depends on them, not silently assumed safe.
-
-The guarded provider mutation definition references GitHub Environment `provider-live-acceptance`. Its workflow source and live GitHub settings are jointly authoritative for current branch/approval restrictions.
+Immediately before a privileged provider acceptance run, verify the owning Issue's current gate, the exact candidate commit, the exact provider version, the Owner-approved disposable/non-production target, the credential source, and the approved operational control channel. Missing or unreadable protection/target evidence must be treated as unknown and therefore ineligible for mutation.
 
 ## Secret and credential rules
 
@@ -60,11 +58,11 @@ Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-st
 
 ### Provider Live Acceptance
 
-`.github/workflows/provider-live-acceptance.yml` defines the privileged disposable acceptance source for the pinned PasarGuard `5.2.1` and Marzban `0.8.4` contracts. It is not normal CI. The manual workflow requires an explicit provider selector plus that provider's exact mutation sentinel, runs only from `main`, binds each provider job to GitHub Environment `provider-live-acceptance`, keeps repository-token permissions read-only, and consumes only the selected provider's protected credential identifiers in the validation/execution steps. A provider run uses a deterministic disposable remote identity, authoritative discovery, bounded cleanup and no blind mutation replay after an uncertain result.
+Live provider acceptance is intentionally **not** exposed as a standing GitHub Actions mutation workflow. The repository-owned guarded entrypoints are `scripts/ci/pasarguard-live-acceptance.php` and `scripts/ci/marzban-live-acceptance.php`; their tested harnesses enforce the exact provider-specific confirmation sentinels, pinned provider version checks, deterministic disposable remote identity, authoritative discovery/reconciliation, bounded cleanup, and no blind mutation replay after an uncertain result.
 
-Environment binding is not proof that reviewers, wait timers, or branch restrictions are actually configured. Verify the live Environment protection state and the exact disposable/non-production target immediately before any provider mutation as required above. A read-only version/capability failure must be resolved before the corresponding mutation job is considered eligible.
+Run an entrypoint only from an exact reviewed candidate on the Owner-approved disposable/non-production acceptance host through the approved operational control channel. Install the locked dependency set for that exact candidate, keep TLS verification enabled, inject credentials only through the protected host/runtime boundary, and use a deterministic run identifier that contains no secret or customer data. Capture only the sanitized JSON/result evidence required by the owning release task.
 
-Do not promote/enable a privileged provider workflow merely to discover whether credentials exist. Do not run a mutation workflow merely to discover whether credentials exist.
+A read-only version/capability failure must be resolved before the corresponding live harness is eligible. Do not execute a live harness merely to discover whether credentials or target configuration exist, and do not create a standing remote-shell or Actions mutation path for convenience.
 
 ## Production layout
 
