@@ -4,12 +4,6 @@ declare(strict_types=1);
 
 use App\Modules\Operations\Application\UpdateMigrationIdentity;
 use App\Modules\Operations\Infrastructure\PharUpdatePackageVerifier;
-use PharData;
-use PharFileInfo;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
-use RuntimeException;
-use Throwable;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
