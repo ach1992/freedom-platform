@@ -64,7 +64,6 @@ return [
             'APP_DEBUG',
             'APP_URL',
             'APP_VERSION',
-            'APP_TIMEZONE',
             'BUSINESS_TIMEZONE',
             'APP_LOCALE',
             'APP_FALLBACK_LOCALE',
