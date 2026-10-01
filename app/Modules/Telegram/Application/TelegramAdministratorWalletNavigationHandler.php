@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
@@ -1149,7 +1150,7 @@ final readonly class TelegramAdministratorWalletNavigationHandler
 
     private function formatIrr(int $amount): string
     {
-        return number_format($amount, 0, '.', ',');
+        return IrrTomanFormatter::format($amount);
     }
 
     private function queue(
