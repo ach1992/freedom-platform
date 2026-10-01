@@ -4908,7 +4908,7 @@ SQL);
         self::assertCount(2, $quotes->calls);
         $englishPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('Service Purchase Quote', $englishPresentation);
-        self::assertStringContainsString('Final amount: 900,000 IRR', $englishPresentation);
+        self::assertStringContainsString('Final amount: 90,000 Toman', $englishPresentation);
         self::assertStringContainsString('No payment, capacity reservation, order, or provisioning has been created yet.', $englishPresentation);
         self::assertStringNotContainsString('پیش‌فاکتور خرید سرویس', $englishPresentation);
 
