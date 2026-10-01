@@ -58,9 +58,11 @@ Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-st
 
 `.github/workflows/provider-readiness.yml` defines the manual read-only readiness path for the pinned Marzban `0.8.4` and PasarGuard `5.2.1` contracts. It runs on the pinned GitHub-hosted Ubuntu runner, accepts only the explicit `READ_ONLY_PROVIDER_CHECK` confirmation plus a bounded provider selector, and consumes only the selected provider's test credential identifiers in that provider's steps. Readiness may authenticate and read version/capability/target-discovery endpoints, but it must not create, update, suspend, rotate, or delete a remote service.
 
-### Provider Live Acceptance - PasarGuard
+### Provider Live Acceptance
 
-`.github/workflows/provider-live-acceptance.yml` currently defines the privileged disposable PasarGuard provider-mutation path where/when it is deliberately registered for a controlled acceptance task. It is not normal CI. The definition uses GitHub Environment `provider-live-acceptance`, explicit confirmation, branch guards, and only the current workflow-defined inputs/credentials. Environment binding is not proof that reviewers, wait timers, or branch restrictions are actually configured; verify the live Environment protection state immediately before any provider mutation as required above.
+`.github/workflows/provider-live-acceptance.yml` defines the privileged disposable acceptance source for the pinned PasarGuard `5.2.1` and Marzban `0.8.4` contracts. It is not normal CI. The manual workflow requires an explicit provider selector plus that provider's exact mutation sentinel, runs only from `main`, binds each provider job to GitHub Environment `provider-live-acceptance`, keeps repository-token permissions read-only, and consumes only the selected provider's protected credential identifiers in the validation/execution steps. A provider run uses a deterministic disposable remote identity, authoritative discovery, bounded cleanup and no blind mutation replay after an uncertain result.
+
+Environment binding is not proof that reviewers, wait timers, or branch restrictions are actually configured. Verify the live Environment protection state and the exact disposable/non-production target immediately before any provider mutation as required above. A read-only version/capability failure must be resolved before the corresponding mutation job is considered eligible.
 
 Do not promote/enable a privileged provider workflow merely to discover whether credentials exist. Do not run a mutation workflow merely to discover whether credentials exist.
 
