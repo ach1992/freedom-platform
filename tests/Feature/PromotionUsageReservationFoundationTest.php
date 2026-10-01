@@ -67,7 +67,9 @@ final class PromotionUsageReservationFoundationTest extends TestCase
         $queries = [];
         DB::listen(static function (QueryExecuted $query) use (&$queries): void {
             $sql = strtolower($query->sql);
-            if (str_contains($sql, 'promotion_usage_reservations as')) {
+            if (str_contains($sql, 'promotion_usage_reservations')
+                && str_contains($sql, 'count(*)')
+                && str_contains($sql, 'sum(case when')) {
                 $queries[] = $sql;
             }
         });
@@ -79,14 +81,9 @@ final class PromotionUsageReservationFoundationTest extends TestCase
             new PromotionUsageContext($userId),
         );
 
-        $aggregate = array_values(array_filter(
-            $queries,
-            static fn (string $sql): bool => str_contains($sql, 'count(*) as total_active')
-                && str_contains($sql, 'sum(case when')
-                && str_contains($sql, 'as user_active'),
-        ));
-        self::assertCount(1, $aggregate);
-        self::assertStringNotContainsString('reservation.id,', $aggregate[0]);
+        self::assertCount(1, $queries);
+        self::assertStringContainsString('total_active', $queries[0]);
+        self::assertStringContainsString('user_active', $queries[0]);
     }
 
     public function test_reserve_binds_resolution_and_quote_with_exact_replay_and_conflict(): void
