@@ -4854,8 +4854,8 @@ SQL);
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('پیش‌فاکتور خرید سرویس', $presentation);
         self::assertStringContainsString(str_pad('01K', 26, '0'), $presentation);
-        self::assertStringContainsString('900,000 IRR', $presentation);
-        self::assertStringContainsString('تخفیف: 0 IRR', $presentation);
+        self::assertStringContainsString('90,000 تومان', $presentation);
+        self::assertStringContainsString('تخفیف: 0 تومان', $presentation);
         self::assertStringContainsString('هنوز هیچ پرداخت، رزرو ظرفیت، سفارش یا پروویژنینگی ایجاد نشده است.', $presentation);
         self::assertSame($before, $this->purchaseMutationCounts());
 
@@ -5102,8 +5102,8 @@ SQL);
 
         $presentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('پیش‌فاکتور خرید سرویس', $presentation);
-        self::assertStringContainsString('تخفیف: 90,000 IRR', $presentation);
-        self::assertStringContainsString('مبلغ نهایی: 810,000 IRR', $presentation);
+        self::assertStringContainsString('تخفیف: 9,000 تومان', $presentation);
+        self::assertStringContainsString('مبلغ نهایی: 81,000 تومان', $presentation);
         self::assertStringNotContainsString($rawCode, $presentation);
         $common = $this->navigationCommonDurableEvidence((int) $session->id, $telegramUserId);
         self::assertStringNotContainsString($rawCode, $common);
@@ -9498,7 +9498,7 @@ SQL);
         self::assertStringContainsString('Agent Report', $presentation);
         self::assertStringContainsString('Period: Last 30 days', $presentation);
         self::assertStringContainsString('Purchases: 0', $presentation);
-        self::assertStringContainsString('Gross paid: 0 IRR', $presentation);
+        self::assertStringContainsString('Gross paid: 0 Toman', $presentation);
         self::assertStringContainsString('Materialized sales/orders: 0', $presentation);
         self::assertStringContainsString('Purchased services: 0', $presentation);
         self::assertSame(4, DB::table('telegram_interaction_callbacks')
