@@ -63,6 +63,8 @@ required_files=(
     scripts/ci/verify-readonly-staging-workflow.sh
     scripts/ci/MarzbanReadinessProbe.php
     scripts/ci/marzban-readonly-probe.php
+    scripts/ci/MarzbanLiveAcceptance.php
+    scripts/ci/marzban-live-acceptance.php
     scripts/ci/scan-git-secrets.sh
     scripts/ci/test-secret-scan.sh
     scripts/docs/generate-release-references.php
@@ -470,17 +472,44 @@ fi
 provider_live=.github/workflows/provider-live-acceptance.yml
 grep -F 'workflow_dispatch:' "$provider_live" >/dev/null \
     || fail 'provider live acceptance must remain manual-only'
+if grep -Eq '^[[:space:]]*(push|pull_request|pull_request_target|schedule|workflow_run|repository_dispatch):' "$provider_live"; then
+    fail 'provider live acceptance may not gain an automatic or repository-dispatch trigger'
+fi
 grep -F 'contents: read' "$provider_live" >/dev/null \
     || fail 'provider live acceptance must retain read-only repository permissions'
-grep -F 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance lost its explicit mutation sentinel'
-grep -F 'name: provider-live-acceptance' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance must retain the protected environment gate'
-grep -F 'pasarguard-live-acceptance.php' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance must retain the guarded acceptance entrypoint'
-grep -F 'secrets.PASARGUARD_TEST_ORIGIN' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance lost the protected origin input'
-grep -F 'secrets.PASARGUARD_TEST_API_KEY' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance lost the protected API-key input'
+grep -F 'cancel-in-progress: false' "$provider_live" >/dev/null \
+    || fail 'provider live mutation must not be cancelled mid-effect'
+for sentinel in MUTATE_DISPOSABLE_PASARGUARD_V5_2_1 MUTATE_DISPOSABLE_MARZBAN_V0_8_4; do
+    grep -F "$sentinel" "$provider_live" >/dev/null \
+        || fail "provider live acceptance lost required mutation sentinel: $sentinel"
+done
+[[ "$(grep -c -F 'name: provider-live-acceptance' "$provider_live")" -eq 2 ]] \
+    || fail 'each provider live job must retain the protected environment gate'
+for entrypoint in pasarguard-live-acceptance.php marzban-live-acceptance.php; do
+    grep -F "$entrypoint" "$provider_live" >/dev/null \
+        || fail "provider live acceptance lost guarded entrypoint: $entrypoint"
+done
+grep -F 'MarzbanLiveAcceptance.php' scripts/ci/marzban-live-acceptance.php >/dev/null \
+    || fail 'Marzban live entrypoint must delegate to the tested guarded harness'
+for provider in pasarguard marzban; do
+    grep -Fx "          - $provider" "$provider_live" >/dev/null \
+        || fail "provider live selector lost expected option: $provider"
+done
+mapfile -t provider_live_secrets < <(grep -oE 'secrets\.[A-Z0-9_]+' "$provider_live" | sed 's/^secrets\.//' | sort -u)
+expected_provider_live_secrets=(
+    MARZBAN_TEST_ORIGIN
+    MARZBAN_TEST_PASSWORD
+    MARZBAN_TEST_USERNAME
+    PASARGUARD_TEST_API_KEY
+    PASARGUARD_TEST_ORIGIN
+)
+[[ "${provider_live_secrets[*]}" == "${expected_provider_live_secrets[*]}" ]] \
+    || fail "provider live secret allowlist drifted: ${provider_live_secrets[*]}"
+if grep -Eq '^[[:space:]]{4}env:[[:space:]]*
+
+printf '%s\n' 'Project control verification passed.'
+ "$provider_live"; then
+    fail 'provider live credentials must remain step-scoped rather than job-scoped'
+fi
 
 printf '%s\n' 'Project control verification passed.'
