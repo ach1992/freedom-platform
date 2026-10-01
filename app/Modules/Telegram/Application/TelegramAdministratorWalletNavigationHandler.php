@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
-use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramAdministratorCustomerTargetDiscovery;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
@@ -12,6 +11,7 @@ use App\Modules\Wallet\Application\AdministratorWalletCorrectionPreview;
 use App\Modules\Wallet\Application\AdministratorWalletOperationsService;
 use App\Modules\Wallet\Application\AdministratorWalletRefundCandidate;
 use App\Modules\Wallet\Domain\WalletCorrectionDirection;
+use App\Shared\Application\IrrTomanFormatter;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
 use InvalidArgumentException;
