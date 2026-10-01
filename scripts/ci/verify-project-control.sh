@@ -225,6 +225,8 @@ fi
 # Current repository workflows use pinned GitHub-hosted execution. Privileged provider acceptance uses source-owned operational harnesses rather than a standing self-hosted workflow.
 test ! -e .github/workflows/staging-readiness.yml \
     || fail 'retired branch-selectable staging-readiness workflow path must remain absent'
+test ! -e .github/workflows/provider-live-acceptance.yml \
+    || fail 'retired provider live workflow path must remain absent'
 test -s .github/workflows/staging-readiness-runtime.yml \
     || fail 'default-branch staging-readiness runtime workflow is missing'
 
@@ -386,8 +388,6 @@ grep -A3 -F 'concurrency:' "$staging_readonly" | grep -F 'cancel-in-progress: tr
     || fail 'staging-readiness must cancel superseded repository-dispatch runs'
 grep -A3 -F 'concurrency:' .github/workflows/provider-readiness.yml | grep -F 'cancel-in-progress: true' >/dev/null \
     || fail 'provider-readiness must cancel superseded read-only runs'
-grep -A3 -F 'concurrency:' .github/workflows/provider-live-acceptance.yml | grep -F 'cancel-in-progress: false' >/dev/null \
-    || fail 'provider live mutation must not be cancelled mid-effect'
 
 # Provider workflow safeguards remain explicit and fail closed.
 provider_readonly=.github/workflows/provider-readiness.yml
@@ -439,44 +439,10 @@ if grep -Eq '^[[:space:]]+(sudo|curl|wget|ssh|scp|rsync|git[[:space:]]+push|php[
     fail 'provider-readiness contains a command outside its bounded read-only provider contract'
 fi
 
-provider_live=.github/workflows/provider-live-acceptance.yml
-grep -F 'workflow_dispatch:' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance must remain manual-only'
-if grep -Eq '^[[:space:]]*(push|pull_request|pull_request_target|schedule|workflow_run|repository_dispatch):' "$provider_live"; then
-    fail 'provider live acceptance may not gain an automatic or repository-dispatch trigger'
-fi
-grep -F 'contents: read' "$provider_live" >/dev/null \
-    || fail 'provider live acceptance must retain read-only repository permissions'
-grep -F 'cancel-in-progress: false' "$provider_live" >/dev/null \
-    || fail 'provider live mutation must not be cancelled mid-effect'
-for sentinel in MUTATE_DISPOSABLE_PASARGUARD_V5_2_1 MUTATE_DISPOSABLE_MARZBAN_V0_8_4; do
-    grep -F "$sentinel" "$provider_live" >/dev/null \
-        || fail "provider live acceptance lost required mutation sentinel: $sentinel"
-done
-[[ "$(grep -c -F 'name: provider-live-acceptance' "$provider_live")" -eq 2 ]] \
-    || fail 'each provider live job must retain the protected environment gate'
-for entrypoint in pasarguard-live-acceptance.php marzban-live-acceptance.php; do
-    grep -F "$entrypoint" "$provider_live" >/dev/null \
-        || fail "provider live acceptance lost guarded entrypoint: $entrypoint"
-done
+# Guarded live-provider entrypoints remain source-owned and delegate to tested harnesses.
+grep -F 'PasarGuardLiveAcceptance.php' scripts/ci/pasarguard-live-acceptance.php >/dev/null \
+    || fail 'PasarGuard live entrypoint must delegate to its tested harness'
 grep -F 'MarzbanLiveAcceptance.php' scripts/ci/marzban-live-acceptance.php >/dev/null \
-    || fail 'Marzban live entrypoint must delegate to the tested guarded harness'
-for provider in pasarguard marzban; do
-    grep -Fx "          - $provider" "$provider_live" >/dev/null \
-        || fail "provider live selector lost expected option: $provider"
-done
-mapfile -t provider_live_secrets < <(grep -oE 'secrets\.[A-Z0-9_]+' "$provider_live" | sed 's/^secrets\.//' | sort -u)
-expected_provider_live_secrets=(
-    MARZBAN_TEST_ORIGIN
-    MARZBAN_TEST_PASSWORD
-    MARZBAN_TEST_USERNAME
-    PASARGUARD_TEST_API_KEY
-    PASARGUARD_TEST_ORIGIN
-)
-[[ "${provider_live_secrets[*]}" == "${expected_provider_live_secrets[*]}" ]] \
-    || fail "provider live secret allowlist drifted: ${provider_live_secrets[*]}"
-if grep -Eq '^      [A-Z0-9_]+: [$][{][{][[:space:]]+secrets[.]' "$provider_live"; then
-    fail 'provider live credentials must remain step-scoped rather than job-scoped'
-fi
+    || fail 'Marzban live entrypoint must delegate to its tested harness'
 
 printf '%s\n' 'Project control verification passed.'
