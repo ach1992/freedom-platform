@@ -29,7 +29,9 @@ entry_lines=$(wc -l < "$root/$composed")
 expanded_record=$(bash "$weigher" "$composed")
 expanded_weight=${expanded_record%%$'\t'*}
 expanded_weight=$((10#$expanded_weight))
-((expanded_weight > entry_lines))     || fail "trait-composed Feature weight must exceed entry-file LOC: entry=$entry_lines expanded=$expanded_weight"
+if ((expanded_weight <= entry_lines)); then
+    fail "trait-composed Feature weight must exceed entry-file LOC: entry=$entry_lines expanded=$expanded_weight"
+fi
 
 one="$tmpdir/one"
 bash "$selector" 1 0 > "$one"
@@ -63,18 +65,24 @@ weight_for() {
 
 verify_shards() {
     local count=$1
-    local ordered="$tmpdir/ordered-$count"
-    : > "$ordered"
+    local combined="$tmpdir/combined-$count"
+    : > "$combined"
 
     local min_weight=0
     local max_weight=0
     local weights=()
     local index
+
     for ((index = 0; index < count; index++)); do
         local shard="$tmpdir/shard-$count-$index"
+        local repeat="$tmpdir/shard-$count-$index-repeat"
+
         bash "$selector" "$count" "$index" > "$shard"
+        bash "$selector" "$count" "$index" > "$repeat"
+        cmp -s "$shard" "$repeat" || fail "$count-way shard $index assignment must be deterministic"
         [[ -s "$shard" ]] || fail "$count-way shard $index must be non-empty"
-        cat "$shard" >> "$ordered"
+
+        cat "$shard" >> "$combined"
 
         local weight
         weight=$(weight_for "$shard")
@@ -87,9 +95,20 @@ verify_shards() {
         fi
     done
 
-    cmp -s "$all" "$ordered"         || fail "$count-way shards must cover every Feature test exactly once in contiguous suite order"
+    local combined_sorted="$tmpdir/combined-$count-sorted"
+    sort "$combined" > "$combined_sorted"
+    cmp -s "$all" "$combined_sorted" || fail "$count-way shards must cover every Feature test exactly once"
+
+    local combined_count
+    local unique_count
+    combined_count=$(wc -l < "$combined")
+    unique_count=$(sort -u "$combined" | wc -l)
+    ((combined_count == unique_count)) || fail "$count-way shards must not duplicate Feature test entry files"
+
     ((min_weight > 0)) || fail 'shard static weight must be positive'
-    ((max_weight * 100 <= min_weight * 115))         || fail "$count-way shard static weights are imbalanced: ${weights[*]}"
+    if ((max_weight * 100 > min_weight * 115)); then
+        fail "$count-way shard static weights are imbalanced: ${weights[*]}"
+    fi
 
     printf 'Feature %s-way sharding invariants passed: weights %s\n' "$count" "${weights[*]}"
 }
