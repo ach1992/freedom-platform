@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramOwnedServiceAutoRenewManager;
@@ -215,7 +216,7 @@ final readonly class TelegramServiceAutoRenewNavigationHandler
             $rows[] = [new TelegramInlineCallbackButton(
                 $this->translation('telegram.navigation.services.auto_renew.package_button', $locale, [
                     'name' => $locale === 'en' && $package->nameEn !== null ? $package->nameEn : $package->nameFa,
-                    'price' => number_format($package->priceIrr),
+                    'price' => IrrTomanFormatter::format($package->priceIrr),
                 ]),
                 $callback->publicId,
                 $snapshot->enabled && $snapshot->configuredPackageCode === $package->code
@@ -252,7 +253,7 @@ final readonly class TelegramServiceAutoRenewNavigationHandler
         $status = $snapshot->enabled
             ? $this->translation('telegram.navigation.services.auto_renew.enabled', $locale, [
                 'package' => (string) $snapshot->configuredPackageCode,
-                'price' => number_format((int) $snapshot->acceptedPriceIrr),
+                'price' => IrrTomanFormatter::format((int) $snapshot->acceptedPriceIrr),
             ])
             : $this->translation('telegram.navigation.services.auto_renew.disabled', $locale);
         $text = $this->translation('telegram.navigation.services.auto_renew.overview', $locale, [
@@ -311,7 +312,7 @@ final readonly class TelegramServiceAutoRenewNavigationHandler
                 $locale,
                 [
                     'name' => $locale === 'en' && $package->nameEn !== null ? $package->nameEn : $package->nameFa,
-                    'price' => number_format($package->priceIrr),
+                    'price' => IrrTomanFormatter::format($package->priceIrr),
                 ],
             ),
             'confirm',
@@ -351,7 +352,7 @@ final readonly class TelegramServiceAutoRenewNavigationHandler
                     ? 'telegram.navigation.services.auto_renew.result_enabled'
                     : 'telegram.navigation.services.auto_renew.result_disabled',
                 $locale,
-                ['package' => $result->packageCode, 'price' => number_format($result->acceptedPriceIrr)],
+                ['package' => $result->packageCode, 'price' => IrrTomanFormatter::format($result->acceptedPriceIrr)],
             ),
             'result',
             new TelegramInlineKeyboardSnapshot([[
