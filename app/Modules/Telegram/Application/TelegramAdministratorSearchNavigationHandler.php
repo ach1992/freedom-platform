@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Domain\TelegramInteractionActionKind;
 use DomainException;
@@ -156,7 +157,7 @@ final readonly class TelegramAdministratorSearchNavigationHandler
                     'reference' => $reference,
                     'amount' => $item->amountIrr === null
                         ? $notAvailable
-                        : $this->translation($key.'amount', $locale, ['amount' => number_format($item->amountIrr)]),
+                        : $this->translation($key.'amount', $locale, ['amount' => IrrTomanFormatter::format($item->amountIrr)]),
                 ]);
             }
             $text = $this->translation($key.'results', $locale, ['items' => implode("\n\n", $lines)]);
