@@ -75,8 +75,13 @@ else
                 planning=true
                 ;;
 
-            README.md|AGENTS.md|CONTRIBUTING.md|CHANGELOG.md|LICENSE|.gitignore|.gitattributes|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/index.md|docs/development/*|docs/adr/*|evidence/README.md)
+            README.md|AGENTS.md|CONTRIBUTING.md|CHANGELOG.md|LICENSE|.gitignore|.gitattributes|.github/pull_request_template.md|.github/ISSUE_TEMPLATE/*|docs/index.md|docs/operations-guide.md|docs/provider-extension-guide.md|docs/reference/data-dictionary.md|docs/reference/permission-catalog.md|docs/development/*|docs/adr/*|evidence/README.md)
                 project_control=true
+                ;;
+
+            scripts/docs/generate-release-references.php)
+                project_control=true
+                style=true
                 ;;
 
             .github/CODEOWNERS|.github/dependabot.yml|.gitleaksignore)
