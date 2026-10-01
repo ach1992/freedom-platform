@@ -10,7 +10,7 @@ GitHub is the project source of truth. No Owner-maintained local or server check
 
 Ordinary runtime/CI commands execute through reviewed GitHub Actions on standard GitHub-hosted Linux runners. An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
 
-The exact `runs-on` selector in each workflow revision is authoritative for runner routing. Generic CI must use the pinned standard GitHub-hosted runner defined by `.github/workflows/ci.yml`; manual staging/provider workflows may retain explicit self-hosted selectors only as dormant/trusted operational contracts. Workflow/toolchain checks must validate the effective environment rather than assuming host-specific paths.
+The exact `runs-on` selector in each workflow revision is authoritative for runner routing. Every current repository workflow must use the pinned GitHub-hosted execution contract appropriate to that workflow; no current workflow depends on a self-hosted runner. Self-hosted execution remains only an optional future private/trusted capability. Privileged live provider mutation is intentionally outside normal Actions routing and uses the repository-owned guarded acceptance harnesses through the owning task's approved operational boundary. Workflow/toolchain checks must validate the effective environment rather than assuming host-specific paths.
 
 ## Using CI
 
@@ -67,7 +67,7 @@ The selector is deliberately conservative. It must not infer safety merely from 
 | operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
 | unknown/unclassified | fail safe to every normal validation domain and FULL real-engine scope when integration applies |
 
-Readiness/provider workflow definitions are control-plane surfaces, not application behavior. `staging-readiness-runtime.yml` retains its dedicated adversarial read-only verifier; provider workflow guards, runner selectors, concurrency and protected-operation constraints are enforced by the canonical project-control verifier. `provider-live-acceptance.yml` remains a privileged manual capability with its separate High/Critical review/Owner gates; classifying a YAML definition change as control-plane validation does not authorize or execute the live workflow. No wildcard `.github/workflows/*` downgrade exists.
+Readiness workflow definitions are control-plane surfaces, not application behavior. `staging-readiness-runtime.yml` retains its dedicated adversarial read-only verifier and `provider-readiness.yml` remains the bounded read-only provider probe; their runner selectors and non-mutation constraints are enforced by the canonical project-control verifier. Live provider acceptance is an operational harness, not a standing GitHub Actions mutation workflow, and retains its separate High/Critical review/Owner gates. No wildcard `.github/workflows/*` downgrade exists.
 
 Changes to the CI classifier/workflow/real-engine selector are self-modifying control-plane changes: representative classifier, selector and verifier-abuse cases run independently of the application integration result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior. Conversely, application/schema/database semantics that need the engine still require MariaDB 10.11 acceptance, but that acceptance may be TARGETED when the conservative selector proves a bounded candidate; engine requirement no longer implies an unconditional full Feature run.
 
