@@ -114,8 +114,8 @@ final readonly class OperationsCenterService
             $queueNames[] = $defaultQueue;
         }
 
-        /** @var list<string> $observedQueues */
-        $observedQueues = $this->database->connection()->table('worker_heartbeats')
+        /** @var list<string> $observedQueueGroups */
+        $observedQueueGroups = $this->database->connection()->table('worker_heartbeats')
             ->where('worker_id', '<>', 'scheduler')
             ->distinct()
             ->orderBy('queue')
@@ -124,7 +124,14 @@ final readonly class OperationsCenterService
             ->filter(static fn (mixed $queue): bool => is_string($queue) && $queue !== '')
             ->values()
             ->all();
-        array_push($queueNames, ...$observedQueues);
+        foreach ($observedQueueGroups as $queueGroup) {
+            foreach (explode(',', $queueGroup) as $queue) {
+                $queue = trim($queue);
+                if ($queue !== '' && preg_match('/\A[a-zA-Z0-9_.:-]{1,64}\z/', $queue) === 1) {
+                    $queueNames[] = $queue;
+                }
+            }
+        }
         $queueNames = array_slice(array_values(array_unique($queueNames)), 0, 20);
 
         if ($queueNames === []) {

@@ -309,6 +309,34 @@ final class OperationsCenterIntegrationTest extends TestCase
         }
     }
 
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_expands_observed_worker_queue_groups_into_individual_backlog_facts(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+        $now = now('UTC');
+
+        DB::table('worker_heartbeats')->insert([
+            'worker_id' => 'operations-queue-group-worker',
+            'queue' => 'provisioning,telegram-ingress,telegram-delivery,synchronization,default',
+            'host_hash' => hash('sha256', 'operations-queue-group-worker-host'),
+            'release_version' => 'test',
+            'boot_id' => null,
+            'last_seen_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+
+        foreach (['provisioning', 'telegram-ingress', 'telegram-delivery', 'synchronization', 'default'] as $queue) {
+            self::assertNotNull($snapshot->fact('queue.backlog.'.$queue));
+        }
+        foreach ($snapshot->facts as $fact) {
+            self::assertStringNotContainsString(',', $fact->code);
+        }
+    }
+
     public function test_snapshot_preserves_panel_and_worker_inventory_above_previous_row_bounds(): void
     {
         $administratorId = $this->ownerAdministrator();
