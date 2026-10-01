@@ -120,7 +120,6 @@ final readonly class OperationsCenterService
             ->distinct()
             ->orderBy('queue_identity')
             ->limit(21)
-            ->get()
             ->pluck('queue_identity')
             ->values()
             ->all();
