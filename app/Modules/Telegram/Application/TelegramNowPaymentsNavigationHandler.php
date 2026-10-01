@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Telegram\Application;
 
+use App\Shared\Application\IrrTomanFormatter;
 use App\Modules\Customers\Application\CustomerAccountSummaryService;
 use App\Modules\Localization\Application\LocalizationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseNowPaymentsPayment;
@@ -447,7 +448,7 @@ final readonly class TelegramNowPaymentsNavigationHandler
                 'pay_currency' => strtoupper((string) $state['nowpayments_pay_currency']),
                 'pay_address' => (string) $state['nowpayments_pay_address'],
                 'price_usd' => (string) $state['nowpayments_price_amount_usd'],
-                'rate_irr' => (string) $state['nowpayments_rate_irr'],
+                'rate_irr' => IrrTomanFormatter::formatDecimalIrr((string) $state['nowpayments_rate_irr']),
                 'rate_source' => (string) $state['nowpayments_rate_source'],
             ]),
             'payment',
