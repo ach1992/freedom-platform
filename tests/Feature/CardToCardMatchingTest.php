@@ -159,6 +159,92 @@ final class CardToCardMatchingTest extends TestCase
         self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'card_to_card')->count());
     }
 
+    /** @requirement C2C-003 C2C-004 PAY-002 PAY-003 QUA-010 */
+    public function test_reordered_bank_observation_cannot_regress_settled_state_or_duplicate_financial_effect(): void
+    {
+        $payment = $this->payment('reordered-bank-observation');
+        $occurredAt = $this->clock->value->modify('+2 minutes');
+        $settled = new BankTransactionObservation(
+            'fake-tx-reordered-bank-observation',
+            'fake-event-reordered-bank-observation-settled',
+            '4242424242424242',
+            $payment->payableAmountIrr,
+            'settled',
+            $occurredAt,
+            null,
+            null,
+            'reference-reordered-bank-observation',
+            hash('sha256', 'fake-bank-evidence:reordered-bank-observation:settled'),
+        );
+        $bank = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $settled,
+            'fake',
+            $this->correlation('bank-reordered-settled'),
+        );
+        $match = $this->app->make(CardToCardMatchingService::class)->match(
+            $bank->publicId,
+            $this->correlation('match-reordered-settled'),
+        );
+        self::assertNotNull($match->matchPublicId);
+        $captured = $this->app->make(CardToCardSettlementService::class)->capture(
+            $match->matchPublicId,
+            $this->correlation('capture-reordered-settled'),
+        );
+
+        $stalePending = new BankTransactionObservation(
+            'fake-tx-reordered-bank-observation',
+            'fake-event-reordered-bank-observation-stale-pending',
+            '4242424242424242',
+            $payment->payableAmountIrr,
+            'pending',
+            $occurredAt,
+            null,
+            null,
+            'reference-reordered-bank-observation',
+            hash('sha256', 'fake-bank-evidence:reordered-bank-observation:stale-pending'),
+        );
+
+        try {
+            $this->app->make(CardToCardBankTransactionService::class)->ingest(
+                'fake',
+                $stalePending,
+                'fake',
+                $this->correlation('bank-reordered-stale-pending'),
+            );
+            self::fail('A reordered stale bank observation must not regress a settled transaction.');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('C2C bank transaction state transition is invalid.', $exception->getMessage());
+        }
+
+        self::assertSame(
+            'settled',
+            DB::table('c2c_bank_transactions')->where('id', $bank->transactionId)->value('status'),
+        );
+        self::assertSame(
+            1,
+            DB::table('c2c_bank_transaction_events')
+                ->where('c2c_bank_transaction_id', $bank->transactionId)
+                ->count(),
+        );
+        self::assertSame(
+            1,
+            DB::table('purchase_settlements')->where('id', $captured->purchaseSettlementId)->count(),
+        );
+        self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'card_to_card')->count());
+
+        $duplicate = $this->app->make(CardToCardBankTransactionService::class)->ingest(
+            'fake',
+            $settled,
+            'fake',
+            $this->correlation('bank-reordered-settled-replay'),
+        );
+        self::assertTrue($duplicate->replayed);
+        self::assertSame($bank->transactionId, $duplicate->transactionId);
+        self::assertSame(1, DB::table('purchase_settlements')->where('id', $captured->purchaseSettlementId)->count());
+        self::assertSame(1, DB::table('payment_provider_transactions')->where('provider_code', 'card_to_card')->count());
+    }
+
     public function test_c2c_refund_cap_excludes_non_refundable_exact_adjustment_in_application_and_database(): void
     {
         $payment = $this->payment('refund-cap');

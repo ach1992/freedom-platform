@@ -583,6 +583,34 @@ jobs:
             test -s build/evidence/coverage/clover.xml
           fi
 
+      - name: Exercise Redis restart recovery
+        if: ${{ steps.integration_plan.outputs.run == 'true' && matrix.shard_index == 0 && steps.integration_plan.outputs.scope == 'FULL' && success() }}
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/evidence/tests
+          docker compose -f docker-compose.ci.yml restart redis
+          docker compose -f docker-compose.ci.yml up -d --wait redis
+          {
+            echo 'redis_restart=completed'
+            echo 'post_restart_probe=TelegramSharedRateLimiterTest'
+          } > build/evidence/tests/redis-restart-recovery.txt
+          COLUMNS=240 php vendor/bin/phpunit \
+            --configuration phpunit.xml \
+            --display-warnings \
+            --fail-on-warning \
+            --filter 'TelegramSharedRateLimiterTest::test_interaction_and_outbound_budgets_are_atomic_bounded_and_scoped' \
+            tests/Feature/TelegramSharedRateLimiterTest.php \
+            2>&1 | tee -a build/evidence/tests/redis-restart-recovery.txt
+          COLUMNS=240 php vendor/bin/phpunit \
+            --configuration phpunit.xml \
+            --display-warnings \
+            --fail-on-warning \
+            --filter 'HealthCheckCommandTest::test_critical_health_check_passes_with_required_services' \
+            tests/Feature/HealthCheckCommandTest.php \
+            2>&1 | tee -a build/evidence/tests/redis-restart-recovery.txt
+
       - name: Summarize slow tests
         if: ${{ steps.integration_plan.outputs.run == 'true' && success() }}
         shell: bash

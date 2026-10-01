@@ -311,6 +311,73 @@ final class TelegramProtectedReferenceDeliveryTest extends TestCase
         );
     }
 
+    /** @requirement BAK-001 OPS-003 QUA-010 */
+    public function test_uncertain_backup_export_result_is_not_blindly_sent_again(): void
+    {
+        $backupId = '20260929T051500Z-5555555555555555';
+        $bytes = 'encrypted-backup-part-uncertain';
+        $reference = TelegramProtectedPresentationReference::backupExport(
+            $backupId,
+            'part',
+            1,
+            1,
+            strlen($bytes),
+            hash('sha256', $bytes),
+        );
+        $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
+            $this->queue(),
+            TelegramDeliveryAction::Send,
+            900001,
+            $reference,
+            'protected-backup-reference-uncertain-001',
+            'correlation-protected-backup-reference-uncertain',
+        );
+        $generic = new TelegramProtectedReferenceTestTransport;
+        $sender = new TelegramProtectedReferenceTestSender(new ProtectedTelegramSendResult(
+            ProtectedTelegramSendOutcome::UncertainResult,
+            'telegram_transport_uncertain',
+        ));
+        $executor = $this->executor(
+            $generic,
+            $sender,
+            backupArtifacts: new TelegramProtectedReferenceTestBackupSource(
+                $this->userId,
+                $backupId,
+                $bytes,
+            ),
+        );
+
+        $first = $executor->execute(
+            $created->publicId,
+            $created->outboxEventId,
+            'correlation-protected-backup-reference-uncertain',
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        );
+        $second = $executor->execute(
+            $created->publicId,
+            $created->outboxEventId,
+            'correlation-protected-backup-reference-uncertain',
+            TelegramDeliveryQueueService::OUTBOX_CONTRACT_VERSION_PROTECTED_REFERENCE,
+        );
+
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $first->state);
+        self::assertSame(TelegramDeliveryOperationState::Uncertain, $second->state);
+        self::assertSame(1, $sender->attempts);
+        self::assertSame(0, $generic->attempts);
+        self::assertSame(
+            $reference->durableText(),
+            DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->value('presentation_text'),
+        );
+        self::assertStringNotContainsString(
+            $bytes,
+            (string) DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->value('presentation_text'),
+        );
+        self::assertSame(
+            1,
+            (int) DB::table('telegram_delivery_operations')->where('public_id', $created->publicId)->value('provider_attempts'),
+        );
+    }
+
     public function test_uncertain_protected_result_is_not_blindly_sent_again(): void
     {
         $created = NonRestrictedTelegramPresentationTestFactory::queueProtectedReference(
