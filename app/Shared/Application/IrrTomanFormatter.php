@@ -48,19 +48,19 @@ final class IrrTomanFormatter
         };
     }
 
-    /** @return array{amount:string,unit:string} */
+    /** @return array{amount:string,currency:string} */
     public static function forCurrency(int $amount, string $currency, string $locale): array
     {
         if ($currency === 'IRR') {
             return [
                 'amount' => self::format($amount),
-                'unit' => self::unit($locale),
+                'currency' => self::unit($locale),
             ];
         }
 
         return [
             'amount' => number_format($amount, 0, '.', ','),
-            'unit' => $currency,
+            'currency' => $currency,
         ];
     }
 
