@@ -267,14 +267,26 @@ for workflow in "${workflow_files[@]}"; do
                 fail 'generic CI must not retain a self-hosted runner route while the repository is public-ready'
             fi
             ;;
-        .github/workflows/staging-readiness-runtime.yml|.github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
+        .github/workflows/staging-readiness-runtime.yml)
+            while IFS= read -r runner_line; do
+                trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
+                [[ "$trimmed" == 'runs-on: ubuntu-24.04' ]] \
+                    || fail "read-only staging readiness must use the pinned GitHub-hosted Ubuntu runner: $workflow: $trimmed"
+            done <<< "$runner_lines"
+            if grep -F 'self-hosted' "$workflow" >/dev/null; then
+                fail 'read-only staging readiness must not depend on a self-hosted runner'
+            fi
+            bash scripts/ci/verify-readonly-staging-workflow.sh "$workflow" >/dev/null \
+                || fail 'read-only staging readiness workflow failed its bounded SSH/read-only contract verifier'
+            ;;
+        .github/workflows/provider-readiness.yml|.github/workflows/provider-live-acceptance.yml)
             while IFS= read -r runner_line; do
                 trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
                 [[ "$trimmed" == runs-on:\ \[*\] ]] \
-                    || fail "operational workflow runner selector must remain an explicit label list: $workflow: $trimmed"
+                    || fail "provider operational workflow runner selector must remain an explicit label list: $workflow: $trimmed"
                 for required_label in self-hosted Linux X64; do
                     selector_has_label "$trimmed" "$required_label" \
-                        || fail "operational workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
+                        || fail "provider operational workflow runner selector must retain exact label $required_label: $workflow: $trimmed"
                 done
             done <<< "$runner_lines"
             ;;
