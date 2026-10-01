@@ -505,7 +505,7 @@ expected_provider_live_secrets=(
 )
 [[ "${provider_live_secrets[*]}" == "${expected_provider_live_secrets[*]}" ]] \
     || fail "provider live secret allowlist drifted: ${provider_live_secrets[*]}"
-if grep -Eq '^      [A-Z0-9_]+: \\$\\{\\{ secrets\\.' "$provider_live"; then
+if grep -Eq '^      [A-Z0-9_]+: [$][{][{][[:space:]]+secrets[.]' "$provider_live"; then
     fail 'provider live credentials must remain step-scoped rather than job-scoped'
 fi
 
