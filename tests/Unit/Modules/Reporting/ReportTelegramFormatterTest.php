@@ -44,9 +44,9 @@ final class ReportTelegramFormatterTest extends TestCase
         $text = (new ReportTelegramFormatter)->format($snapshot);
 
         self::assertLessThanOrEqual(3900, mb_strlen($text));
-        self::assertStringContainsString('123,456,789 IRR', $text);
-        self::assertStringContainsString('prior 100,000,000 IRR', $text);
-        self::assertStringContainsString('Δ +23,456,789 IRR', $text);
+        self::assertStringContainsString('12,345,678.9 Toman', $text);
+        self::assertStringContainsString('prior 10,000,000 Toman', $text);
+        self::assertStringContainsString('Δ +2,345,678.9 Toman', $text);
         self::assertStringContainsString('additional metrics omitted', $text);
         self::assertStringNotContainsString('%', $text);
     }
