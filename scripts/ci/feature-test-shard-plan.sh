@@ -74,10 +74,7 @@ END {
                 candidate_cost = left_cost > right_weight ? left_cost : right_weight
                 candidate_deviation = deviation[key(shard - 1, candidate)] + abs_value(right_weight - target)
 
-                if (best_cost < 0
-                    || candidate_cost < best_cost
-                    || (candidate_cost == best_cost && candidate_deviation < best_deviation)
-                    || (candidate_cost == best_cost && candidate_deviation == best_deviation && candidate < best_cut)) {
+                if (best_cost < 0 || candidate_cost < best_cost || (candidate_cost == best_cost && candidate_deviation < best_deviation) || (candidate_cost == best_cost && candidate_deviation == best_deviation && candidate < best_cut)) {
                     best_cost = candidate_cost
                     best_deviation = candidate_deviation
                     best_cut = candidate
