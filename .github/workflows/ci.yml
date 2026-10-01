@@ -590,7 +590,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/evidence/tests
-          docker compose -f docker-compose.ci.yml restart redis
+          export REDIS_HOST_PORT="$REDIS_PORT"
+          docker compose -f docker-compose.ci.yml up -d --force-recreate --wait redis
           published_redis=$(docker compose -f docker-compose.ci.yml port redis 6379)
           [[ "$published_redis" == *":$REDIS_PORT" ]] || {
             echo "Redis published port drifted after restart: expected $REDIS_PORT, observed $published_redis" >&2
