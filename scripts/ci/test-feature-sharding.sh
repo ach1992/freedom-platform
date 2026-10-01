@@ -95,9 +95,7 @@ verify_shards() {
         fi
     done
 
-    local combined_sorted="$tmpdir/combined-$count-sorted"
-    sort "$combined" > "$combined_sorted"
-    cmp -s "$all" "$combined_sorted" || fail "$count-way shards must cover every Feature test exactly once"
+    cmp -s "$all" "$combined" || fail "$count-way shards must preserve global Feature order and cover every test exactly once"
 
     local combined_count
     local unique_count
