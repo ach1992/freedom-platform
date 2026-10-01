@@ -5,6 +5,7 @@
          colors="true"
          failOnEmptyTestSuite="true"
          failOnWarning="true"
+         failOnRisky="true"
          failOnPhpunitNotice="true"
          displayDetailsOnPhpunitNotices="true"
 >
