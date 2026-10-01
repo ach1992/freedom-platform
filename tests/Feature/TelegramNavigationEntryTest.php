@@ -2577,8 +2577,8 @@ final class TelegramNavigationEntryTest extends TestCase
         self::assertStringNotContainsString('national_id', $presentation);
         self::assertStringContainsString($userPublicId, $presentation);
         self::assertStringContainsString('******7891', $presentation);
-        self::assertStringContainsString('700,000', $presentation);
-        self::assertStringContainsString('125,000', $presentation);
+        self::assertStringContainsString('موجودی قابل استفاده نقدی: 70,000 تومان', $presentation);
+        self::assertStringContainsString('موجودی تشویقی قابل استفاده: 12,500 تومان', $presentation);
         self::assertStringContainsString($referralToken, $presentation);
         self::assertStringContainsString($referralLink, $presentation);
         self::assertStringNotContainsString($rawNationalId, $presentation);
