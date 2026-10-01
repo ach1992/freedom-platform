@@ -377,6 +377,77 @@ final class OperationsCenterIntegrationTest extends TestCase
     }
 
     /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_preserves_case_distinct_queue_groups_before_sql_deduplication(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+
+        config()->set('operations.worker_heartbeat.queue_group', '');
+        config()->set('queue.connections.redis.queue', '');
+
+        $heartbeats = $this->app->make(WorkerHeartbeatService::class);
+        $heartbeats->record('operations-case-lower-worker', 'a', 'test');
+        $heartbeats->record('operations-case-upper-worker', 'A', 'test');
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+
+        $lowerFact = $snapshot->fact('queue.backlog.a');
+        self::assertNotNull($lowerFact);
+        self::assertSame('queue=a', $lowerFact->detail);
+
+        $upperFacts = array_values(array_filter(
+            $snapshot->facts,
+            static fn ($fact): bool => $fact->detail === 'queue=A',
+        ));
+        self::assertCount(1, $upperFacts);
+        self::assertStringStartsWith('queue.backlog.q-', $upperFacts[0]->code);
+        self::assertNotSame($lowerFact->code, $upperFacts[0]->code);
+        self::assertNull($snapshot->fact('queue.inspection'));
+    }
+
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
+    public function test_snapshot_counts_case_equivalent_raw_groups_before_overflow_sentinel(): void
+    {
+        $administratorId = $this->ownerAdministrator();
+        $userId = (int) DB::table('administrators')->where('id', $administratorId)->value('user_id');
+
+        config()->set('operations.worker_heartbeat.queue_group', '');
+        config()->set('queue.connections.redis.queue', '');
+
+        $queues = [];
+        for ($index = 1; $index <= 11; $index++) {
+            $queue = sprintf('case-%02d', $index);
+            $queues[] = $queue;
+            if (count($queues) < 21) {
+                $queues[] = strtoupper($queue);
+            }
+        }
+        self::assertCount(21, $queues);
+
+        $heartbeats = $this->app->make(WorkerHeartbeatService::class);
+        foreach ($queues as $index => $queue) {
+            $heartbeats->record(
+                sprintf('operations-case-overflow-worker-%02d', $index),
+                $queue,
+                'test',
+            );
+        }
+
+        $snapshot = $this->app->make(OperationsCenterService::class)->snapshot($userId);
+        $inspection = $snapshot->fact('queue.inspection');
+        self::assertNotNull($inspection);
+        self::assertSame('unknown', $inspection->state);
+        self::assertStringContainsString('observed_groups_truncated=1', (string) $inspection->detail);
+        self::assertStringNotContainsString('queue_identities_truncated=1', (string) $inspection->detail);
+
+        $backlogFacts = array_values(array_filter(
+            $snapshot->facts,
+            static fn ($fact): bool => str_starts_with($fact->code, 'queue.backlog.'),
+        ));
+        self::assertCount(20, $backlogFacts);
+    }
+
+    /** @requirement OPS-001 OPS-003 RUN-003 DAT-003 QUA-011 */
     public function test_snapshot_marks_expanded_queue_identity_overflow_incomplete(): void
     {
         $administratorId = $this->ownerAdministrator();

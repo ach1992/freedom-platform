@@ -109,13 +109,19 @@ final readonly class OperationsCenterService
             $queueGroups[] = $defaultQueue;
         }
 
+        // Queue identity is byte/case-sensitive in the application contract, while this
+        // column inherits the repository's case-insensitive MariaDB collation. Apply
+        // DISTINCT, ordering, and the overflow sentinel to the binary value so the database
+        // cannot discard legitimate raw identities before PHP performs bounded inspection.
         /** @var list<mixed> $observedQueueGroups */
         $observedQueueGroups = $this->database->connection()->table('worker_heartbeats')
             ->where('worker_id', '<>', 'scheduler')
+            ->selectRaw('CAST(queue AS BINARY) AS queue_identity')
             ->distinct()
-            ->orderBy('queue')
+            ->orderBy('queue_identity')
             ->limit(21)
-            ->pluck('queue')
+            ->get()
+            ->pluck('queue_identity')
             ->values()
             ->all();
 
