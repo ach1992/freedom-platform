@@ -7,8 +7,8 @@ use FreedomPlatform\Scripts\Ci\MarzbanReadinessProbe;
 require __DIR__.'/MarzbanReadinessProbe.php';
 
 /**
- * @param array<string, string> $headers
- * @param array<string, string>|null $payload
+ * @param  array<string, string>  $headers
+ * @param  array<string, string>|null  $payload
  * @return array{
  *     status: int|null,
  *     json: array<array-key, mixed>|null,
