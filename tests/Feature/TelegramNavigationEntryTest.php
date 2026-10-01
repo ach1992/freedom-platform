@@ -4694,7 +4694,7 @@ SQL);
         $catalogPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('خرید سرویس', $catalogPresentation);
         self::assertStringContainsString('پلن خرید — نسخه پایه', $catalogPresentation);
-        self::assertStringContainsString('900,000', $catalogPresentation);
+        self::assertStringContainsString('90,000 تومان', $catalogPresentation);
         self::assertSame($before, $this->purchaseMutationCounts());
 
         $item = DB::table('telegram_interaction_callbacks')
@@ -4719,6 +4719,7 @@ SQL);
         self::assertStringNotContainsString('panel_connection_id', $common);
         self::assertStringNotContainsString('پلن خرید — نسخه پایه', $common);
         self::assertStringNotContainsString('900,000', $common);
+        self::assertStringNotContainsString('90,000 تومان', $common);
 
         $operationCount = DB::table('telegram_delivery_operations')->where('recipient_chat_id', $telegramUserId)->count();
         $processor->process('123456789', 6953);
@@ -5508,7 +5509,7 @@ SQL);
         $durable = $this->navigationCommonDurableEvidence($sessionId, 9740);
         self::assertStringNotContainsString('4242424242424242', $durable);
         self::assertStringContainsString(str_pad('01R', 26, '0'), $durable);
-        self::assertStringContainsString('911,000', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('91,100 تومان', $this->latestConfidentialPresentation());
         self::assertStringContainsString('424242******4242', $this->latestConfidentialPresentation());
         self::assertStringContainsString('تسویه فقط با شواهد معتبر بانکی', $this->latestConfidentialPresentation());
 
@@ -5576,7 +5577,7 @@ SQL);
         self::assertArrayNotHasKey('ledger_account_id', $confirmPayload);
         self::assertArrayNotHasKey('available_balance_irr', $confirmPayload);
         self::assertStringContainsString('تأیید پرداخت با کیف پول', $this->latestConfidentialPresentation());
-        self::assertStringContainsString('910,000', $this->latestConfidentialPresentation());
+        self::assertStringContainsString('91,000 تومان', $this->latestConfidentialPresentation());
         self::assertStringNotContainsString('ledger_account_id', $this->navigationCommonDurableEvidence($sessionId, 9730));
         self::assertStringNotContainsString('wallet_account_id', $this->navigationCommonDurableEvidence($sessionId, 9730));
 
@@ -8361,7 +8362,7 @@ SQL);
         $this->accept($this->callbackPayload(7003, $telegramUserId, 'navigation_admin_rate', 'fa', $rateToken));
         $processor->process('123456789', 7003);
         $ratePresentation = $this->latestConfidentialPresentation();
-        self::assertStringContainsString('900,000', $ratePresentation);
+        self::assertStringContainsString('90,000 تومان', $ratePresentation);
         self::assertStringContainsString('USDT', $ratePresentation);
         self::assertStringContainsString('NOWPayments', $ratePresentation);
         self::assertStringNotContainsString('payments.usdt.manage', $ratePresentation);
@@ -8407,7 +8408,7 @@ SQL);
         );
         $confirmPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('تأیید تغییر نرخ', $confirmPresentation);
-        self::assertStringContainsString('910,000', $confirmPresentation);
+        self::assertStringContainsString('91,000 تومان', $confirmPresentation);
         self::assertStringContainsString('NOWPayments', $confirmPresentation);
         self::assertStringContainsString('هیچ تغییری ثبت نمی‌شود', $confirmPresentation);
 
@@ -8481,7 +8482,7 @@ SQL);
         self::assertSame(1, DB::table('audit_logs')->where('action', 'payments.usdt.manual_rate.updated')->count());
         $updatedPresentation = $this->latestConfidentialPresentation();
         self::assertStringContainsString('با موفقیت ثبت شد', $updatedPresentation);
-        self::assertStringContainsString('910,000', $updatedPresentation);
+        self::assertStringContainsString('91,000 تومان', $updatedPresentation);
     }
 
     public function test_admin_usdt_rate_confirmation_reauthorizes_after_permission_revocation(): void
