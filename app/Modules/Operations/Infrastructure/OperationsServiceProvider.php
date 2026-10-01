@@ -26,6 +26,7 @@ use App\Modules\Operations\Application\Contracts\RestoreRuntimeHealthVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreSchedulerMutationLock;
 use App\Modules\Operations\Application\Contracts\RestoreWorkspace;
 use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
+use App\Modules\Operations\Application\Contracts\UpdateOperationLock;
 use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
 use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
 use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
@@ -388,6 +389,13 @@ final class OperationsServiceProvider extends ServiceProvider
             UpdateMutationFence::class,
             fn (Application $application): UpdateMutationFence => new PurchaseProviderUpdateMutationFence(
                 $application->make(PurchaseProviderMutationBarrier::class),
+            ),
+        );
+
+        $this->app->singleton(
+            UpdateOperationLock::class,
+            fn (Application $application): UpdateOperationLock => new FilesystemUpdateOperationLock(
+                $application->make(UpdateRuntimeConfiguration::class)->deploymentRoot,
             ),
         );
 

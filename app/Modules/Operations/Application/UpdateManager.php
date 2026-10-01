@@ -7,6 +7,7 @@ namespace App\Modules\Operations\Application;
 use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\RestoreMaintenanceCoordinator;
 use App\Modules\Operations\Application\Contracts\UpdateMutationFence;
+use App\Modules\Operations\Application\Contracts\UpdateOperationLock;
 use App\Modules\Operations\Application\Contracts\UpdatePackageVerifier;
 use App\Modules\Operations\Application\Contracts\UpdateRecoveryRestore;
 use App\Modules\Operations\Application\Contracts\UpdateReleaseExecutor;
@@ -31,6 +32,7 @@ final readonly class UpdateManager
         private ReleaseActivator $releases,
         private RestoreMaintenanceCoordinator $maintenance,
         private UpdateMutationFence $mutationFence,
+        private UpdateOperationLock $operationLock,
         private UpdateRecoveryRestore $recoveryRestore,
         private Clock $clock,
         private RandomGenerator $random,
@@ -42,6 +44,22 @@ final readonly class UpdateManager
         string $trustedPackageSha256,
         bool $apply = false,
         ?string $confirmation = null,
+    ): UpdateRunResult {
+        return $this->operationLock->synchronized(
+            fn (): UpdateRunResult => $this->runUnlocked(
+                $packagePath,
+                $trustedPackageSha256,
+                $apply,
+                $confirmation,
+            ),
+        );
+    }
+
+    private function runUnlocked(
+        string $packagePath,
+        string $trustedPackageSha256,
+        bool $apply,
+        ?string $confirmation,
     ): UpdateRunResult {
         $this->workspace->recoverInterruptedPreMutationRuns();
 
@@ -405,6 +423,16 @@ final readonly class UpdateManager
         bool $apply = false,
         ?string $confirmation = null,
     ): UpdateRunResult {
+        return $this->operationLock->synchronized(
+            fn (): UpdateRunResult => $this->recoverUnlocked($updateRunId, $apply, $confirmation),
+        );
+    }
+
+    private function recoverUnlocked(
+        string $updateRunId,
+        bool $apply,
+        ?string $confirmation,
+    ): UpdateRunResult {
         if (preg_match('/\\A[0-9]{8}T[0-9]{6}Z-[a-f0-9]{16}\\z/', $updateRunId) !== 1) {
             throw new RuntimeException('The controlled update recovery run identifier is invalid.');
         }
@@ -442,6 +470,13 @@ final readonly class UpdateManager
 
     /** @requirement UPD-001 BAK-002 RUN-002 OPS-003 QUA-001 */
     public function rollback(bool $apply = false, ?string $confirmation = null): UpdateRunResult
+    {
+        return $this->operationLock->synchronized(
+            fn (): UpdateRunResult => $this->rollbackUnlocked($apply, $confirmation),
+        );
+    }
+
+    private function rollbackUnlocked(bool $apply, ?string $confirmation): UpdateRunResult
     {
         $this->workspace->recoverInterruptedPreMutationRuns();
         $installed = $this->workspace->installedIdentity();
