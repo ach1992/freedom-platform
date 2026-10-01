@@ -10,6 +10,7 @@ use App\Modules\Agents\Domain\AgentPricingRuleDefinition;
 use App\Modules\Agents\Domain\AgentPricingState;
 use DomainException;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\JoinClause;
 use RuntimeException;
 
 trait AgentPricingPersistenceSupport
@@ -36,19 +37,17 @@ trait AgentPricingPersistenceSupport
     private function selectRule(Connection $db, int $profileId, AgentPricingResolutionRequest $request, int $productId, int $serverId): ?object
     {
         /** @var array<int,object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}> $rows */
-        $rows = $db->table('agent_pricing_rule_versions as v')->join('agent_pricing_rules as r', 'r.id', '=', 'v.agent_pricing_rule_id')
-            ->where('r.agent_pricing_profile_id', $profileId)->get(['v.id', 'v.agent_pricing_rule_id', 'v.version', 'v.state', 'v.override_price_irr', 'v.action', 'v.plan_offering_id', 'v.sales_server_id', 'v.product_id', 'v.configuration_snapshot', 'v.configuration_hash', 'r.public_id as rule_public_id', 'r.rule_code'])->all();
-        /** @var array<int,object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}> $latest */
-        $latest = [];
-        foreach ($rows as $row) {
-            $id = $this->positive($row->agent_pricing_rule_id, 'Agent pricing rule ID');
-            if (! isset($latest[$id]) || $this->positive($row->version, 'Agent pricing rule version') > $this->positive($latest[$id]->version, 'Agent pricing rule version')) {
-                $latest[$id] = $row;
-            }
-        }
+        $rows = $db->table('agent_pricing_rules as r')
+            ->join('agent_pricing_rule_versions as v', function (JoinClause $join): void {
+                $join->on('v.agent_pricing_rule_id', '=', 'r.id')
+                    ->whereRaw('v.version = (SELECT MAX(latest.version) FROM agent_pricing_rule_versions AS latest WHERE latest.agent_pricing_rule_id = r.id)');
+            })
+            ->where('r.agent_pricing_profile_id', $profileId)
+            ->get(['v.id', 'v.agent_pricing_rule_id', 'v.version', 'v.state', 'v.override_price_irr', 'v.action', 'v.plan_offering_id', 'v.sales_server_id', 'v.product_id', 'v.configuration_snapshot', 'v.configuration_hash', 'r.public_id as rule_public_id', 'r.rule_code'])
+            ->all();
         /** @var array<int,array{0:int,1:object{id:int|string,agent_pricing_rule_id:int|string,version:int|string,state:string,override_price_irr:int|string,action:string|null,plan_offering_id:int|string|null,sales_server_id:int|string|null,product_id:int|string|null,configuration_snapshot:string,configuration_hash:string,rule_public_id:string,rule_code:string}}> $qualified */
         $qualified = [];
-        foreach ($latest as $row) {
+        foreach ($rows as $row) {
             if ($row->state !== AgentPricingState::Active->value) {
                 continue;
             }

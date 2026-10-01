@@ -137,11 +137,19 @@ final readonly class PromotionUsageReservationService
                     throw new RuntimeException('Promotion resolution or quote is already reserved.');
                 }
 
-                $activeReservations = $connection->table('promotion_usage_reservations as reservation')
+                /** @var object{total_active:int|string,user_active:int|string}|null $activeCapacity */
+                $activeCapacity = $connection->table('promotion_usage_reservations as reservation')
                     ->leftJoin('promotion_usage_releases as release', 'release.promotion_usage_reservation_id', '=', 'reservation.id')
                     ->where('reservation.pricing_rule_id', $ruleId)
                     ->whereNull('release.id')
-                    ->get(['reservation.id', 'reservation.user_id']);
+                    ->selectRaw('COUNT(*) AS total_active')
+                    ->selectRaw('COALESCE(SUM(CASE WHEN reservation.user_id = ? THEN 1 ELSE 0 END), 0) AS user_active', [$userId])
+                    ->first();
+                if ($activeCapacity === null) {
+                    throw new RuntimeException('Promotion usage capacity aggregation failed.');
+                }
+                $totalActive = $this->nonNegativeDatabaseInt($activeCapacity->total_active, 'Promotion active usage count');
+                $userActive = $this->nonNegativeDatabaseInt($activeCapacity->user_active, 'Promotion active per-user usage count');
 
                 $totalLimit = $version->total_use_limit === null
                     ? null
@@ -149,16 +157,11 @@ final readonly class PromotionUsageReservationService
                 $perUserLimit = $version->per_user_use_limit === null
                     ? null
                     : $this->positiveDatabaseInt($version->per_user_use_limit, 'Promotion per-user use limit');
-                if ($totalLimit !== null && $activeReservations->count() >= $totalLimit) {
+                if ($totalLimit !== null && $totalActive >= $totalLimit) {
                     throw new DomainException('Promotion global usage capacity is exhausted.');
                 }
-                if ($perUserLimit !== null) {
-                    $userActive = $activeReservations->filter(
-                        static fn (object $row): bool => (int) $row->user_id === $userId,
-                    )->count();
-                    if ($userActive >= $perUserLimit) {
-                        throw new DomainException('Promotion per-user usage capacity is exhausted.');
-                    }
+                if ($perUserLimit !== null && $userActive >= $perUserLimit) {
+                    throw new DomainException('Promotion per-user usage capacity is exhausted.');
                 }
 
                 $discountIrr = $this->positiveDatabaseInt($resolution->discount_irr, 'Promotion discount');
@@ -687,6 +690,19 @@ final readonly class PromotionUsageReservationService
         if (! Str::isUlid($value)) {
             throw new \InvalidArgumentException($label.' is invalid.');
         }
+    }
+
+    private function nonNegativeDatabaseInt(mixed $value, string $label): int
+    {
+        if (! is_int($value) && ! (is_string($value) && preg_match('/\A[0-9]+\z/', $value) === 1)) {
+            throw new RuntimeException($label.' is invalid.');
+        }
+        $integer = (int) $value;
+        if ($integer < 0) {
+            throw new RuntimeException($label.' is invalid.');
+        }
+
+        return $integer;
     }
 
     private function positiveDatabaseInt(mixed $value, string $label): int
