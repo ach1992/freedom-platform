@@ -147,7 +147,8 @@ printf '%s\n' 'Filtered diagnostic, zero-test, and Unit warning-policy tests pas
 
 
 # Retired staging/provider Actions secret interfaces must remain rejected across
-# GitHub-supported property dereference and literal index syntax, case-insensitively.
+# GitHub-supported static reference forms, while dynamic/bulk secrets access fails
+# closed because its resolved secret set cannot be proven to exclude retired names.
 retired_fixture_dir="$tmpdir/retired-secret-fixtures"
 mkdir -p "$retired_fixture_dir"
 
@@ -178,11 +179,34 @@ env:
   ] }}
 YAML
 
+cat > "$retired_fixture_dir/dynamic-format.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets[format('STAGING_%s', matrix.env)] }}
+YAML
+
+cat > "$retired_fixture_dir/dynamic-variable.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets[matrix.secret_name] }}
+YAML
+
+cat > "$retired_fixture_dir/bulk-context.yml" <<'YAML'
+env:
+  PROBE: ${{ toJSON(secrets) }}
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+YAML
+
 cat > "$retired_fixture_dir/safe.yml" <<'YAML'
 env:
   STAGING_HOST: 127.0.0.1
   PASARGUARD_TEST_ORIGIN: https://example.invalid
   TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+  TELEGRAM_TOKEN_INDEX: ${{ secrets['TELEGRAM_TEST_BOT_TOKEN'] }}
 YAML
 
 for fixture in \
@@ -190,7 +214,11 @@ for fixture in \
     lowercase-property.yml \
     single-index.yml \
     double-index.yml \
-    multiline-index.yml; do
+    multiline-index.yml \
+    dynamic-format.yml \
+    dynamic-variable.yml \
+    bulk-context.yml \
+    bulk-inherit.yml; do
     if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >/dev/null 2>&1; then
         fail "retired Actions secret guard accepted fixture: $fixture"
     fi
