@@ -147,8 +147,9 @@ printf '%s\n' 'Filtered diagnostic, zero-test, and Unit warning-policy tests pas
 
 
 # Retired staging/provider Actions secret interfaces must remain rejected across
-# GitHub-supported static reference forms, while dynamic/bulk secrets access fails
-# closed because its resolved secret set cannot be proven to exclude retired names.
+# static/dynamic expression forms. Reusable-workflow forwarding is validated from
+# resolved YAML semantics so anchors, aliases, tags, scalar styles, and merge keys
+# cannot disguise bulk inheritance.
 retired_fixture_dir="$tmpdir/retired-secret-fixtures"
 mkdir -p "$retired_fixture_dir"
 
@@ -201,12 +202,63 @@ jobs:
     secrets: inherit
 YAML
 
+cat > "$retired_fixture_dir/bulk-inherit-anchor.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: &all inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-alias.yml" <<'YAML'
+defaults: &all inherit
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: *all
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-quoted.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: "inherit"
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-tagged.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: !!str inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-folded.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: >-
+      inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-merge.yml" <<'YAML'
+defaults: &defaults
+  secrets: inherit
+jobs:
+  relay:
+    <<: *defaults
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+YAML
+
 cat > "$retired_fixture_dir/safe.yml" <<'YAML'
 env:
   STAGING_HOST: 127.0.0.1
   PASARGUARD_TEST_ORIGIN: https://example.invalid
   TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
   TELEGRAM_TOKEN_INDEX: ${{ secrets['TELEGRAM_TEST_BOT_TOKEN'] }}
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      telegram_token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
 YAML
 
 for fixture in \
@@ -218,7 +270,13 @@ for fixture in \
     dynamic-format.yml \
     dynamic-variable.yml \
     bulk-context.yml \
-    bulk-inherit.yml; do
+    bulk-inherit.yml \
+    bulk-inherit-anchor.yml \
+    bulk-inherit-alias.yml \
+    bulk-inherit-quoted.yml \
+    bulk-inherit-tagged.yml \
+    bulk-inherit-folded.yml \
+    bulk-inherit-merge.yml; do
     if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >/dev/null 2>&1; then
         fail "retired Actions secret guard accepted fixture: $fixture"
     fi
