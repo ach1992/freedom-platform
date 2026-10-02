@@ -4,6 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 classifier="$root/scripts/ci/classify-validation-plan.sh"
+retired_secret_guard="$root/scripts/ci/reject-retired-actions-secrets.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -61,9 +62,6 @@ assert_plan docs_only CONTROL true true false false false false false false fals
 assert_plan release_docs CONTROL true false false false false false false false false false docs/operations-guide.md docs/provider-extension-guide.md docs/reference/data-dictionary.md docs/reference/permission-catalog.md
 assert_plan release_reference_generator APPLICATION true false false false true false false false false false scripts/docs/generate-release-references.php
 assert_plan governance_only CONTROL true false false false false false false false false false AGENTS.md .github/ISSUE_TEMPLATE/task.yml
-assert_plan read_only_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/staging-readiness-runtime.yml
-assert_plan provider_readonly_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/provider-readiness.yml
-assert_plan provider_mutation_workflow CONTROL_PLANE true false true false false false false false false false .github/workflows/provider-live-acceptance.yml
 assert_plan provider_readiness_scripts OPERATIONS false false false false false false false false false true scripts/ci/pasarguard-readonly-probe.php scripts/ci/MarzbanReadinessProbe.php scripts/ci/marzban-readonly-probe.php
 assert_plan provider_live_harnesses FULL false false false true true false false false false true scripts/ci/PasarGuardLiveAcceptance.php scripts/ci/MarzbanLiveAcceptance.php
 assert_plan provider_live_entrypoints OPERATIONS false false false false false false false false false true scripts/ci/pasarguard-live-acceptance.php scripts/ci/marzban-live-acceptance.php
@@ -82,6 +80,7 @@ assert_plan security_sensitive APPLICATION false false false true true true fals
 assert_plan ci_policy CONTROL_PLANE true false true false false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
 assert_plan feature_sharding_control CONTROL_PLANE true false true false false false false false false false scripts/ci/select-feature-shard.sh scripts/ci/test-feature-sharding.sh
 assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
+assert_plan retired_secret_guard CONTROL_PLANE true false true false false false false false false false scripts/ci/reject-retired-actions-secrets.sh
 assert_plan operations_only OPERATIONS false false false false false false false false false true deploy/bin/queue-worker-with-heartbeat.sh
 assert_plan unknown_view FULL true true true true true true true true true true resources/views/home.blade.php
 assert_plan unknown_public_asset FULL true true true true true true true true true true public/example.txt
@@ -145,6 +144,387 @@ if grep -F '"@php artisan test --testsuite=Unit' "$root/composer.json" >/dev/nul
 fi
 
 printf '%s\n' 'Filtered diagnostic, zero-test, and Unit warning-policy tests passed.'
+
+
+# Retired staging/provider Actions secret interfaces must remain rejected across
+# static/dynamic expression forms. Reusable-workflow forwarding is validated from
+# resolved YAML semantics so anchors, aliases, tags, scalar styles, and merge keys
+# cannot disguise bulk inheritance.
+retired_fixture_dir="$tmpdir/retired-secret-fixtures"
+mkdir -p "$retired_fixture_dir"
+
+cat > "$retired_fixture_dir/uppercase-property.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets.STAGING_HOST }}
+YAML
+
+cat > "$retired_fixture_dir/lowercase-property.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets.pasarguard_test_api_key }}
+YAML
+
+cat > "$retired_fixture_dir/single-index.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets['MARZBAN_TEST_PASSWORD'] }}
+YAML
+
+cat > "$retired_fixture_dir/double-index.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets["staging_known_hosts"] }}
+YAML
+
+cat > "$retired_fixture_dir/multiline-index.yml" <<'YAML'
+env:
+  PROBE: >-
+    ${{ secrets[
+      'STAGING_SSH_PRIVATE_KEY'
+    ] }}
+YAML
+
+cat > "$retired_fixture_dir/dynamic-format.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets[format('STAGING_%s', matrix.env)] }}
+YAML
+
+cat > "$retired_fixture_dir/dynamic-variable.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets[matrix.secret_name] }}
+YAML
+
+cat > "$retired_fixture_dir/bulk-context.yml" <<'YAML'
+env:
+  PROBE: ${{ toJSON(secrets) }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-retired-static.yml" <<'YAML'
+env:
+  PROBE: ${{ contains('marker }} still inside string', 'marker') && secrets.STAGING_HOST }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-bulk-context.yml" <<'YAML'
+env:
+  PROBE: ${{ contains('marker }} still inside string', 'marker') && toJSON(secrets) }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-doubled-quote.yml" <<'YAML'
+env:
+  PROBE: ${{ contains('it''s }} still inside string', 'marker') && secrets.MARZBAN_TEST_PASSWORD }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-yaml-single-quoted-static.yml" <<'YAML'
+env:
+  PROBE: '${{ contains(''it''''s }} still inside string'', ''marker'') && secrets.STAGING_HOST }}'
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-yaml-single-quoted-bulk.yml" <<'YAML'
+env:
+  PROBE: '${{ contains(''marker }} still inside string'', ''marker'') && toJSON(secrets) }}'
+YAML
+
+cat > "$retired_fixture_dir/retired-forwarding-key.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      STAGING_HOST: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+cat > "$retired_fixture_dir/retired-forwarding-key-lowercase.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      pasarguard_test_api_key: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+cat > "$retired_fixture_dir/retired-workflow-call-secret.yml" <<'YAML'
+on:
+  workflow_call:
+    secrets:
+      STAGING_HOST:
+        required: true
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/retired-workflow-call-secret-lowercase.yml" <<'YAML'
+on:
+  workflow_call:
+    secrets:
+      marzban_test_password:
+        required: true
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/safe-workflow-call-secret.yml" <<'YAML'
+on:
+  workflow_call:
+    secrets:
+      access-token:
+        required: true
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-anchor.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: &all inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-alias.yml" <<'YAML'
+defaults: &all inherit
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: *all
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-quoted.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: "inherit"
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-tagged.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: !!str inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-folded.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: >-
+      inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-merge.yml" <<'YAML'
+defaults: &defaults
+  secrets: inherit
+jobs:
+  relay:
+    <<: *defaults
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-anchor-key.yml" <<'YAML'
+jobs:
+  relay:
+    &secret_key secrets: inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-alias-key.yml" <<'YAML'
+secret_key: &secret_key secrets
+jobs:
+  relay:
+    *secret_key: inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-plain-multiline.yml" <<'YAML'
+jobs:
+  relay:
+    secrets:
+      inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-single-quoted.yml" <<'YAML'
+jobs:
+  relay:
+    secrets: 'inherit'
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-yaml12-job-keys.yml" <<'YAML'
+jobs:
+  on:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+  yes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-duplicate-job-key.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/duplicate-coerced-secret-key.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      1: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      1.0: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+cat > "$retired_fixture_dir/safe-yaml12-job-keys.yml" <<'YAML'
+jobs:
+  on:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      telegram_token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+  yes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo yes
+  off:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo off
+  no:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo no
+YAML
+
+cat > "$retired_fixture_dir/safe-expression-string.yml" <<'YAML'
+env:
+  PROBE: ${{ format('literal }} secrets.STAGING_HOST and it''s still text') }}
+YAML
+
+cat > "$retired_fixture_dir/safe-expression-yaml-single-quoted.yml" <<'YAML'
+env:
+  PROBE: '${{ format(''literal }} secrets.STAGING_HOST and it''''s still text'') }}'
+YAML
+
+cat > "$retired_fixture_dir/safe-forwarding-hyphen.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      access-token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      2026-01-01: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      0123: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      0o77: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      true: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      1: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+cat > "$retired_fixture_dir/safe-comment-secret-text.yml" <<'YAML'
+# ${{ secrets.STAGING_HOST }} is comment text, not an executable expression.
+env:
+  SAFE: plain
+YAML
+
+cat > "$retired_fixture_dir/safe-non-context-secrets-token.yml" <<'YAML'
+env:
+  PROPERTY_NAMED_SECRETS: ${{ github.event.secrets.STAGING_HOST }}
+  HYPHENATED_IDENTIFIER: ${{ matrix.foo-secrets }}
+YAML
+
+cat > "$retired_fixture_dir/safe.yml" <<'YAML'
+env:
+  STAGING_HOST: 127.0.0.1
+  PASARGUARD_TEST_ORIGIN: https://example.invalid
+  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+  TELEGRAM_TOKEN_INDEX: ${{ secrets['TELEGRAM_TEST_BOT_TOKEN'] }}
+secret_map: &secret_map
+  telegram_token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: *secret_map
+YAML
+
+for fixture in \
+    uppercase-property.yml \
+    lowercase-property.yml \
+    single-index.yml \
+    double-index.yml \
+    multiline-index.yml \
+    dynamic-format.yml \
+    dynamic-variable.yml \
+    bulk-context.yml \
+    expression-boundary-retired-static.yml \
+    expression-boundary-bulk-context.yml \
+    expression-boundary-doubled-quote.yml \
+    expression-boundary-yaml-single-quoted-static.yml \
+    expression-boundary-yaml-single-quoted-bulk.yml \
+    retired-forwarding-key.yml \
+    retired-forwarding-key-lowercase.yml \
+    retired-workflow-call-secret.yml \
+    retired-workflow-call-secret-lowercase.yml \
+    bulk-inherit.yml \
+    bulk-inherit-anchor.yml \
+    bulk-inherit-alias.yml \
+    bulk-inherit-quoted.yml \
+    bulk-inherit-tagged.yml \
+    bulk-inherit-folded.yml \
+    bulk-inherit-merge.yml \
+    bulk-inherit-anchor-key.yml \
+    bulk-inherit-alias-key.yml \
+    bulk-inherit-plain-multiline.yml \
+    bulk-inherit-single-quoted.yml \
+    bulk-inherit-yaml12-job-keys.yml; do
+    guard_output=$(mktemp "$tmpdir/guard-output.XXXXXX")
+    if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >"$guard_output" 2>&1; then
+        fail "retired Actions secret guard accepted fixture: $fixture"
+    fi
+    grep -F 'Unsafe GitHub Actions secrets access found:' "$guard_output" >/dev/null \
+        || fail "retired Actions secret fixture failed for an unrelated parse/runtime reason: $fixture"
+done
+
+if bash "$retired_secret_guard" "$retired_fixture_dir/bulk-inherit-duplicate-job-key.yml" >"$tmpdir/duplicate-key.out" 2>&1; then
+    fail 'retired Actions secret guard accepted duplicate mapping keys'
+fi
+grep -F 'Workflow YAML cannot be parsed safely:' "$tmpdir/duplicate-key.out" >/dev/null \
+    || fail 'duplicate mapping fixture did not fail at the semantic YAML collision boundary'
+
+if bash "$retired_secret_guard" "$retired_fixture_dir/duplicate-coerced-secret-key.yml" >"$tmpdir/duplicate-coerced-key.out" 2>&1; then
+    fail 'retired Actions secret guard accepted mapping keys that collide after GitHub scalar-to-string coercion'
+fi
+grep -F 'Workflow YAML cannot be parsed safely:' "$tmpdir/duplicate-coerced-key.out" >/dev/null \
+    || fail 'coerced duplicate-key fixture did not fail at the GitHub-compatible mapping boundary'
+
+bash "$retired_secret_guard" "$retired_fixture_dir/safe.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected a bounded safe fixture'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-yaml12-job-keys.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected distinct YAML 1.2 boolean-like job IDs'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-expression-string.yml" >/dev/null \
+    || fail 'retired Actions secret guard treated string-literal secret-like text as an access'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-expression-yaml-single-quoted.yml" >/dev/null \
+    || fail 'retired Actions secret guard diverged from YAML-decoded expression string semantics'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-forwarding-hyphen.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected GitHub non-empty-string/coerced scalar destination keys'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-workflow-call-secret.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected a safe reusable-workflow secret declaration'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-comment-secret-text.yml" >/dev/null \
+    || fail 'retired Actions secret guard scanned raw YAML comment text instead of decoded scalar values'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-non-context-secrets-token.yml" >/dev/null \
+    || fail 'retired Actions secret guard confused property/identifier text with the secrets named-value context'
+bash "$retired_secret_guard" "$root/.github/workflows/ci.yml" >/dev/null \
+    || fail 'current secret-free CI workflow violates retired Actions secret policy'
+
+printf '%s\n' 'Retired Actions secret-reference guard tests passed.'
 
 # The required GitHub status context must be the final aggregate gate, not the early planning job.
 ci_workflow="$root/.github/workflows/ci.yml"
@@ -223,67 +603,3 @@ PY_CI_GATE
 
 printf '%s\n' 'Required CI gate contract tests passed.'
 
-readonly_verifier="$root/scripts/ci/verify-readonly-staging-workflow.sh"
-readonly_source="$root/.github/workflows/staging-readiness-runtime.yml"
-
-expect_readonly_reject() {
-    local name=$1
-    local mutator=$2
-    local candidate="$tmpdir/readonly-$name.yml"
-    cp "$readonly_source" "$candidate"
-    python3 - "$candidate" "$mutator" <<'PY_MUTATION'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-mutation = sys.argv[2]
-text = path.read_text()
-
-mutations = {
-    'automatic_trigger': lambda s: s.replace('on:\n  repository_dispatch:', 'on:\n  push:\n  repository_dispatch:', 1),
-    'selectable_ref_trigger': lambda s: s.replace(
-        '  repository_dispatch:\n    types: [staging_readiness]',
-        '  workflow_dispatch:',
-        1,
-    ),
-    'trusted_ref_guard': lambda s: s.replace(
-        "    if: ${{ github.ref == 'refs/heads/main' && github.event.client_payload.confirmation == 'READ_ONLY_STAGING_CHECK' }}",
-        "    if: ${{ github.event.client_payload.confirmation == 'READ_ONLY_STAGING_CHECK' }}",
-        1,
-    ),
-    'write_permission': lambda s: s.replace('contents: read', 'contents: write', 1),
-    'secret': lambda s: s.replace('set -euo pipefail', "set -euo pipefail\n          echo '${{ secrets.RUNTIME_ROOT }}'", 1),
-    'environment': lambda s: s.replace('    runs-on:', '    environment: production\n    runs-on:', 1),
-    'checkout_action': lambda s: s.replace('steps:\n      - name: Validate read-only contract', 'steps:\n      - uses: actions/checkout@deadbeef\n      - name: Validate read-only contract', 1),
-    'sudo': lambda s: s.replace('set -euo pipefail', 'set -euo pipefail\n          sudo true', 1),
-    'docker_mutation': lambda s: s.replace('set -euo pipefail', 'set -euo pipefail\n          docker compose up -d', 1),
-    'systemctl_mutation': lambda s: s.replace('state=$(systemctl is-active "$service" 2>/dev/null || true)', 'state=$(systemctl restart "$service" 2>/dev/null || true)', 1),
-}
-
-try:
-    changed = mutations[mutation](text)
-except KeyError as exc:
-    raise SystemExit(f'unknown mutation: {mutation}') from exc
-if changed == text:
-    raise SystemExit(f'mutation did not alter workflow: {mutation}')
-path.write_text(changed)
-PY_MUTATION
-
-    if bash "$readonly_verifier" "$candidate" >/dev/null 2>&1; then
-        fail "read-only verifier accepted mutation: $name"
-    fi
-}
-
-bash "$readonly_verifier" "$readonly_source" >/dev/null
-expect_readonly_reject automatic_trigger automatic_trigger
-expect_readonly_reject selectable_ref_trigger selectable_ref_trigger
-expect_readonly_reject trusted_ref_guard trusted_ref_guard
-expect_readonly_reject write_permission write_permission
-expect_readonly_reject secret secret
-expect_readonly_reject environment environment
-expect_readonly_reject checkout_action checkout_action
-expect_readonly_reject sudo sudo
-expect_readonly_reject docker_mutation docker_mutation
-expect_readonly_reject systemctl_mutation systemctl_mutation
-
-printf '%s\n' 'Read-only staging workflow verifier tests passed.'

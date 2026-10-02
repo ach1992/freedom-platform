@@ -10,7 +10,7 @@ GitHub is the project source of truth. No Owner-maintained local or server check
 
 Ordinary runtime/CI commands execute through reviewed GitHub Actions on standard GitHub-hosted Linux runners. An Actions checkout is transient execution state for an exact GitHub revision, not a second source repository.
 
-The exact `runs-on` selector in each workflow revision is authoritative for runner routing. Every current repository workflow must use the pinned GitHub-hosted execution contract appropriate to that workflow; no current workflow depends on a self-hosted runner. Self-hosted execution remains only an optional future private/trusted capability. Privileged live provider mutation is intentionally outside normal Actions routing and uses the repository-owned guarded acceptance harnesses through the owning task's approved operational boundary. Workflow/toolchain checks must validate the effective environment rather than assuming host-specific paths.
+The exact `runs-on` selector in each workflow revision is authoritative for runner routing. Every current repository workflow must use the pinned GitHub-hosted execution contract appropriate to that workflow; no current workflow depends on a self-hosted runner. Self-hosted execution remains only an optional future private/trusted capability. Real staging/provider acceptance is intentionally outside normal Actions routing and uses repository-owned probes/harnesses through the owning task's approved directly connected disposable test server. Workflow/toolchain checks must validate the effective environment rather than assuming host-specific paths.
 
 ## Using CI
 
@@ -19,7 +19,7 @@ The exact `runs-on` selector in each workflow revision is authoritative for runn
 - `.github/workflows/ci.yml` defines intentional manual validation through `workflow_dispatch`, but a definition is callable only when current GitHub/default-branch registration exposes that workflow.
 - A workflow file that exists only on an integration/task branch is code under review, not proof of a standing execution entrypoint.
 - Historical Actions registry entries or old successful runs do not prove that a workflow is currently callable. Verify the current default-branch workflow tree/registration before depending on an invocation path.
-- Runtime/readiness/provider workflow definitions remain narrow operational capabilities and are not substitutes for normal CI.
+- Real staging/provider acceptance is not a standing GitHub workflow; use the repository-owned probes/harnesses on the task-approved directly connected disposable test server.
 
 If the Master cannot execute MariaDB/Docker/shell work directly, that is not itself a blocker. Persist reversible work on GitHub and use the standard GitHub-hosted Actions path for authoritative generic runtime evidence when the current GitHub capability can invoke it. If the current Chat connector cannot invoke a required validation run, continue independent reversible implementation/review work and surface that invocation boundary before the decision that actually consumes exact-head evidence. Do not weaken Draft/merge/release policy merely to work around a tool limitation.
 
@@ -57,7 +57,7 @@ The selector is deliberately conservative. It must not infer safety merely from 
 | Changed behavior | Material validation |
 |---|---|
 | canonical docs / governance | affected planning/project-control checks |
-| readiness/provider workflow definitions | project/control contract + mandatory Secret scan; privileged provider execution remains separately manual/gated and is never implied by CI |
+| staging/provider acceptance probes or harnesses | operations/source-contract validation; real target execution remains task-gated on the disposable test server and is never implied by CI |
 | PHP application/config/schema | Unit + changed-PHP Pint + PHPStan/forbidden/architecture + MariaDB 10.11/Redis integration; TARGETED only when the conservative selector proves the candidate shape, otherwise FULL Feature |
 | localization catalogs under `resources/lang/**` | Unit catalog contract + changed-PHP Pint; no MariaDB/Redis solely for localization data |
 | Unit tests only | Unit + changed-PHP Pint; no MariaDB/Redis provisioning |
@@ -67,7 +67,7 @@ The selector is deliberately conservative. It must not infer safety merely from 
 | operational/deployment entrypoints | shell/PHP operational syntax/entrypoint validation; separate High/Critical review/release gates still apply |
 | unknown/unclassified | fail safe to every normal validation domain and FULL real-engine scope when integration applies |
 
-Readiness workflow definitions are control-plane surfaces, not application behavior. `staging-readiness-runtime.yml` retains its dedicated adversarial read-only verifier and `provider-readiness.yml` remains the bounded read-only provider probe; their runner selectors and non-mutation constraints are enforced by the canonical project-control verifier. Live provider acceptance is an operational harness, not a standing GitHub Actions mutation workflow, and retains its separate High/Critical review/Owner gates. No wildcard `.github/workflows/*` downgrade exists.
+The repository carries no standing staging/provider readiness Actions workflow and no GitHub-secret contract for those real-target tests. Read-only probes and guarded live harnesses remain repository-owned operational entrypoints executed only on the task-approved disposable test server. Generic CI verifies source/tests/control policy; real-target execution retains its separate task, risk and Owner authorization boundaries.
 
 Changes to the CI classifier/workflow/real-engine selector are self-modifying control-plane changes: representative classifier, selector and verifier-abuse cases run independently of the application integration result. A CI-policy change does not manufacture a MariaDB run when the effective diff cannot affect application/database behavior. Conversely, application/schema/database semantics that need the engine still require MariaDB 10.11 acceptance, but that acceptance may be TARGETED when the conservative selector proves a bounded candidate; engine requirement no longer implies an unconditional full Feature run.
 

@@ -20,49 +20,31 @@ Immediately before a privileged provider acceptance run, verify the owning Issue
 
 Secret values are write-only operational state. Never paste them into Chat, Git, Issues, PRs, logs, screenshots, or repository evidence.
 
-Known workflow/configuration identifiers include:
+Repository Actions secret inventory is live GitHub state, not a durable documentation list. Target-like staging and provider acceptance must not depend on standing repository `STAGING_*`, `PASARGUARD_TEST_*`, or `MARZBAN_TEST_*` Actions secrets merely to make real-target validation executable.
 
-- `MARZBAN_TEST_ORIGIN`
-- `MARZBAN_TEST_USERNAME`
-- `MARZBAN_TEST_PASSWORD`
-- `PASARGUARD_TEST_ORIGIN`
-- `PASARGUARD_TEST_API_KEY`
-- `PASARGUARD_TEST_USERNAME`
-- `PASARGUARD_TEST_PASSWORD`
-- `STAGING_DOMAIN`
-- `STAGING_HOST`
-- `STAGING_PORT`
-- `STAGING_USER`
-- `STAGING_PASSWORD`
-- `STAGING_SSH_PRIVATE_KEY`
-- `STAGING_KNOWN_HOSTS`
-- `TELEGRAM_TEST_BOT_TOKEN`
-
-The current workflow/source revision is authoritative for whether an identifier is actively consumed. A configured identifier that source does not use is reserved/unconsumed, not permission to invent a new execution path.
+The repository-owned provider probes/harnesses still accept runtime environment variables for origins/credentials. Those values are injected only inside the approved disposable test-server/runtime boundary and are not a requirement that matching GitHub repository secrets exist. If a future reviewed execution design reintroduces a repository/Environment secret, the exact workflow/source revision becomes authoritative for that consumer.
 
 Prefer repository-scoped `GITHUB_TOKEN` for repository-local Actions operations. Introduce another credential type only when a concrete capability cannot be provided safely by `GITHUB_TOKEN`.
 
-## Operational workflow definitions and activation state
-
-Workflow source on the exact revision plus current GitHub registration/state are jointly authoritative. **A workflow file existing only on a non-default task branch is code under review, not proof of a standing dispatchable capability.** Historical registry entries whose source is absent from the current default-branch tree are history/navigation only.
+## Operational execution paths
 
 Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-strategy.md`; this runbook does not duplicate its validation tiers or runner selector.
 
-### Staging Readiness
+### Target-like rehearsal
 
-`.github/workflows/staging-readiness-runtime.yml` defines the read-only runtime readiness path through a pinned GitHub-hosted runner and the protected `STAGING_*` SSH target inputs. It is triggered only through the `staging_readiness` repository-dispatch event, so GitHub sources the workflow and ref from the default branch instead of a caller-selected branch/tag. The dispatch payload must include `confirmation=READ_ONLY_STAGING_CHECK`; do not add `workflow_dispatch` or another branch-selectable trigger. Remote execution is a fixed source-owned probe with strict host-key verification against `STAGING_KNOWN_HOSTS`; a host-key mismatch is a trust-boundary failure and must not be bypassed with trust-on-first-use or relaxed SSH checking. The workflow must remain bounded, non-mutating, and must not become a general remote shell or project checkout.
+There is no standing GitHub Actions staging-readiness workflow. The owning release task selects an Owner-approved directly connected disposable/non-production test server, records the exact task-time host identity in GitHub, and verifies that identity immediately before consequential mutation. Host connection details, IP/hostname, temporary credentials, and server-local secret material remain operational/task state rather than repository configuration.
 
-### Provider Readiness - Read Only
+Use the current installer/release/backup/restore/update/rollback authorities on the exact reviewed candidate. Do not restore historical one-time staging scripts or create a permanent remote-shell workflow merely for rehearsal convenience.
 
-`.github/workflows/provider-readiness.yml` defines the manual read-only readiness path for the pinned Marzban `0.8.4` and PasarGuard `5.4.1` contracts. It runs on the pinned GitHub-hosted Ubuntu runner, accepts only the explicit `READ_ONLY_PROVIDER_CHECK` confirmation plus a bounded provider selector, and consumes only the selected provider's test credential identifiers in that provider's steps. Readiness may authenticate and read version/capability/target-discovery endpoints, but it must not create, update, suspend, rotate, or delete a remote service.
+### Provider readiness and live acceptance
 
-### Provider Live Acceptance
+Read-only provider probes are source-owned operational entrypoints, including `scripts/ci/pasarguard-readonly-probe.php` and `scripts/ci/marzban-readonly-probe.php`. Execute them directly on the approved disposable test server after installing the exact candidate's locked dependencies and injecting credentials only through the server-local protected runtime boundary.
 
-Live provider acceptance is intentionally **not** exposed as a standing GitHub Actions mutation workflow. The repository-owned guarded entrypoints are `scripts/ci/pasarguard-live-acceptance.php` and `scripts/ci/marzban-live-acceptance.php`; their tested harnesses enforce the exact provider-specific confirmation sentinels, pinned provider version checks, deterministic disposable remote identity, authoritative discovery/reconciliation, bounded cleanup, and no blind mutation replay after an uncertain result.
+Live provider acceptance is likewise intentionally **not** exposed as a standing GitHub Actions mutation workflow. The guarded entrypoints are `scripts/ci/pasarguard-live-acceptance.php` and `scripts/ci/marzban-live-acceptance.php`; their tested harnesses enforce provider-specific confirmation sentinels, exact provider-version checks, deterministic disposable remote identity, authoritative discovery/reconciliation, bounded cleanup, and no blind mutation replay after an uncertain result.
 
-Run an entrypoint only from an exact reviewed candidate on the Owner-approved disposable/non-production acceptance host through the approved operational control channel. Install the locked dependency set for that exact candidate, keep TLS verification enabled, inject credentials only through the protected host/runtime boundary, and use a deterministic run identifier that contains no secret or customer data. Capture only the sanitized JSON/result evidence required by the owning release task.
+Run a live entrypoint only from an exact reviewed candidate on the Owner-approved disposable/non-production acceptance host through the approved operational control channel. Keep TLS verification enabled, use a deterministic run identifier that contains no secret/customer data, and retain only the sanitized evidence required by the owning release task.
 
-A read-only version/capability failure must be resolved before the corresponding live harness is eligible. Do not execute a live harness merely to discover whether credentials or target configuration exist, and do not create a standing remote-shell or Actions mutation path for convenience.
+A read-only version/capability failure must be resolved before the corresponding live harness is eligible. Do not execute a live harness merely to discover whether credentials or target configuration exist.
 
 ## Production layout
 

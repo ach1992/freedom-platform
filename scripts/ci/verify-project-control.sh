@@ -40,15 +40,16 @@ required_files=(
     scripts/ci/feature-test-shard-plan.sh
     scripts/ci/select-feature-shard.sh
     scripts/ci/test-feature-sharding.sh
-    scripts/ci/verify-readonly-staging-workflow.sh
     scripts/ci/MarzbanReadinessProbe.php
     scripts/ci/marzban-readonly-probe.php
+    scripts/ci/pasarguard-readonly-probe.php
     scripts/ci/PasarGuardLiveAcceptance.php
     scripts/ci/pasarguard-live-acceptance.php
     scripts/ci/MarzbanLiveAcceptance.php
     scripts/ci/marzban-live-acceptance.php
     scripts/ci/scan-git-secrets.sh
     scripts/ci/test-secret-scan.sh
+    scripts/ci/reject-retired-actions-secrets.sh
     scripts/docs/generate-release-references.php
 
 )
@@ -222,13 +223,18 @@ if grep -RIE --include='*.md' \
     fail 'canonical documentation references retired status/planning/traceability/evidence material'
 fi
 
-# Current repository workflows use pinned GitHub-hosted execution. Privileged provider acceptance uses source-owned operational harnesses rather than a standing self-hosted workflow.
-test ! -e .github/workflows/staging-readiness.yml \
-    || fail 'retired branch-selectable staging-readiness workflow path must remain absent'
-test ! -e .github/workflows/provider-live-acceptance.yml \
-    || fail 'retired provider live workflow path must remain absent'
-test -s .github/workflows/staging-readiness-runtime.yml \
-    || fail 'default-branch staging-readiness runtime workflow is missing'
+# Generic repository CI is GitHub-hosted. Real staging/provider acceptance is direct-host operational work, not a standing Actions secret path.
+for retired_workflow in \
+    .github/workflows/staging-readiness.yml \
+    .github/workflows/staging-readiness-runtime.yml \
+    .github/workflows/provider-readiness.yml \
+    .github/workflows/provider-live-acceptance.yml; do
+    test ! -e "$retired_workflow" \
+        || fail "retired staging/provider workflow path must remain absent: $retired_workflow"
+done
+
+test ! -e scripts/ci/verify-readonly-staging-workflow.sh \
+    || fail 'retired staging workflow verifier must remain absent'
 
 shopt -s nullglob
 workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
@@ -252,28 +258,6 @@ for workflow in "${workflow_files[@]}"; do
             done <<< "$runner_lines"
             if grep -F 'self-hosted' "$workflow" >/dev/null; then
                 fail 'generic CI must not retain a self-hosted runner route while the repository is public-ready'
-            fi
-            ;;
-        .github/workflows/staging-readiness-runtime.yml)
-            while IFS= read -r runner_line; do
-                trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
-                [[ "$trimmed" == 'runs-on: ubuntu-24.04' ]] \
-                    || fail "read-only staging readiness must use the pinned GitHub-hosted Ubuntu runner: $workflow: $trimmed"
-            done <<< "$runner_lines"
-            if grep -F 'self-hosted' "$workflow" >/dev/null; then
-                fail 'read-only staging readiness must not depend on a self-hosted runner'
-            fi
-            bash scripts/ci/verify-readonly-staging-workflow.sh "$workflow" >/dev/null \
-                || fail 'read-only staging readiness workflow failed its bounded SSH/read-only contract verifier'
-            ;;
-        .github/workflows/provider-readiness.yml)
-            while IFS= read -r runner_line; do
-                trimmed="${runner_line#"${runner_line%%[![:space:]]*}"}"
-                [[ "$trimmed" == 'runs-on: ubuntu-24.04' ]] \
-                    || fail "read-only provider readiness must use the pinned GitHub-hosted Ubuntu runner: $workflow: $trimmed"
-            done <<< "$runner_lines"
-            if grep -F 'self-hosted' "$workflow" >/dev/null; then
-                fail 'read-only provider readiness must not depend on a self-hosted runner'
             fi
             ;;
         *)
@@ -373,71 +357,15 @@ if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KA
     fail 'generic CI references protected provider/staging/runtime secrets'
 fi
 
-# Superseded read-only checks may be cancelled; a guarded provider mutation must not be interrupted mid-effect.
-staging_readonly=.github/workflows/staging-readiness-runtime.yml
-grep -F 'repository_dispatch:' "$staging_readonly" >/dev/null \
-    || fail 'staging-readiness must be sourced from default-branch repository_dispatch'
-grep -F 'types: [staging_readiness]' "$staging_readonly" >/dev/null \
-    || fail 'staging-readiness must retain its exact repository-dispatch event type'
-if grep -F 'workflow_dispatch:' "$staging_readonly" >/dev/null; then
-    fail 'staging-readiness must not regain a branch-selectable workflow_dispatch trigger'
-fi
-bash scripts/ci/verify-readonly-staging-workflow.sh "$staging_readonly" >/dev/null \
-    || fail 'staging-readiness read-only/default-branch verifier failed'
-grep -A3 -F 'concurrency:' "$staging_readonly" | grep -F 'cancel-in-progress: true' >/dev/null \
-    || fail 'staging-readiness must cancel superseded repository-dispatch runs'
-grep -A3 -F 'concurrency:' .github/workflows/provider-readiness.yml | grep -F 'cancel-in-progress: true' >/dev/null \
-    || fail 'provider-readiness must cancel superseded read-only runs'
+# Real staging/provider target credentials must not become standing GitHub Actions secret dependencies.
+bash scripts/ci/reject-retired-actions-secrets.sh .github/workflows >/dev/null \
+    || fail 'GitHub Actions must not depend on retired staging/provider test secret interfaces'
 
-# Provider workflow safeguards remain explicit and fail closed.
-provider_readonly=.github/workflows/provider-readiness.yml
-grep -F 'workflow_dispatch:' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must remain manual-only'
-grep -F 'READ_ONLY_PROVIDER_CHECK' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness lost its explicit read-only confirmation sentinel'
-grep -F 'contents: read' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must retain read-only repository permissions'
-grep -F 'pasarguard-readonly-probe.php' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must retain the bounded PasarGuard read-only probe'
-grep -F 'marzban-readonly-probe.php' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must retain the bounded Marzban read-only probe'
+# Direct read-only provider probes remain source-owned for execution on the task-approved disposable test server.
+grep -F "const EXPECTED_PASARGUARD_VERSION = '5.4.1';" scripts/ci/pasarguard-readonly-probe.php >/dev/null \
+    || fail 'PasarGuard direct readiness probe lost the pinned 5.4.1 contract'
 grep -F 'MarzbanReadinessProbe.php' scripts/ci/marzban-readonly-probe.php >/dev/null \
     || fail 'Marzban readiness entrypoint must delegate to the tested readiness contract'
-grep -F 'secrets.PASARGUARD_TEST_ORIGIN' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness lost the PasarGuard protected origin input'
-grep -F 'secrets.PASARGUARD_TEST_API_KEY' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness lost the PasarGuard protected API-key input'
-for secret in MARZBAN_TEST_ORIGIN MARZBAN_TEST_USERNAME MARZBAN_TEST_PASSWORD; do
-    grep -F "secrets.$secret" "$provider_readonly" >/dev/null \
-        || fail "provider-readiness lost required Marzban protected input: $secret"
-done
-mapfile -t provider_readonly_secrets < <(grep -oE 'secrets\.[A-Z0-9_]+' "$provider_readonly" | sed 's/^secrets\.//' | sort -u)
-expected_provider_readonly_secrets=(
-    MARZBAN_TEST_ORIGIN
-    MARZBAN_TEST_PASSWORD
-    MARZBAN_TEST_USERNAME
-    PASARGUARD_TEST_API_KEY
-    PASARGUARD_TEST_ORIGIN
-)
-[[ "${provider_readonly_secrets[*]}" == "${expected_provider_readonly_secrets[*]}" ]] \
-    || fail "provider-readiness secret allowlist drifted: ${provider_readonly_secrets[*]}"
-grep -F 'shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240' "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must pin setup-php to the reviewed immutable commit'
-grep -F "options:" "$provider_readonly" >/dev/null \
-    || fail 'provider-readiness must expose an explicit provider selector'
-for provider in pasarguard marzban all; do
-    grep -Fx "          - $provider" "$provider_readonly" >/dev/null \
-        || fail "provider-readiness selector lost expected option: $provider"
-done
-if grep -Eq '^[[:space:]]*(push|pull_request|pull_request_target|schedule|workflow_run):' "$provider_readonly"; then
-    fail 'provider-readiness may not gain an automatic trigger'
-fi
-if grep -Eq '^[[:space:]]*environment:' "$provider_readonly"; then
-    fail 'provider-readiness must not bind the protected live-mutation environment'
-fi
-if grep -Eq '^[[:space:]]+(sudo|curl|wget|ssh|scp|rsync|git[[:space:]]+push|php[[:space:]]+artisan|composer[[:space:]]+(install|update)|docker[[:space:]]+compose[[:space:]]+(up|down|run|exec|start|stop|restart|pull|build))([[:space:]]|$)|pasarguard-live-acceptance\.php' "$provider_readonly"; then
-    fail 'provider-readiness contains a command outside its bounded read-only provider contract'
-fi
 
 # Guarded live-provider entrypoints remain source-owned and delegate to tested harnesses.
 grep -F 'PasarGuardLiveAcceptance.php' scripts/ci/pasarguard-live-acceptance.php >/dev/null \
