@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   pasarguard:
-    name: PasarGuard v5.2.1 read-only readiness
+    name: PasarGuard v5.4.1 read-only readiness
     if: ${{ github.ref_name == 'main' && inputs.confirm == 'READ_ONLY_PROVIDER_CHECK' && (inputs.provider == 'pasarguard' || inputs.provider == 'all') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5

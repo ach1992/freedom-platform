@@ -21,7 +21,7 @@ use Throwable;
 
 final class PasarGuardLiveAcceptance
 {
-    public const CONFIRMATION = 'MUTATE_DISPOSABLE_PASARGUARD_V5_2_1';
+    public const CONFIRMATION = 'MUTATE_DISPOSABLE_PASARGUARD_V5_4_1';
 
     private const CREATE_LIMIT_BYTES = 1_048_576;
 
@@ -190,10 +190,27 @@ final class PasarGuardLiveAcceptance
 
             $beforeArtifacts = $mapper->deliveryArtifacts($active);
             $beforeLinks = $beforeArtifacts->revealForAuthorizedDelivery();
-            $beforeHash = hash('sha256', $beforeLinks[0]);
+            $beforeUrl = $beforeLinks[0] ?? null;
+            if (! is_string($beforeUrl) || $beforeUrl === '') {
+                throw new RuntimeException('pasarguard_live_subscription_url_missing');
+            }
             if ((string) $beforeArtifacts !== '[SENSITIVE_DELIVERY_ARTIFACTS]') {
                 throw new RuntimeException('pasarguard_live_delivery_redaction_failed');
             }
+
+            $deliveryHeaders = [
+                'Accept' => '*/*',
+                'User-Agent' => 'FreedomPlatform-PasarGuard-Live-Acceptance/1.0',
+            ];
+            $beforeDelivery = $this->request('GET', $beforeUrl, $deliveryHeaders, null);
+            if ($beforeDelivery->transportFailure || $beforeDelivery->status !== 200) {
+                throw new RuntimeException('pasarguard_live_subscription_pre_revoke_unavailable');
+            }
+
+            // PasarGuard 5.4.1 encodes subscription-token issue time at whole-second
+            // precision. Cross the timestamp boundary so the old token predates
+            // sub_revoked_at and revocation can be proven deterministically.
+            usleep(1_100_000);
 
             $this->issueMapped(
                 $origin,
@@ -203,15 +220,26 @@ final class PasarGuardLiveAcceptance
                 'rotate_subscription_link',
                 $mapper->rotateSubscriptionLinkRequest($remoteId),
             );
+
+            $previousDelivery = $this->request('GET', $beforeUrl, $deliveryHeaders, null);
+            if ($previousDelivery->transportFailure || $previousDelivery->status !== 404) {
+                throw new RuntimeException('pasarguard_live_subscription_revocation_unproved');
+            }
+
             $rotated = $this->readUserById($origin, $basePath, $headers, $remoteId);
             $afterArtifacts = $mapper->deliveryArtifacts($rotated);
             $afterLinks = $afterArtifacts->revealForAuthorizedDelivery();
-            $afterHash = hash('sha256', $afterLinks[0]);
-            if (hash_equals($beforeHash, $afterHash)) {
-                throw new RuntimeException('pasarguard_live_subscription_rotation_unproved');
+            $afterUrl = $afterLinks[0] ?? null;
+            if (! is_string($afterUrl) || $afterUrl === '') {
+                throw new RuntimeException('pasarguard_live_subscription_url_missing');
             }
             if ((string) $afterArtifacts !== '[SENSITIVE_DELIVERY_ARTIFACTS]') {
                 throw new RuntimeException('pasarguard_live_delivery_redaction_failed');
+            }
+
+            $afterDelivery = $this->request('GET', $afterUrl, $deliveryHeaders, null);
+            if ($afterDelivery->transportFailure || $afterDelivery->status !== 200) {
+                throw new RuntimeException('pasarguard_live_subscription_post_revoke_unavailable');
             }
             $executedRows[] = 'LIVE-017';
             $executedRows[] = 'LIVE-018';

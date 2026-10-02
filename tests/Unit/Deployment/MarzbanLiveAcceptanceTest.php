@@ -90,7 +90,7 @@ final class MarzbanLiveAcceptanceTest extends TestCase
             }
             if ($method === 'POST' && str_ends_with($path, '/revoke_sub')) {
                 self::assertNotNull($state);
-                $state['subscription_url'] = 'https://subscription.example/two';
+                // Keep the subscription URL stable to cover same-second Marzban token generation.
                 $state['links'] = ['vless://config-two'];
 
                 return new PanelHttpExchange(200, $state, false, false);

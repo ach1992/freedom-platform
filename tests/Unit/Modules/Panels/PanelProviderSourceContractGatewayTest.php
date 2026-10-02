@@ -145,12 +145,12 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         self::assertStringNotContainsString('fixture-password', (string) $result->safeMessage);
     }
 
-    public function test_pasarguard_v521_api_key_preserves_base_path_and_reads_by_username_id_and_group(): void
+    public function test_pasarguard_v541_api_key_preserves_base_path_and_reads_by_username_id_and_group(): void
     {
         $apiKey = 'pg_key_'.'123e4567-e89b-42d3-a456-426614174000';
         Http::preventStrayRequests();
         Http::fake([
-            'https://pasarguard.example.test/hpanel/api/system' => Http::response(['version' => '5.2.1']),
+            'https://pasarguard.example.test/hpanel/api/system' => Http::response(['version' => '5.4.1']),
             'https://pasarguard.example.test/hpanel/api/user/by-username/fp_provider_001' => Http::response($this->pasarGuardUser()),
             'https://pasarguard.example.test/hpanel/api/user/by-id/42' => Http::response($this->pasarGuardUser()),
             'https://pasarguard.example.test/hpanel/api/groups' => Http::response([
@@ -165,7 +165,7 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         $gateway = $this->app->make(PasarGuardGatewayFactory::class)->make($this->pasarGuardApiKeySession($apiKey));
 
         self::assertSame(PanelOperationOutcome::Success, $gateway->testConnection()->outcome);
-        self::assertSame('5.2.1', $gateway->capabilities()->panelVersion);
+        self::assertSame('5.4.1', $gateway->capabilities()->panelVersion);
         self::assertFalse($gateway->capabilities()->supports('create_service'));
 
         $byUsername = $gateway->findByDeterministicUsername('fp_provider_001');
@@ -209,7 +209,7 @@ final class PanelProviderSourceContractGatewayTest extends TestCase
         Http::preventStrayRequests();
         Http::fake([
             'https://pasarguard.example.test/api/admin/token' => Http::response(['access_token' => 'fixture-pg-access-token']),
-            'https://pasarguard.example.test/api/system' => Http::response(['version' => '5.2.1']),
+            'https://pasarguard.example.test/api/system' => Http::response(['version' => '5.4.1']),
         ]);
 
         $gateway = $this->app->make(PasarGuardGatewayFactory::class)->make($this->pasarGuardPasswordSession());

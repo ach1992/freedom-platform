@@ -1,6 +1,6 @@
 {
   "provider": "pasarguard",
-  "version": "5.2.1",
+  "version": "5.4.1",
   "remote_id": "42",
   "target_reference": "pasarguard-group-4",
   "requests": {

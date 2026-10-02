@@ -25,6 +25,24 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
         $createCount = 0;
         $deleteCount = 0;
         $transport = function (string $method, string $url, array $headers, ?array $payload) use (&$state, &$createCount, &$deleteCount): PanelHttpExchange {
+            $host = (string) parse_url($url, PHP_URL_HOST);
+            if ($host === 'subscription.example') {
+                self::assertArrayNotHasKey('X-Api-Key', $headers);
+                $path = (string) parse_url($url, PHP_URL_PATH);
+
+                if ($path === '/one') {
+                    $revoked = is_array($state)
+                        && ($state['subscription_url'] ?? null) === 'https://subscription.example/two';
+
+                    return new PanelHttpExchange($revoked ? 404 : 200, null, true, false);
+                }
+                if ($path === '/two') {
+                    return new PanelHttpExchange(200, null, true, false);
+                }
+
+                return new PanelHttpExchange(404, null, true, false);
+            }
+
             self::assertSame('pg_key_11111111-1111-1111-1111-111111111111', $headers['X-Api-Key']);
             $path = (string) parse_url($url, PHP_URL_PATH);
             if (str_starts_with($path, '/hpanel')) {
@@ -32,7 +50,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
             }
 
             if ($method === 'GET' && $path === '/api/system') {
-                return new PanelHttpExchange(200, ['version' => '5.2.1'], false, false);
+                return new PanelHttpExchange(200, ['version' => '5.4.1'], false, false);
             }
             if ($method === 'GET' && $path === '/api/inbounds/details') {
                 return new PanelHttpExchange(200, [['tag' => 'vless-main', 'protocol' => 'vless']], false, false);
@@ -118,7 +136,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
         self::assertSame(1, $createCount);
         self::assertSame(1, $deleteCount);
         self::assertTrue($summary['cleanup_verified']);
-        self::assertSame('5.2.1', $summary['version']);
+        self::assertSame('5.4.1', $summary['version']);
         self::assertSame('/hpanel', $summary['base_path']);
         self::assertSame(7, $summary['group_id']);
         self::assertContains('LIVE-006', $summary['executed_rows']);
@@ -153,7 +171,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
             }
 
             if ($method === 'GET' && $path === '/api/system') {
-                return new PanelHttpExchange(200, ['version' => '5.2.1'], false, false);
+                return new PanelHttpExchange(200, ['version' => '5.4.1'], false, false);
             }
             if ($method === 'GET' && $path === '/api/inbounds/details') {
                 return new PanelHttpExchange(200, [['tag' => 'vless-main', 'protocol' => 'vless']], false, false);
@@ -238,7 +256,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
             $path = (string) parse_url($url, PHP_URL_PATH);
 
             if ($method === 'GET' && $path === '/api/system') {
-                return new PanelHttpExchange(200, ['version' => '5.2.1'], false, false);
+                return new PanelHttpExchange(200, ['version' => '5.4.1'], false, false);
             }
             if ($method === 'GET' && $path === '/api/inbounds/details') {
                 return new PanelHttpExchange(200, [['tag' => 'vless-main', 'protocol' => 'vless']], false, false);
@@ -296,7 +314,7 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
                 $mutationCount++;
             }
 
-            return new PanelHttpExchange(200, ['version' => '5.2.2'], false, false);
+            return new PanelHttpExchange(200, ['version' => '5.4.0'], false, false);
         };
 
         $runner = new PasarGuardLiveAcceptance($transport);

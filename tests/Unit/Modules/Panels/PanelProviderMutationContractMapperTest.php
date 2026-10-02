@@ -62,9 +62,9 @@ final class PanelProviderMutationContractMapperTest extends TestCase
         self::assertCount(2, $delivery->revealForAuthorizedDelivery());
     }
 
-    public function test_pasarguard_v521_maps_all_pinned_mutations_and_delivery_fixture(): void
+    public function test_pasarguard_v541_maps_all_pinned_mutations_and_delivery_fixture(): void
     {
-        $fixture = $this->fixture('pasarguard-v5.2.1-mutations.json');
+        $fixture = $this->fixture('pasarguard-v5.4.1-mutations.json');
         $mapper = new PasarGuardMutationContractMapper;
         $request = $this->request((string) $fixture['target_reference']);
         $remoteId = (string) $fixture['remote_id'];
@@ -127,7 +127,7 @@ final class PanelProviderMutationContractMapperTest extends TestCase
     {
         foreach ([
             [new MarzbanMutationContractMapper, 'marzban-v0.8.4-mutations.json'],
-            [new PasarGuardMutationContractMapper, 'pasarguard-v5.2.1-mutations.json'],
+            [new PasarGuardMutationContractMapper, 'pasarguard-v5.4.1-mutations.json'],
         ] as [$mapper, $fixtureName]) {
             $fixture = $this->fixture($fixtureName);
             $request = $this->request((string) $fixture['target_reference']);
@@ -195,7 +195,7 @@ final class PanelProviderMutationContractMapperTest extends TestCase
         );
 
         $pasarGuard = new PasarGuardMutationContractMapper;
-        $pasarFixture = $this->fixture('pasarguard-v5.2.1-mutations.json');
+        $pasarFixture = $this->fixture('pasarguard-v5.4.1-mutations.json');
         self::assertSame(
             PanelOperationOutcome::Success,
             $pasarGuard->classifyMutation('create_service', new PanelHttpExchange(201, $pasarFixture['create_response'], false, false))->outcome,
@@ -214,7 +214,7 @@ final class PanelProviderMutationContractMapperTest extends TestCase
     {
         foreach ([
             [new MarzbanMutationContractMapper, 'marzban-v0.8.4-mutations.json'],
-            [new PasarGuardMutationContractMapper, 'pasarguard-v5.2.1-mutations.json'],
+            [new PasarGuardMutationContractMapper, 'pasarguard-v5.4.1-mutations.json'],
         ] as [$mapper, $fixtureName]) {
             $fixture = $this->fixture($fixtureName);
             $provider = $fixture['create_response'];
