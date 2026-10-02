@@ -274,6 +274,48 @@ jobs:
     secrets: 'inherit'
 YAML
 
+cat > "$retired_fixture_dir/bulk-inherit-yaml12-job-keys.yml" <<'YAML'
+jobs:
+  on:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+  yes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-duplicate-job-key.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/safe-yaml12-job-keys.yml" <<'YAML'
+jobs:
+  on:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      telegram_token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+  yes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo yes
+  off:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo off
+  no:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo no
+YAML
+
 cat > "$retired_fixture_dir/safe.yml" <<'YAML'
 env:
   STAGING_HOST: 127.0.0.1
@@ -307,7 +349,9 @@ for fixture in \
     bulk-inherit-anchor-key.yml \
     bulk-inherit-alias-key.yml \
     bulk-inherit-plain-multiline.yml \
-    bulk-inherit-single-quoted.yml; do
+    bulk-inherit-single-quoted.yml \
+    bulk-inherit-yaml12-job-keys.yml \
+    bulk-inherit-duplicate-job-key.yml; do
     if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >/dev/null 2>&1; then
         fail "retired Actions secret guard accepted fixture: $fixture"
     fi
@@ -315,6 +359,8 @@ done
 
 bash "$retired_secret_guard" "$retired_fixture_dir/safe.yml" >/dev/null \
     || fail 'retired Actions secret guard rejected a bounded safe fixture'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-yaml12-job-keys.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected distinct YAML 1.2 boolean-like job IDs'
 bash "$retired_secret_guard" "$root/.github/workflows/ci.yml" >/dev/null \
     || fail 'current secret-free CI workflow violates retired Actions secret policy'
 

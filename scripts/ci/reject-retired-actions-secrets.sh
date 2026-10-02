@@ -21,6 +21,86 @@ except ImportError:
     raise SystemExit(2)
 
 RETIRED_PREFIXES = ("STAGING_", "PASARGUARD_TEST_", "MARZBAN_TEST_")
+
+
+class ActionsLoader(yaml.SafeLoader):
+    """SafeLoader adjusted to GitHub Actions' YAML 1.2 boolean semantics."""
+
+
+# PyYAML's SafeLoader uses YAML 1.1 booleans, where plain yes/no/on/off are
+# booleans. GitHub Actions uses YAML 1.2 core behavior, where only true/false
+# variants are booleans. Copy before editing so this policy does not mutate the
+# process-global SafeLoader resolver table.
+ActionsLoader.yaml_implicit_resolvers = {
+    first: list(resolvers)
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+for first, resolvers in list(ActionsLoader.yaml_implicit_resolvers.items()):
+    ActionsLoader.yaml_implicit_resolvers[first] = [
+        (tag, pattern)
+        for tag, pattern in resolvers
+        if tag != "tag:yaml.org,2002:bool"
+    ]
+ActionsLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
+
+
+def construct_mapping_without_collisions(loader, node, deep=False):
+    if not isinstance(node, yaml.nodes.MappingNode):
+        raise yaml.constructor.ConstructorError(
+            None,
+            None,
+            f"expected a mapping node, but found {node.id}",
+            node.start_mark,
+        )
+
+    # Resolve YAML merge keys before constructing the mapping so aliases and
+    # merges are inspected in the same semantic object. Fail closed instead of
+    # allowing Python dict assignment to erase an earlier duplicate/colliding
+    # key that GitHub Actions may still treat as a distinct workflow key.
+    loader.flatten_mapping(node)
+    mapping = {}
+    semantic_keys = set()
+
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            hash(key)
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from exc
+
+        semantic_key = (type(key), key)
+        if semantic_key in semantic_keys:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate mapping key {key!r}",
+                key_node.start_mark,
+            )
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found colliding mapping key {key!r}",
+                key_node.start_mark,
+            )
+
+        semantic_keys.add(semantic_key)
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+
+    return mapping
+
+
+ActionsLoader.construct_mapping = construct_mapping_without_collisions
+
 secret_token = re.compile(r"\bsecrets\b", re.IGNORECASE)
 property_access = re.compile(r"\s*\.\s*([A-Z_][A-Z0-9_]*)", re.IGNORECASE)
 literal_index_access = re.compile(
@@ -49,7 +129,7 @@ def fail(path: Path, reason: str) -> None:
 
 def validate_semantic_secret_forwarding(path: Path, source: str) -> None:
     try:
-        document = yaml.safe_load(source)
+        document = yaml.load(source, Loader=ActionsLoader)
     except yaml.YAMLError as exc:
         print(f"Workflow YAML cannot be parsed safely: {path}: {exc}", file=sys.stderr)
         raise SystemExit(1)
