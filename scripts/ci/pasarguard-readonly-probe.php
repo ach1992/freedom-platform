@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const EXPECTED_PASARGUARD_VERSION = '5.2.1';
+const EXPECTED_PASARGUARD_VERSION = '5.4.1';
 const REQUEST_TIMEOUT_SECONDS = 15;
 const CONNECT_TIMEOUT_SECONDS = 5;
 

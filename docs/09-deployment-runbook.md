@@ -54,7 +54,7 @@ Normal repository CI is owned by `.github/workflows/ci.yml` and `docs/06-test-st
 
 ### Provider Readiness - Read Only
 
-`.github/workflows/provider-readiness.yml` defines the manual read-only readiness path for the pinned Marzban `0.8.4` and PasarGuard `5.2.1` contracts. It runs on the pinned GitHub-hosted Ubuntu runner, accepts only the explicit `READ_ONLY_PROVIDER_CHECK` confirmation plus a bounded provider selector, and consumes only the selected provider's test credential identifiers in that provider's steps. Readiness may authenticate and read version/capability/target-discovery endpoints, but it must not create, update, suspend, rotate, or delete a remote service.
+`.github/workflows/provider-readiness.yml` defines the manual read-only readiness path for the pinned Marzban `0.8.4` and PasarGuard `5.4.1` contracts. It runs on the pinned GitHub-hosted Ubuntu runner, accepts only the explicit `READ_ONLY_PROVIDER_CHECK` confirmation plus a bounded provider selector, and consumes only the selected provider's test credential identifiers in that provider's steps. Readiness may authenticate and read version/capability/target-discovery endpoints, but it must not create, update, suspend, rotate, or delete a remote service.
 
 ### Provider Live Acceptance
 

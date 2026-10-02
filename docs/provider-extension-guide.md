@@ -42,7 +42,7 @@ Primary contract: `app/Modules/Panels/Application/Contracts/PanelAdapter.php`.
 | Provider | Pinned source-contract version | Source-declared protocol capability |
 | --- | --- | --- |
 | Marzban | `0.8.4` | `shadowsocks`, `trojan`, `vless`, `vmess` |
-| PasarGuard | `5.2.1` | `shadowsocks`, `trojan`, `vless`, `vmess`, `wireguard` |
+| PasarGuard | `5.4.1` | `shadowsocks`, `trojan`, `vless`, `vmess`, `wireguard` |
 
 Both source gateways declare `authoritative_username_lookup`, `fetch_status`, `list_compatible_targets`, `synchronize`, and `test_connection` capabilities.
 

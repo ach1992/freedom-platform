@@ -181,7 +181,8 @@ final class MarzbanLiveAcceptance
 
             $beforeArtifacts = $mapper->deliveryArtifacts($active);
             $beforeLinks = $beforeArtifacts->revealForAuthorizedDelivery();
-            $beforeHash = hash('sha256', $beforeLinks[0]);
+            sort($beforeLinks, SORT_STRING);
+            $beforeHash = hash('sha256', json_encode($beforeLinks, JSON_THROW_ON_ERROR));
             if ((string) $beforeArtifacts !== '[SENSITIVE_DELIVERY_ARTIFACTS]') {
                 throw new RuntimeException('marzban_live_delivery_redaction_failed');
             }
@@ -197,7 +198,8 @@ final class MarzbanLiveAcceptance
             $rotated = $this->readUser($origin, $basePath, $headers, $remoteId);
             $afterArtifacts = $mapper->deliveryArtifacts($rotated);
             $afterLinks = $afterArtifacts->revealForAuthorizedDelivery();
-            $afterHash = hash('sha256', $afterLinks[0]);
+            sort($afterLinks, SORT_STRING);
+            $afterHash = hash('sha256', json_encode($afterLinks, JSON_THROW_ON_ERROR));
             if (hash_equals($beforeHash, $afterHash)) {
                 throw new RuntimeException('marzban_live_subscription_rotation_unproved');
             }

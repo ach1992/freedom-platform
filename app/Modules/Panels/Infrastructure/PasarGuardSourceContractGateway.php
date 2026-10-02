@@ -18,7 +18,7 @@ use Throwable;
 
 final class PasarGuardSourceContractGateway extends AbstractPinnedReadOnlyPanelGateway implements PasarGuardGateway
 {
-    private const VERSION = '5.2.1';
+    private const VERSION = '5.4.1';
 
     private readonly PasarGuardMutationContractMapper $mutationContracts;
 

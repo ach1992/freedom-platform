@@ -16,7 +16,7 @@ use Throwable;
 
 final class PasarGuardMutationContractMapper
 {
-    public const VERSION = '5.2.1';
+    public const VERSION = '5.4.1';
 
     private const TARGET_PREFIX = 'pasarguard-group-';
 
