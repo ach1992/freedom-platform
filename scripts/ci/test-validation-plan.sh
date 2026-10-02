@@ -175,9 +175,10 @@ YAML
 
 cat > "$retired_fixture_dir/multiline-index.yml" <<'YAML'
 env:
-  PROBE: ${{ secrets[
-    'STAGING_SSH_PRIVATE_KEY'
-  ] }}
+  PROBE: >-
+    ${{ secrets[
+      'STAGING_SSH_PRIVATE_KEY'
+    ] }}
 YAML
 
 cat > "$retired_fixture_dir/dynamic-format.yml" <<'YAML'
@@ -208,6 +209,16 @@ YAML
 cat > "$retired_fixture_dir/expression-boundary-doubled-quote.yml" <<'YAML'
 env:
   PROBE: ${{ contains('it''s }} still inside string', 'marker') && secrets.MARZBAN_TEST_PASSWORD }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-yaml-single-quoted-static.yml" <<'YAML'
+env:
+  PROBE: '${{ contains(''it''''s }} still inside string'', ''marker'') && secrets.STAGING_HOST }}'
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-yaml-single-quoted-bulk.yml" <<'YAML'
+env:
+  PROBE: '${{ contains(''marker }} still inside string'', ''marker'') && toJSON(secrets) }}'
 YAML
 
 cat > "$retired_fixture_dir/retired-forwarding-key.yml" <<'YAML'
@@ -327,6 +338,15 @@ jobs:
       - run: echo benign
 YAML
 
+cat > "$retired_fixture_dir/duplicate-coerced-secret-key.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      1: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      1.0: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
 cat > "$retired_fixture_dir/safe-yaml12-job-keys.yml" <<'YAML'
 jobs:
   on:
@@ -350,6 +370,36 @@ YAML
 cat > "$retired_fixture_dir/safe-expression-string.yml" <<'YAML'
 env:
   PROBE: ${{ format('literal }} secrets.STAGING_HOST and it''s still text') }}
+YAML
+
+cat > "$retired_fixture_dir/safe-expression-yaml-single-quoted.yml" <<'YAML'
+env:
+  PROBE: '${{ format(''literal }} secrets.STAGING_HOST and it''''s still text'') }}'
+YAML
+
+cat > "$retired_fixture_dir/safe-forwarding-hyphen.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      access-token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      2026-01-01: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      0123: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      0o77: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      true: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+      1: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+cat > "$retired_fixture_dir/safe-comment-secret-text.yml" <<'YAML'
+# ${{ secrets.STAGING_HOST }} is comment text, not an executable expression.
+env:
+  SAFE: plain
+YAML
+
+cat > "$retired_fixture_dir/safe-non-context-secrets-token.yml" <<'YAML'
+env:
+  PROPERTY_NAMED_SECRETS: ${{ github.event.secrets.STAGING_HOST }}
+  HYPHENATED_IDENTIFIER: ${{ matrix.foo-secrets }}
 YAML
 
 cat > "$retired_fixture_dir/safe.yml" <<'YAML'
@@ -378,6 +428,8 @@ for fixture in \
     expression-boundary-retired-static.yml \
     expression-boundary-bulk-context.yml \
     expression-boundary-doubled-quote.yml \
+    expression-boundary-yaml-single-quoted-static.yml \
+    expression-boundary-yaml-single-quoted-bulk.yml \
     retired-forwarding-key.yml \
     retired-forwarding-key-lowercase.yml \
     bulk-inherit.yml \
@@ -391,12 +443,26 @@ for fixture in \
     bulk-inherit-alias-key.yml \
     bulk-inherit-plain-multiline.yml \
     bulk-inherit-single-quoted.yml \
-    bulk-inherit-yaml12-job-keys.yml \
-    bulk-inherit-duplicate-job-key.yml; do
-    if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >/dev/null 2>&1; then
+    bulk-inherit-yaml12-job-keys.yml; do
+    guard_output=$(mktemp "$tmpdir/guard-output.XXXXXX")
+    if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >"$guard_output" 2>&1; then
         fail "retired Actions secret guard accepted fixture: $fixture"
     fi
+    grep -F 'Unsafe GitHub Actions secrets access found:' "$guard_output" >/dev/null \
+        || fail "retired Actions secret fixture failed for an unrelated parse/runtime reason: $fixture"
 done
+
+if bash "$retired_secret_guard" "$retired_fixture_dir/bulk-inherit-duplicate-job-key.yml" >"$tmpdir/duplicate-key.out" 2>&1; then
+    fail 'retired Actions secret guard accepted duplicate mapping keys'
+fi
+grep -F 'Workflow YAML cannot be parsed safely:' "$tmpdir/duplicate-key.out" >/dev/null \
+    || fail 'duplicate mapping fixture did not fail at the semantic YAML collision boundary'
+
+if bash "$retired_secret_guard" "$retired_fixture_dir/duplicate-coerced-secret-key.yml" >"$tmpdir/duplicate-coerced-key.out" 2>&1; then
+    fail 'retired Actions secret guard accepted mapping keys that collide after GitHub scalar-to-string coercion'
+fi
+grep -F 'Workflow YAML cannot be parsed safely:' "$tmpdir/duplicate-coerced-key.out" >/dev/null \
+    || fail 'coerced duplicate-key fixture did not fail at the GitHub-compatible mapping boundary'
 
 bash "$retired_secret_guard" "$retired_fixture_dir/safe.yml" >/dev/null \
     || fail 'retired Actions secret guard rejected a bounded safe fixture'
@@ -404,6 +470,14 @@ bash "$retired_secret_guard" "$retired_fixture_dir/safe-yaml12-job-keys.yml" >/d
     || fail 'retired Actions secret guard rejected distinct YAML 1.2 boolean-like job IDs'
 bash "$retired_secret_guard" "$retired_fixture_dir/safe-expression-string.yml" >/dev/null \
     || fail 'retired Actions secret guard treated string-literal secret-like text as an access'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-expression-yaml-single-quoted.yml" >/dev/null \
+    || fail 'retired Actions secret guard diverged from YAML-decoded expression string semantics'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-forwarding-hyphen.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected GitHub non-empty-string/coerced scalar destination keys'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-comment-secret-text.yml" >/dev/null \
+    || fail 'retired Actions secret guard scanned raw YAML comment text instead of decoded scalar values'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-non-context-secrets-token.yml" >/dev/null \
+    || fail 'retired Actions secret guard confused property/identifier text with the secrets named-value context'
 bash "$retired_secret_guard" "$root/.github/workflows/ci.yml" >/dev/null \
     || fail 'current secret-free CI workflow violates retired Actions secret policy'
 
