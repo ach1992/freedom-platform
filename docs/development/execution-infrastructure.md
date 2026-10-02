@@ -48,7 +48,7 @@ Public fork pull requests may execute generic CI only on GitHub-hosted runners. 
 
 ### Optional self-hosted runners
 
-Self-hosted runners remain a supported capability for a future private repository or for a separately trusted private operational boundary. Self-hosted runner display names are inventory only, never a workflow contract. Jobs route by labels. The exact `runs-on` selector in the workflow revision is authoritative; do not copy custom label strings into multiple documents or use display names as routing dependencies.
+Self-hosted runners remain a supported capability for a future private repository or for a separately trusted private operational boundary, but **no current repository workflow depends on them**. Self-hosted runner display names are inventory only, never a workflow contract. If this capability is re-authorized later, jobs route by labels and the exact `runs-on` selector in that future workflow revision is authoritative; do not copy custom label strings into multiple documents or use display names as routing dependencies.
 
 A label is a capability claim, not proof. A runner receives a workload capability label only after qualification for that workload. A runner does not need to support every workload. When this source repository is public, repository-level self-hosted runners must remain disconnected; retaining host installations for later private re-registration is allowed, but a dormant installation is not an active workflow capability.
 
@@ -62,6 +62,8 @@ The repository has no dependency on a particular external Worker product.
 
 Deployment/staging hosts are runtime targets, not developer checkouts or project-recovery sources. Privileged/live operations are governed by the owning task/release and [`../09-deployment-runbook.md`](../09-deployment-runbook.md), not by the existence of shell access.
 
+For protected provider live acceptance, the current execution model is deliberately **not** a standing Actions/self-hosted-runner route. The repository owns the guarded provider harnesses and their deterministic tests; the owning release task selects an Owner-approved disposable/non-production host and an approved operational control channel (for example the connected `AI_Server_Agent` when that exact host is attached) only when the live gate is current. The exact candidate and harness command are source-controlled; host connection state, temporary credentials, and runtime inventory remain operational state.
+
 ## Toolchain ownership
 
 Avoid maintaining a handwritten copy of executable tool requirements when the repository already verifies them. A runner needs only the tools/runtime required by the workload capabilities it claims; do not install a database daemon, Docker daemon, PHP runtime, or other privileged capability merely to make all runners identical.
@@ -73,7 +75,8 @@ Additional requirements are capability-scoped:
 - **Repository-control / secret-scan work:** use the exact current workflow as authority. Current repository preflight can validate a changed Docker Compose contract with `docker compose ... config`, so a compatible Docker CLI/Compose parser is required when that path can route to the host; that check alone does not require access to a Docker daemon or permission to start containers. Pinned Actions may also bring their own executable tooling.
 - **PHP/static/dependency/operational work:** requires the PHP/Composer environment accepted by `scripts/ci/bootstrap-ci-toolchain.sh` plus only the commands used by the current job definitions.
 - **Database integration work:** requires the accepted PHP/Composer contract plus Docker Engine/daemon access and Compose sufficient to create and remove the repository's disposable MariaDB/Redis dependencies safely.
-- **Staging-runtime / provider-acceptance work:** the exact workflow revision owns any additional host topology, network, trust, secret, approval, or tool requirements. Do not infer those capabilities from ordinary CI eligibility.
+- **Staging-runtime / read-only provider-readiness work:** the exact workflow revision owns any additional host topology, network, trust, secret, approval, or tool requirements for that workflow. Do not infer those capabilities from ordinary CI eligibility.
+- **Privileged provider live acceptance:** the exact reviewed harness candidate plus the owning Task and [`../09-deployment-runbook.md`](../09-deployment-runbook.md) own the executable contract. The approved disposable/non-production target, protected credential boundary, and approved operational control channel must be current for that action; no nonexistent or retired workflow is authority for those live requirements.
 
 The bootstrap script is authoritative for exact PHP 8.4 extensions, PCOV mode, Composer version, JIT state, and runtime paths. If those executable requirements change, update the script and tests first; documentation should describe the boundary rather than duplicate every checked value.
 

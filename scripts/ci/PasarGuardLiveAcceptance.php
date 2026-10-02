@@ -97,7 +97,7 @@ final class PasarGuardLiveAcceptance
             }
             $executedRows[] = 'LIVE-005';
 
-            $create = $this->issueMapped($origin, $basePath, $headers, $mapper, 'create_service', $mapper->createRequest($request));
+            $create = $this->issueCreateMapped($origin, $basePath, $headers, $mapper, $request);
             $remoteId = (string) $this->requiredPositiveInt($create, 'id');
             if (! $mapper->createEquivalent($request, $create)) {
                 throw new RuntimeException('pasarguard_live_create_equivalence_failed');
@@ -368,6 +368,63 @@ final class PasarGuardLiveAcceptance
         }
 
         return $enabled[0];
+    }
+
+    /** @return array<array-key, mixed> */
+    private function issueCreateMapped(
+        string $origin,
+        string $basePath,
+        array $headers,
+        PasarGuardMutationContractMapper $mapper,
+        PanelCreateServiceRequest $request,
+    ): array {
+        $mapped = $mapper->createRequest($request);
+        $exchange = $this->request($mapped->method, $origin.$basePath.$mapped->path, $headers, $mapped->payload);
+        $outcome = $mapper->classifyMutation('create_service', $exchange);
+        if ($outcome->outcome === PanelOperationOutcome::Success) {
+            return $exchange->json ?? [];
+        }
+
+        if ($outcome->outcome === PanelOperationOutcome::UncertainResult) {
+            $this->reconcileUncertainCreate($origin, $basePath, $headers, $mapper, $request);
+        }
+
+        throw new RuntimeException($outcome->providerCode);
+    }
+
+    private function reconcileUncertainCreate(
+        string $origin,
+        string $basePath,
+        array $headers,
+        PasarGuardMutationContractMapper $mapper,
+        PanelCreateServiceRequest $request,
+    ): void {
+        $lookup = $this->request(
+            'GET',
+            $origin.$basePath.'/api/user/by-username/'.rawurlencode($request->username),
+            $headers,
+            null,
+        );
+        if ($lookup->status === 404 && ! $lookup->transportFailure) {
+            return;
+        }
+        if ($lookup->status !== 200
+            || $lookup->transportFailure
+            || $lookup->malformedJson
+            || $lookup->json === null
+            || array_is_list($lookup->json)
+        ) {
+            throw new RuntimeException('pasarguard_live_uncertain_create_reconciliation_unavailable');
+        }
+
+        if ($this->requiredString($lookup->json, 'username') !== $request->username
+            || ! $mapper->createEquivalent($request, $lookup->json)
+        ) {
+            throw new RuntimeException('pasarguard_live_uncertain_create_reconciliation_mismatch');
+        }
+
+        $remoteId = (string) $this->requiredPositiveInt($lookup->json, 'id');
+        $this->cleanup($origin, $basePath, $headers, $mapper, $remoteId);
     }
 
     /** @return array<array-key, mixed> */

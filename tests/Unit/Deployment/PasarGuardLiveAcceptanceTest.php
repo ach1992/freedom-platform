@@ -133,6 +133,161 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
         self::assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', (string) $summary['test_user_sha256']);
     }
 
+    public function test_uncertain_create_is_reconciled_by_username_and_cleaned_without_retry(): void
+    {
+        $state = null;
+        $createCount = 0;
+        $deleteCount = 0;
+        $usernameLookupCount = 0;
+
+        $transport = function (string $method, string $url, array $headers, ?array $payload) use (
+            &$state,
+            &$createCount,
+            &$deleteCount,
+            &$usernameLookupCount,
+        ): PanelHttpExchange {
+            self::assertSame('pg_key_11111111-1111-1111-1111-111111111111', $headers['X-Api-Key']);
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            if (str_starts_with($path, '/hpanel')) {
+                $path = substr($path, strlen('/hpanel'));
+            }
+
+            if ($method === 'GET' && $path === '/api/system') {
+                return new PanelHttpExchange(200, ['version' => '5.2.1'], false, false);
+            }
+            if ($method === 'GET' && $path === '/api/inbounds/details') {
+                return new PanelHttpExchange(200, [['tag' => 'vless-main', 'protocol' => 'vless']], false, false);
+            }
+            if ($method === 'GET' && $path === '/api/groups') {
+                return new PanelHttpExchange(200, ['groups' => [['id' => 7, 'name' => 'test', 'is_disabled' => false]], 'total' => 1], false, false);
+            }
+            if ($method === 'GET' && str_starts_with($path, '/api/user/by-username/')) {
+                $usernameLookupCount++;
+
+                return $state === null
+                    ? new PanelHttpExchange(404, ['detail' => 'not found'], false, false)
+                    : new PanelHttpExchange(200, $state, false, false);
+            }
+            if ($method === 'GET' && $path === '/api/user/by-id/77') {
+                return $state === null
+                    ? new PanelHttpExchange(404, ['detail' => 'not found'], false, false)
+                    : new PanelHttpExchange(200, $state, false, false);
+            }
+            if ($method === 'POST' && $path === '/api/user') {
+                $createCount++;
+                self::assertNotNull($payload);
+                $state = [
+                    'id' => 77,
+                    'username' => $payload['username'],
+                    'status' => 'active',
+                    'data_limit' => $payload['data_limit'],
+                    'expire' => $payload['expire'],
+                    'data_limit_reset_strategy' => $payload['data_limit_reset_strategy'],
+                    'group_ids' => $payload['group_ids'],
+                    'used_traffic' => 0,
+                    'subscription_url' => 'https://subscription.example/uncertain',
+                ];
+
+                return new PanelHttpExchange(null, null, false, true);
+            }
+            if ($method === 'DELETE' && $path === '/api/user/by-id/77') {
+                $deleteCount++;
+                $state = null;
+
+                return new PanelHttpExchange(204, [], false, false);
+            }
+
+            return new PanelHttpExchange(404, ['detail' => 'unexpected'], false, false);
+        };
+
+        $runner = new PasarGuardLiveAcceptance($transport);
+
+        try {
+            $runner->run([
+                'origin' => 'https://panel.example/hpanel',
+                'api_key' => 'pg_key_11111111-1111-1111-1111-111111111111',
+                'run_id' => 'unit-uncertain-create',
+                'confirm' => PasarGuardLiveAcceptance::CONFIRMATION,
+                'group_id' => 7,
+                'now' => new DateTimeImmutable('2026-08-08T00:00:00+00:00', new DateTimeZone('UTC')),
+            ]);
+            self::fail('Expected uncertain create outcome.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('pasarguard_create_service_transport_uncertain', $exception->getMessage());
+            self::assertStringNotContainsString('pg_key_', $exception->getMessage());
+            self::assertStringNotContainsString('unit-uncertain-create', $exception->getMessage());
+        }
+
+        self::assertSame(1, $createCount);
+        self::assertSame(1, $deleteCount);
+        self::assertSame(2, $usernameLookupCount);
+        self::assertNull($state);
+    }
+
+    public function test_uncertain_create_with_unavailable_reconciliation_fails_closed_without_retry(): void
+    {
+        $createCount = 0;
+        $deleteCount = 0;
+        $usernameLookupCount = 0;
+
+        $transport = static function (string $method, string $url, array $headers, ?array $payload) use (
+            &$createCount,
+            &$deleteCount,
+            &$usernameLookupCount,
+        ): PanelHttpExchange {
+            $path = (string) parse_url($url, PHP_URL_PATH);
+
+            if ($method === 'GET' && $path === '/api/system') {
+                return new PanelHttpExchange(200, ['version' => '5.2.1'], false, false);
+            }
+            if ($method === 'GET' && $path === '/api/inbounds/details') {
+                return new PanelHttpExchange(200, [['tag' => 'vless-main', 'protocol' => 'vless']], false, false);
+            }
+            if ($method === 'GET' && $path === '/api/groups') {
+                return new PanelHttpExchange(200, ['groups' => [['id' => 7, 'name' => 'test', 'is_disabled' => false]], 'total' => 1], false, false);
+            }
+            if ($method === 'GET' && str_starts_with($path, '/api/user/by-username/')) {
+                $usernameLookupCount++;
+
+                return $usernameLookupCount === 1
+                    ? new PanelHttpExchange(404, ['detail' => 'not found'], false, false)
+                    : new PanelHttpExchange(null, null, false, true);
+            }
+            if ($method === 'POST' && $path === '/api/user') {
+                $createCount++;
+
+                return new PanelHttpExchange(null, null, false, true);
+            }
+            if ($method === 'DELETE') {
+                $deleteCount++;
+            }
+
+            return new PanelHttpExchange(404, ['detail' => 'unexpected'], false, false);
+        };
+
+        $runner = new PasarGuardLiveAcceptance($transport);
+
+        try {
+            $runner->run([
+                'origin' => 'https://panel.example',
+                'api_key' => 'pg_key_11111111-1111-1111-1111-111111111111',
+                'run_id' => 'unit-uncertain-unavailable',
+                'confirm' => PasarGuardLiveAcceptance::CONFIRMATION,
+                'group_id' => 7,
+                'now' => new DateTimeImmutable('2026-08-08T00:00:00+00:00', new DateTimeZone('UTC')),
+            ]);
+            self::fail('Expected reconciliation failure.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('pasarguard_live_uncertain_create_reconciliation_unavailable', $exception->getMessage());
+            self::assertStringNotContainsString('pg_key_', $exception->getMessage());
+            self::assertStringNotContainsString('unit-uncertain-unavailable', $exception->getMessage());
+        }
+
+        self::assertSame(1, $createCount);
+        self::assertSame(0, $deleteCount);
+        self::assertSame(2, $usernameLookupCount);
+    }
+
     public function test_version_mismatch_stops_before_any_mutation(): void
     {
         $mutationCount = 0;
