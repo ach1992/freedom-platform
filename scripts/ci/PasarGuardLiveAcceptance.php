@@ -202,7 +202,7 @@ final class PasarGuardLiveAcceptance
                 'Accept' => '*/*',
                 'User-Agent' => 'FreedomPlatform-PasarGuard-Live-Acceptance/1.0',
             ];
-            $beforeDelivery = $this->request('GET', $beforeUrl, $deliveryHeaders, null);
+            $beforeDelivery = $this->request('GET', $this->deliveryProbeUrl($origin, $beforeUrl), $deliveryHeaders, null);
             if ($beforeDelivery->transportFailure || $beforeDelivery->status !== 200) {
                 throw new RuntimeException('pasarguard_live_subscription_pre_revoke_unavailable');
             }
@@ -221,7 +221,7 @@ final class PasarGuardLiveAcceptance
                 $mapper->rotateSubscriptionLinkRequest($remoteId),
             );
 
-            $previousDelivery = $this->request('GET', $beforeUrl, $deliveryHeaders, null);
+            $previousDelivery = $this->request('GET', $this->deliveryProbeUrl($origin, $beforeUrl), $deliveryHeaders, null);
             if ($previousDelivery->transportFailure || $previousDelivery->status !== 404) {
                 throw new RuntimeException('pasarguard_live_subscription_revocation_unproved');
             }
@@ -237,7 +237,7 @@ final class PasarGuardLiveAcceptance
                 throw new RuntimeException('pasarguard_live_delivery_redaction_failed');
             }
 
-            $afterDelivery = $this->request('GET', $afterUrl, $deliveryHeaders, null);
+            $afterDelivery = $this->request('GET', $this->deliveryProbeUrl($origin, $afterUrl), $deliveryHeaders, null);
             if ($afterDelivery->transportFailure || $afterDelivery->status !== 200) {
                 throw new RuntimeException('pasarguard_live_subscription_post_revoke_unavailable');
             }
@@ -364,6 +364,38 @@ final class PasarGuardLiveAcceptance
         }
 
         return $exchange->json;
+    }
+
+    private function deliveryProbeUrl(string $origin, string $deliveryUrl): string
+    {
+        $parts = parse_url($deliveryUrl);
+        if (! is_array($parts)
+            || strtolower((string) ($parts['scheme'] ?? '')) !== 'https'
+            || ! isset($parts['host'])
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || isset($parts['fragment'])
+        ) {
+            throw new RuntimeException('pasarguard_live_subscription_url_invalid');
+        }
+
+        $path = $parts['path'] ?? null;
+        if (! is_string($path)
+            || $path === ''
+            || ! str_starts_with($path, '/')
+            || preg_match('/[\x00-\x20\x7F]/', $path) === 1
+        ) {
+            throw new RuntimeException('pasarguard_live_subscription_url_invalid');
+        }
+
+        $query = $parts['query'] ?? null;
+        if ($query !== null
+            && (! is_string($query) || preg_match('/[\x00-\x20\x7F]/', $query) === 1)
+        ) {
+            throw new RuntimeException('pasarguard_live_subscription_url_invalid');
+        }
+
+        return $origin.$path.($query === null ? '' : '?'.$query);
     }
 
     private function selectGroupId(array $payload, ?int $configuredGroupId): int

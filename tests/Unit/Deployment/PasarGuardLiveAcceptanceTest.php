@@ -25,10 +25,10 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
         $createCount = 0;
         $deleteCount = 0;
         $transport = function (string $method, string $url, array $headers, ?array $payload) use (&$state, &$createCount, &$deleteCount): PanelHttpExchange {
-            $host = (string) parse_url($url, PHP_URL_HOST);
-            if ($host === 'subscription.example') {
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            if ($method === 'GET' && in_array($path, ['/one', '/two'], true)) {
+                self::assertSame('panel.example', parse_url($url, PHP_URL_HOST));
                 self::assertArrayNotHasKey('X-Api-Key', $headers);
-                $path = (string) parse_url($url, PHP_URL_PATH);
 
                 if ($path === '/one') {
                     $revoked = is_array($state)
@@ -36,11 +36,8 @@ final class PasarGuardLiveAcceptanceTest extends TestCase
 
                     return new PanelHttpExchange($revoked ? 404 : 200, null, true, false);
                 }
-                if ($path === '/two') {
-                    return new PanelHttpExchange(200, null, true, false);
-                }
 
-                return new PanelHttpExchange(404, null, true, false);
+                return new PanelHttpExchange(200, null, true, false);
             }
 
             self::assertSame('pg_key_11111111-1111-1111-1111-111111111111', $headers['X-Api-Key']);
