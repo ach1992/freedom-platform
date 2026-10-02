@@ -195,6 +195,37 @@ env:
   PROBE: ${{ toJSON(secrets) }}
 YAML
 
+cat > "$retired_fixture_dir/expression-boundary-retired-static.yml" <<'YAML'
+env:
+  PROBE: ${{ contains('marker }} still inside string', 'marker') && secrets.STAGING_HOST }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-bulk-context.yml" <<'YAML'
+env:
+  PROBE: ${{ contains('marker }} still inside string', 'marker') && toJSON(secrets) }}
+YAML
+
+cat > "$retired_fixture_dir/expression-boundary-doubled-quote.yml" <<'YAML'
+env:
+  PROBE: ${{ contains('it''s }} still inside string', 'marker') && secrets.MARZBAN_TEST_PASSWORD }}
+YAML
+
+cat > "$retired_fixture_dir/retired-forwarding-key.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      STAGING_HOST: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+cat > "$retired_fixture_dir/retired-forwarding-key-lowercase.yml" <<'YAML'
+jobs:
+  relay:
+    uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
+    secrets:
+      pasarguard_test_api_key: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
 cat > "$retired_fixture_dir/bulk-inherit.yml" <<'YAML'
 jobs:
   relay:
@@ -316,6 +347,11 @@ jobs:
       - run: echo no
 YAML
 
+cat > "$retired_fixture_dir/safe-expression-string.yml" <<'YAML'
+env:
+  PROBE: ${{ format('literal }} secrets.STAGING_HOST and it''s still text') }}
+YAML
+
 cat > "$retired_fixture_dir/safe.yml" <<'YAML'
 env:
   STAGING_HOST: 127.0.0.1
@@ -339,6 +375,11 @@ for fixture in \
     dynamic-format.yml \
     dynamic-variable.yml \
     bulk-context.yml \
+    expression-boundary-retired-static.yml \
+    expression-boundary-bulk-context.yml \
+    expression-boundary-doubled-quote.yml \
+    retired-forwarding-key.yml \
+    retired-forwarding-key-lowercase.yml \
     bulk-inherit.yml \
     bulk-inherit-anchor.yml \
     bulk-inherit-alias.yml \
@@ -361,6 +402,8 @@ bash "$retired_secret_guard" "$retired_fixture_dir/safe.yml" >/dev/null \
     || fail 'retired Actions secret guard rejected a bounded safe fixture'
 bash "$retired_secret_guard" "$retired_fixture_dir/safe-yaml12-job-keys.yml" >/dev/null \
     || fail 'retired Actions secret guard rejected distinct YAML 1.2 boolean-like job IDs'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-expression-string.yml" >/dev/null \
+    || fail 'retired Actions secret guard treated string-literal secret-like text as an access'
 bash "$retired_secret_guard" "$root/.github/workflows/ci.yml" >/dev/null \
     || fail 'current secret-free CI workflow violates retired Actions secret policy'
 

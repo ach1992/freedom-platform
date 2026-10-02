@@ -102,12 +102,12 @@ def construct_mapping_without_collisions(loader, node, deep=False):
 ActionsLoader.construct_mapping = construct_mapping_without_collisions
 
 secret_token = re.compile(r"\bsecrets\b", re.IGNORECASE)
+secret_identifier = re.compile(r"^[A-Z_][A-Z0-9_]*$", re.IGNORECASE)
 property_access = re.compile(r"\s*\.\s*([A-Z_][A-Z0-9_]*)", re.IGNORECASE)
 literal_index_access = re.compile(
     r"""\s*\[\s*(['"])\s*([A-Z_][A-Z0-9_]*)\s*\1\s*\]""",
     re.IGNORECASE,
 )
-expression = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 
 def workflow_files(target: Path):
     if target.is_file():
@@ -126,6 +126,72 @@ def is_retired(name: str) -> bool:
 def fail(path: Path, reason: str) -> None:
     print(f"Unsafe GitHub Actions secrets access found: {path}: {reason}", file=sys.stderr)
     raise SystemExit(1)
+
+def expression_bodies(path: Path, source: str):
+    """Yield GitHub expression bodies without closing on }} inside string literals."""
+    cursor = 0
+    while True:
+        start = source.find("${{", cursor)
+        if start < 0:
+            return
+
+        index = start + 3
+        body_start = index
+        in_string = False
+
+        while index < len(source):
+            char = source[index]
+
+            if in_string:
+                if char == "'":
+                    # GitHub expression strings escape a single quote by doubling it.
+                    if index + 1 < len(source) and source[index + 1] == "'":
+                        index += 2
+                        continue
+                    in_string = False
+                index += 1
+                continue
+
+            if char == "'":
+                in_string = True
+                index += 1
+                continue
+
+            if source.startswith("}}", index):
+                yield source[body_start:index]
+                cursor = index + 2
+                break
+
+            index += 1
+        else:
+            fail(path, "unterminated GitHub expression")
+
+def mask_expression_strings(body: str) -> str:
+    """Mask single-quoted expression literals while preserving character offsets."""
+    masked = list(body)
+    index = 0
+    in_string = False
+
+    while index < len(body):
+        char = body[index]
+
+        if not in_string:
+            if char == "'":
+                in_string = True
+                masked[index] = " "
+            index += 1
+            continue
+
+        masked[index] = " "
+        if char == "'":
+            if index + 1 < len(body) and body[index + 1] == "'":
+                masked[index + 1] = " "
+                index += 2
+                continue
+            in_string = False
+        index += 1
+
+    return "".join(masked)
 
 def validate_semantic_secret_forwarding(path: Path, source: str) -> None:
     try:
@@ -155,7 +221,7 @@ def validate_semantic_secret_forwarding(path: Path, source: str) -> None:
 
         # GitHub's reusable-workflow bulk form resolves to a scalar "inherit".
         # YAML anchors, aliases, tags, quoted scalars, folded scalars, and merge
-        # keys are intentionally handled by safe_load before this check, so
+        # keys are intentionally resolved by ActionsLoader before this check, so
         # alternate YAML spellings cannot bypass the policy.
         if isinstance(forwarded, str) and forwarded.strip().lower() == "inherit":
             fail(path, "bulk reusable-workflow secret inheritance")
@@ -165,6 +231,16 @@ def validate_semantic_secret_forwarding(path: Path, source: str) -> None:
         # fails closed rather than guessing whether retired secrets are excluded.
         if not isinstance(forwarded, dict):
             fail(path, "opaque reusable-workflow secrets forwarding")
+
+        # Explicit reusable-workflow forwarding still defines destination secret
+        # identifiers. Retired interfaces must not be recreated under an allowed
+        # backing repository secret, and unsupported/non-string identifiers fail
+        # closed rather than being interpreted differently by another parser.
+        for secret_id in forwarded:
+            if not isinstance(secret_id, str) or secret_identifier.fullmatch(secret_id) is None:
+                fail(path, "unsupported reusable-workflow secret identifier")
+            if is_retired(secret_id):
+                fail(path, "retired reusable-workflow secret identifier")
 
 for raw_target in sys.argv[1:]:
     for path in workflow_files(Path(raw_target)):
@@ -177,9 +253,12 @@ for raw_target in sys.argv[1:]:
 
         # Then fail closed on ambiguous GitHub expression access to the secrets
         # context, while allowing explicitly named non-retired static secrets.
-        for match in expression.finditer(source):
-            body = match.group(1)
-            for token in secret_token.finditer(body):
+        # Expression boundaries and secret tokens are parsed with GitHub's
+        # single-quoted string semantics so }} and secret-like text inside a
+        # string literal cannot truncate or confuse policy inspection.
+        for body in expression_bodies(path, source):
+            inspectable = mask_expression_strings(body)
+            for token in secret_token.finditer(inspectable):
                 tail = body[token.end():]
 
                 prop = property_access.match(tail)
