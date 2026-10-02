@@ -4,6 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 classifier="$root/scripts/ci/classify-validation-plan.sh"
+retired_secret_guard="$root/scripts/ci/reject-retired-actions-secrets.sh"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -79,6 +80,7 @@ assert_plan security_sensitive APPLICATION false false false true true true fals
 assert_plan ci_policy CONTROL_PLANE true false true false false false false false false false .github/workflows/ci.yml scripts/ci/classify-validation-plan.sh
 assert_plan feature_sharding_control CONTROL_PLANE true false true false false false false false false false scripts/ci/select-feature-shard.sh scripts/ci/test-feature-sharding.sh
 assert_plan secret_scan_control CONTROL_PLANE true false true false false false false false false false scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh
+assert_plan retired_secret_guard CONTROL_PLANE true false true false false false false false false false scripts/ci/reject-retired-actions-secrets.sh
 assert_plan operations_only OPERATIONS false false false false false false false false false true deploy/bin/queue-worker-with-heartbeat.sh
 assert_plan unknown_view FULL true true true true true true true true true true resources/views/home.blade.php
 assert_plan unknown_public_asset FULL true true true true true true true true true true public/example.txt
@@ -142,6 +144,64 @@ if grep -F '"@php artisan test --testsuite=Unit' "$root/composer.json" >/dev/nul
 fi
 
 printf '%s\n' 'Filtered diagnostic, zero-test, and Unit warning-policy tests passed.'
+
+
+# Retired staging/provider Actions secret interfaces must remain rejected across
+# GitHub-supported property dereference and literal index syntax, case-insensitively.
+retired_fixture_dir="$tmpdir/retired-secret-fixtures"
+mkdir -p "$retired_fixture_dir"
+
+cat > "$retired_fixture_dir/uppercase-property.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets.STAGING_HOST }}
+YAML
+
+cat > "$retired_fixture_dir/lowercase-property.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets.pasarguard_test_api_key }}
+YAML
+
+cat > "$retired_fixture_dir/single-index.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets['MARZBAN_TEST_PASSWORD'] }}
+YAML
+
+cat > "$retired_fixture_dir/double-index.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets["staging_known_hosts"] }}
+YAML
+
+cat > "$retired_fixture_dir/multiline-index.yml" <<'YAML'
+env:
+  PROBE: ${{ secrets[
+    'STAGING_SSH_PRIVATE_KEY'
+  ] }}
+YAML
+
+cat > "$retired_fixture_dir/safe.yml" <<'YAML'
+env:
+  STAGING_HOST: 127.0.0.1
+  PASARGUARD_TEST_ORIGIN: https://example.invalid
+  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+YAML
+
+for fixture in \
+    uppercase-property.yml \
+    lowercase-property.yml \
+    single-index.yml \
+    double-index.yml \
+    multiline-index.yml; do
+    if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >/dev/null 2>&1; then
+        fail "retired Actions secret guard accepted fixture: $fixture"
+    fi
+done
+
+bash "$retired_secret_guard" "$retired_fixture_dir/safe.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected a bounded safe fixture'
+bash "$retired_secret_guard" "$root/.github/workflows/ci.yml" >/dev/null \
+    || fail 'current secret-free CI workflow violates retired Actions secret policy'
+
+printf '%s\n' 'Retired Actions secret-reference guard tests passed.'
 
 # The required GitHub status context must be the final aggregate gate, not the early planning job.
 ci_workflow="$root/.github/workflows/ci.yml"

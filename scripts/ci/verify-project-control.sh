@@ -49,6 +49,7 @@ required_files=(
     scripts/ci/marzban-live-acceptance.php
     scripts/ci/scan-git-secrets.sh
     scripts/ci/test-secret-scan.sh
+    scripts/ci/reject-retired-actions-secrets.sh
     scripts/docs/generate-release-references.php
 
 )
@@ -357,9 +358,8 @@ if grep -Eq 'secrets\.(PASARGUARD|STAGING|TELEGRAM|NOWPAYMENTS|ZARINPAL|MELLI|KA
 fi
 
 # Real staging/provider target credentials must not become standing GitHub Actions secret dependencies.
-if grep -RIE 'secrets\.(STAGING_|PASARGUARD_TEST_|MARZBAN_TEST_)' .github/workflows >/dev/null; then
-    fail 'GitHub Actions must not depend on retired staging/provider test secret interfaces'
-fi
+bash scripts/ci/reject-retired-actions-secrets.sh .github/workflows >/dev/null \
+    || fail 'GitHub Actions must not depend on retired staging/provider test secret interfaces'
 
 # Direct read-only provider probes remain source-owned for execution on the task-approved disposable test server.
 grep -F "const EXPECTED_PASARGUARD_VERSION = '5.4.1';" scripts/ci/pasarguard-readonly-probe.php >/dev/null \

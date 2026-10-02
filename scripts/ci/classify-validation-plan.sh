@@ -94,7 +94,7 @@ else
                 control_plane=true
                 ;;
 
-            scripts/ci/classify-validation-plan.sh|scripts/ci/test-validation-plan.sh|scripts/ci/select-feature-integration-scope.sh|scripts/ci/test-feature-integration-scope.sh|scripts/ci/select-feature-shard.sh|scripts/ci/test-feature-sharding.sh|scripts/ci/scan-git-secrets.sh|scripts/ci/test-secret-scan.sh|scripts/ci/verify-project-control.sh|scripts/ci/verify-planning.sh)
+            scripts/ci/classify-validation-plan.sh|scripts/ci/test-validation-plan.sh|scripts/ci/select-feature-integration-scope.sh|scripts/ci/test-feature-integration-scope.sh|scripts/ci/select-feature-shard.sh|scripts/ci/test-feature-sharding.sh|scripts/ci/scan-git-secrets.sh|scripts/ci/test-secret-scan.sh|scripts/ci/reject-retired-actions-secrets.sh|scripts/ci/verify-project-control.sh|scripts/ci/verify-planning.sh)
                 project_control=true
                 control_plane=true
                 ;;
