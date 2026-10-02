@@ -237,6 +237,45 @@ jobs:
       pasarguard_test_api_key: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
 YAML
 
+cat > "$retired_fixture_dir/retired-workflow-call-secret.yml" <<'YAML'
+on:
+  workflow_call:
+    secrets:
+      STAGING_HOST:
+        required: true
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/retired-workflow-call-secret-lowercase.yml" <<'YAML'
+on:
+  workflow_call:
+    secrets:
+      marzban_test_password:
+        required: true
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
+cat > "$retired_fixture_dir/safe-workflow-call-secret.yml" <<'YAML'
+on:
+  workflow_call:
+    secrets:
+      access-token:
+        required: true
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo benign
+YAML
+
 cat > "$retired_fixture_dir/bulk-inherit.yml" <<'YAML'
 jobs:
   relay:
@@ -432,6 +471,8 @@ for fixture in \
     expression-boundary-yaml-single-quoted-bulk.yml \
     retired-forwarding-key.yml \
     retired-forwarding-key-lowercase.yml \
+    retired-workflow-call-secret.yml \
+    retired-workflow-call-secret-lowercase.yml \
     bulk-inherit.yml \
     bulk-inherit-anchor.yml \
     bulk-inherit-alias.yml \
@@ -474,6 +515,8 @@ bash "$retired_secret_guard" "$retired_fixture_dir/safe-expression-yaml-single-q
     || fail 'retired Actions secret guard diverged from YAML-decoded expression string semantics'
 bash "$retired_secret_guard" "$retired_fixture_dir/safe-forwarding-hyphen.yml" >/dev/null \
     || fail 'retired Actions secret guard rejected GitHub non-empty-string/coerced scalar destination keys'
+bash "$retired_secret_guard" "$retired_fixture_dir/safe-workflow-call-secret.yml" >/dev/null \
+    || fail 'retired Actions secret guard rejected a safe reusable-workflow secret declaration'
 bash "$retired_secret_guard" "$retired_fixture_dir/safe-comment-secret-text.yml" >/dev/null \
     || fail 'retired Actions secret guard scanned raw YAML comment text instead of decoded scalar values'
 bash "$retired_secret_guard" "$retired_fixture_dir/safe-non-context-secrets-token.yml" >/dev/null \

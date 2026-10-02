@@ -385,6 +385,49 @@ def parse_workflow(path: Path, source: str):
     return document
 
 
+def validate_secret_identifier_mapping(path: Path, mapping, context: str) -> None:
+    # GitHub's reusable-workflow secret mapping keys are non-empty strings.
+    # TemplateReader coerces scalar keys to strings before validating that
+    # contract, so caller forwarding and callee declarations must share one
+    # normalization/policy boundary instead of drifting into separate grammars.
+    if not isinstance(mapping, dict):
+        fail(path, f"opaque {context} mapping")
+
+    normalized_ids = set()
+    for secret_id in mapping:
+        normalized = github_scalar_to_string(secret_id)
+        if normalized is None or normalized == "":
+            fail(path, f"empty or unsupported {context} identifier")
+
+        folded = normalized.lower()
+        if folded in normalized_ids:
+            fail(path, f"duplicate {context} identifier")
+        normalized_ids.add(folded)
+
+        if is_retired(normalized):
+            fail(path, f"retired {context} identifier")
+
+
+def validate_reusable_workflow_secret_declarations(path: Path, document: dict) -> None:
+    triggers = document.get("on")
+    if not isinstance(triggers, dict) or "workflow_call" not in triggers:
+        return
+
+    workflow_call = triggers["workflow_call"]
+    if workflow_call is None:
+        return
+    if not isinstance(workflow_call, dict):
+        fail(path, "workflow_call configuration is not a mapping")
+    if "secrets" not in workflow_call:
+        return
+
+    validate_secret_identifier_mapping(
+        path,
+        workflow_call["secrets"],
+        "reusable-workflow secret declaration",
+    )
+
+
 def validate_semantic_secret_forwarding(path: Path, document: dict) -> None:
     jobs = document.get("jobs")
     if jobs is None:
@@ -410,26 +453,11 @@ def validate_semantic_secret_forwarding(path: Path, document: dict) -> None:
         # A standing workflow may forward an explicit mapping of individually
         # named values. Any other resolved shape is opaque/unsupported here and
         # fails closed rather than guessing whether retired secrets are excluded.
-        if not isinstance(forwarded, dict):
-            fail(path, "opaque reusable-workflow secrets forwarding")
-
-        # GitHub's workflow schema declares these destination keys as
-        # non-empty-string. TemplateReader coerces scalar keys to strings before
-        # validating that contract, so mirror that behavior and apply only the
-        # policy-specific retired-prefix restriction.
-        normalized_ids = set()
-        for secret_id in forwarded:
-            normalized = github_scalar_to_string(secret_id)
-            if normalized is None or normalized == "":
-                fail(path, "empty or unsupported reusable-workflow secret identifier")
-
-            folded = normalized.lower()
-            if folded in normalized_ids:
-                fail(path, "duplicate reusable-workflow secret identifier")
-            normalized_ids.add(folded)
-
-            if is_retired(normalized):
-                fail(path, "retired reusable-workflow secret identifier")
+        validate_secret_identifier_mapping(
+            path,
+            forwarded,
+            "reusable-workflow forwarded secret",
+        )
 
 
 def is_secrets_named_value(body: str, match) -> bool:
@@ -489,6 +517,7 @@ for raw_target in sys.argv[1:]:
             raise SystemExit(1)
 
         document = parse_workflow(path, source)
+        validate_reusable_workflow_secret_declarations(path, document)
         validate_semantic_secret_forwarding(path, document)
         validate_expression_secret_access(path, document)
 PY_RETIRED_ACTIONS_SECRETS
