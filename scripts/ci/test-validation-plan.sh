@@ -248,17 +248,44 @@ jobs:
     uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
 YAML
 
+cat > "$retired_fixture_dir/bulk-inherit-anchor-key.yml" <<'YAML'
+jobs:
+  relay:
+    &secret_key secrets: inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-alias-key.yml" <<'YAML'
+secret_key: &secret_key secrets
+jobs:
+  relay:
+    *secret_key: inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-plain-multiline.yml" <<'YAML'
+jobs:
+  relay:
+    secrets:
+      inherit
+YAML
+
+cat > "$retired_fixture_dir/bulk-inherit-single-quoted.yml" <<'YAML'
+jobs:
+  relay:
+    secrets: 'inherit'
+YAML
+
 cat > "$retired_fixture_dir/safe.yml" <<'YAML'
 env:
   STAGING_HOST: 127.0.0.1
   PASARGUARD_TEST_ORIGIN: https://example.invalid
   TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
   TELEGRAM_TOKEN_INDEX: ${{ secrets['TELEGRAM_TEST_BOT_TOKEN'] }}
+secret_map: &secret_map
+  telegram_token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
 jobs:
   relay:
     uses: example/example/.github/workflows/reusable.yml@0123456789abcdef0123456789abcdef01234567
-    secrets:
-      telegram_token: ${{ secrets.TELEGRAM_TEST_BOT_TOKEN }}
+    secrets: *secret_map
 YAML
 
 for fixture in \
@@ -276,7 +303,11 @@ for fixture in \
     bulk-inherit-quoted.yml \
     bulk-inherit-tagged.yml \
     bulk-inherit-folded.yml \
-    bulk-inherit-merge.yml; do
+    bulk-inherit-merge.yml \
+    bulk-inherit-anchor-key.yml \
+    bulk-inherit-alias-key.yml \
+    bulk-inherit-plain-multiline.yml \
+    bulk-inherit-single-quoted.yml; do
     if bash "$retired_secret_guard" "$retired_fixture_dir/$fixture" >/dev/null 2>&1; then
         fail "retired Actions secret guard accepted fixture: $fixture"
     fi
