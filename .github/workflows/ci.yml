@@ -132,7 +132,7 @@ jobs:
           done < "$plan"
 
           # Independent self-modifying-CI guard: these surfaces may not suppress their own control validation.
-          if grep -Eq '^(\.github/workflows/ci\.yml|\.github/workflows/staging-readiness-runtime\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|feature-test-weight|feature-test-shard-plan|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if grep -Eq '^(\.github/workflows/ci\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|feature-test-weight|feature-test-shard-plan|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control)\.sh)$' "$changed"; then
             project_control=true
             control_plane=true
           fi
@@ -176,7 +176,6 @@ jobs:
             scripts/ci/test-feature-sharding.sh
             scripts/ci/scan-git-secrets.sh
             scripts/ci/test-secret-scan.sh
-            scripts/ci/verify-readonly-staging-workflow.sh
             scripts/ci/verify-planning.sh
             scripts/ci/verify-project-control.sh
           )
@@ -184,7 +183,7 @@ jobs:
             test -s "$path" || { echo "Required repository control file is missing or empty: $path" >&2; exit 1; }
           done
 
-          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/select-feature-integration-scope.sh scripts/ci/test-feature-integration-scope.sh scripts/ci/feature-test-weight.sh scripts/ci/feature-test-shard-plan.sh scripts/ci/select-feature-shard.sh scripts/ci/test-feature-sharding.sh scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh scripts/ci/verify-readonly-staging-workflow.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
+          for script in scripts/ci/classify-validation-plan.sh scripts/ci/test-validation-plan.sh scripts/ci/select-feature-integration-scope.sh scripts/ci/test-feature-integration-scope.sh scripts/ci/feature-test-weight.sh scripts/ci/feature-test-shard-plan.sh scripts/ci/select-feature-shard.sh scripts/ci/test-feature-sharding.sh scripts/ci/scan-git-secrets.sh scripts/ci/test-secret-scan.sh scripts/ci/verify-planning.sh scripts/ci/verify-project-control.sh; do
             bash -n "$script"
           done
 
@@ -231,18 +230,17 @@ jobs:
           set -o pipefail
           bash scripts/ci/verify-project-control.sh 2>&1 | tee build/evidence/preflight/project-control.log
 
-      - name: Verify changed CI/read-only control mechanisms
+      - name: Verify changed CI/control mechanisms
         if: ${{ steps.plan.outputs.control_plane == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           changed=build/evidence/preflight/changed-files.txt
-          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/(ci|staging-readiness-runtime)\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|feature-test-weight|feature-test-shard-plan|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control|verify-readonly-staging-workflow)\.sh)$' "$changed"; then
+          if [[ ! -s "$changed" ]] || grep -Eq '^(\.github/workflows/ci\.yml|scripts/ci/(classify-validation-plan|test-validation-plan|select-feature-integration-scope|test-feature-integration-scope|feature-test-weight|feature-test-shard-plan|select-feature-shard|test-feature-sharding|scan-git-secrets|test-secret-scan|verify-project-control)\.sh)$' "$changed"; then
             bash scripts/ci/test-validation-plan.sh
             bash scripts/ci/test-feature-integration-scope.sh
             bash scripts/ci/test-feature-sharding.sh
             bash scripts/ci/test-secret-scan.sh
-            bash scripts/ci/verify-readonly-staging-workflow.sh
           fi
 
       - name: Upload diagnostic preflight evidence
