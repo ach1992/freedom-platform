@@ -68,6 +68,41 @@ final class ReleasePackageBuilderTest extends TestCase
         }
     }
 
+    public function test_release_package_is_reproducible_across_process_umasks(): void
+    {
+        $root = storage_path('framework/testing/release-builder-umask-'.bin2hex(random_bytes(4)));
+        $permissive = $root.'/permissive';
+        $restrictive = $root.'/restrictive';
+        mkdir($permissive, 0700, true);
+        mkdir($restrictive, 0700, true);
+        $originalUmask = umask();
+
+        try {
+            umask(0002);
+            $first = json_decode($this->runCommand([
+                PHP_BINARY,
+                base_path('scripts/release/build-update-package.php'),
+                base_path('release/1.0.0.json'),
+                $permissive,
+            ]), true, 32, JSON_THROW_ON_ERROR);
+
+            umask(0027);
+            $second = json_decode($this->runCommand([
+                PHP_BINARY,
+                base_path('scripts/release/build-update-package.php'),
+                base_path('release/1.0.0.json'),
+                $restrictive,
+            ]), true, 32, JSON_THROW_ON_ERROR);
+
+            self::assertSame($first['package_sha256'] ?? null, $second['package_sha256'] ?? null);
+            self::assertSame($first['manifest_sha256'] ?? null, $second['manifest_sha256'] ?? null);
+            self::assertSame($first['checksums_sha256'] ?? null, $second['checksums_sha256'] ?? null);
+        } finally {
+            umask($originalUmask);
+            $this->removeTree($root);
+        }
+    }
+
     public function test_final_release_metadata_targets_rc2_predecessor(): void
     {
         $metadata = json_decode(
