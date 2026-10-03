@@ -144,6 +144,41 @@ final class PhpRuntimePreflightTest extends TestCase
         self::assertNull($result['error']);
     }
 
+    /** @requirement INS-001 QUA-011 */
+    public function test_it_streams_the_probe_through_dev_stdin_for_lsapi_compatible_runtimes(): void
+    {
+        $directory = sys_get_temp_dir().'/php-runtime-preflight-'.bin2hex(random_bytes(8));
+        self::assertTrue(mkdir($directory, 0700, true));
+
+        $binary = $directory.'/lsapi-compatible-runtime';
+        $fixture = <<<'SH'
+#!/bin/sh
+[ "${1:-}" = "/dev/stdin" ] || exit 9
+probe=$(cat)
+case "$probe" in
+    "<?php"*) ;;
+    *) exit 10 ;;
+esac
+printf '%s' '{"php_version":"8.4.25","sapi":"litespeed","loaded_extensions":["json"],"ini_file":"/etc/php.ini","timezone":"UTC","image_decoder_capabilities":{"jpeg":false,"png":false,"webp":false},"disabled_functions":[],"limits":{},"opcache_enabled":true}'
+SH;
+
+        self::assertNotFalse(file_put_contents($binary, $fixture));
+        self::assertTrue(chmod($binary, 0700));
+
+        try {
+            $result = (new PhpRuntimePreflight)->inspect('lsphp', $binary, ['json']);
+
+            self::assertTrue($result['reachable']);
+            self::assertTrue($result['passed']);
+            self::assertSame('litespeed', $result['sapi']);
+            self::assertSame([], $result['missing_extensions']);
+            self::assertNull($result['error']);
+        } finally {
+            @unlink($binary);
+            @rmdir($directory);
+        }
+    }
+
     public function test_it_rejects_a_non_absolute_or_non_executable_binary_before_running_a_process(): void
     {
         $runs = 0;
