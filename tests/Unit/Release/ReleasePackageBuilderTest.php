@@ -20,12 +20,12 @@ final class ReleasePackageBuilderTest extends TestCase
             $result = $this->runCommand([
                 PHP_BINARY,
                 base_path('scripts/release/build-update-package.php'),
-                base_path('release/0.9.0-rc.1.json'),
+                base_path('release/0.9.0-rc.2.json'),
                 $root,
             ]);
             $decoded = json_decode($result, true, 32, JSON_THROW_ON_ERROR);
 
-            self::assertSame('0.9.0-rc.1', $decoded['release_id'] ?? null);
+            self::assertSame('0.9.0-rc.2', $decoded['release_id'] ?? null);
             self::assertSame($decoded['package_sha256'] ?? null, $decoded['reproducible_rebuild_sha256'] ?? null);
             self::assertSame('PharUpdatePackageVerifier', $decoded['verifier'] ?? null);
             self::assertMatchesRegularExpression('/\A[0-9a-f]{40}\z/', (string) ($decoded['source_commit'] ?? ''));
@@ -66,6 +66,24 @@ final class ReleasePackageBuilderTest extends TestCase
         } finally {
             $this->removeTree($root);
         }
+    }
+
+    public function test_final_release_metadata_targets_rc2_predecessor(): void
+    {
+        $metadata = json_decode(
+            (string) file_get_contents(base_path('release/1.0.0.json')),
+            true,
+            32,
+            JSON_THROW_ON_ERROR,
+        );
+
+        self::assertSame('1.0.0', $metadata['release_id'] ?? null);
+        self::assertSame('0.9.0-rc.2', $metadata['upgrade']['from_release'] ?? null);
+        self::assertSame('0.9.0-rc.2', $metadata['upgrade']['from_application_version'] ?? null);
+        self::assertSame(
+            $metadata['upgrade']['from_schema_sha256'] ?? null,
+            $metadata['upgrade']['to_schema_sha256'] ?? null,
+        );
     }
 
     /** @param list<string> $command */

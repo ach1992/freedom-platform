@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+use App\Shared\Application\ReleaseVersionResolver;
 
 return [
 
@@ -56,7 +57,10 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
-    'version' => env('APP_VERSION', '0.0.0-dev'),
+    'version' => ReleaseVersionResolver::resolve(
+        base_path('release-manifest.json'),
+        env('APP_VERSION', '0.0.0-dev'),
+    ),
 
     /*
     |--------------------------------------------------------------------------

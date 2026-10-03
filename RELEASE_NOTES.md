@@ -6,11 +6,13 @@ Building or validating this package does not itself authorize GitHub Release pub
 
 ## Upgrade boundary
 
-- Predecessor release: `0.9.0-rc.1`
-- Predecessor application version: `0.9.0-rc.1`
+- Predecessor release: `0.9.0-rc.2`
+- Predecessor application version: `0.9.0-rc.2`
 - Target application version: `1.0.0`
 - Predecessor and target migration identity: `fd2627b917f53dd848d88012d2b48d1508c3731c82e853e8b219544973612a6e`
 - No migration changed between the accepted frozen RC source and this release-source preparation boundary.
+- `0.9.0-rc.1` remains superseded rehearsal history; it was never published as a Git tag/Release and its pre-update backup path could not satisfy the reviewed least-privilege MariaDB contract. RC.2 carries the integrated backup fix without privilege expansion.
+- Packaged runtime version identity is bound to the verified release manifest so RC.2 → 1.0.0 activation and compatible rollback cannot retain a stale shared `APP_VERSION`.
 
 The final production package remains subject to final-candidate rebuild and validation after all Phase 1.0 source/documentation changes have converged.
 

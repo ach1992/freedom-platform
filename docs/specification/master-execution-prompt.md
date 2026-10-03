@@ -144,6 +144,7 @@ Use atomic symlink releases:
 ├── current -> releases/1.0.0
 ├── releases/
 │   ├── 0.9.0-rc.1/
+│   ├── 0.9.0-rc.2/
 │   ├── 1.0.0/
 │   └── ...
 └── shared/
@@ -3493,7 +3494,7 @@ Deliver:
 - dependency/license audit;
 - documentation completion;
 - production rehearsal;
-- `0.9.0-rc.1` package.
+- `0.9.0-rc.2` package (`0.9.0-rc.1` retained as superseded rehearsal history).
 
 Gate: no Critical/High known defect and all release gates pass.
 
