@@ -70,7 +70,7 @@ final class PhpRuntimePreflight
         string $binary,
         array $requiredExtensions = self::COMMON_REQUIRED_EXTENSIONS,
     ): array {
-        $requiredExtensions = $this->stringList($requiredExtensions);
+        $requiredExtensions = $this->extensionList($requiredExtensions);
 
         if ($requiredExtensions === []) {
             return $this->failure($name, $binary, [], 'missing_extension_policy');
@@ -110,7 +110,7 @@ final class PhpRuntimePreflight
         $sapi = is_string($payload['sapi'] ?? null) ? $payload['sapi'] : null;
         $iniFile = is_string($payload['ini_file'] ?? null) && $payload['ini_file'] !== '' ? $payload['ini_file'] : null;
         $timezone = is_string($payload['timezone'] ?? null) ? $payload['timezone'] : null;
-        $extensions = $this->stringList($payload['loaded_extensions'] ?? null);
+        $extensions = $this->extensionList($payload['loaded_extensions'] ?? null);
         $disabledFunctions = $this->stringList($payload['disabled_functions'] ?? null);
         $missingExtensions = array_values(array_diff($requiredExtensions, $extensions));
         sort($missingExtensions);
@@ -179,6 +179,19 @@ final class PhpRuntimePreflight
             'exit_code' => $process->getExitCode() ?? 1,
             'stdout' => $process->getOutput(),
         ];
+    }
+
+    /** @return list<string> */
+    private function extensionList(mixed $value): array
+    {
+        $extensions = array_map(
+            static fn (string $extension): string => strtolower($extension),
+            $this->stringList($value),
+        );
+        $extensions = array_values(array_unique($extensions));
+        sort($extensions);
+
+        return $extensions;
     }
 
     /** @return list<string> */
