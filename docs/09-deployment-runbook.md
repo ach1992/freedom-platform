@@ -127,7 +127,7 @@ Production backups must be consistent, authenticated-encrypted, checksummed/mani
 
 A backup that has never been restored is not sufficient release evidence.
 
-The Phase 0.8 backup authority is disabled by default. When a reviewed deployment deliberately enables it:
+The backup authority is disabled by default. When a reviewed deployment deliberately enables it:
 
 - set `BACKUP_ROOT` to protected persistent storage outside `current/` and the web root (normally `<root>/shared/backups`), with the runtime account able to create `0700` directories and `0600` artifacts;
 - provision `BACKUP_ENCRYPTION_KEY` as a dedicated base64-encoded 32-byte random secret through the protected deployment secret path. It is independent of `APP_KEY`; retain the exact key for every backup that may still need restore and never log or commit it;
@@ -140,7 +140,7 @@ Optional Telegram export is a secondary copy, not the local backup authority. En
 
 ## Restore
 
-Restore is privileged and explicit. The Phase 0.8 authority consumes only completed full backups (`daily_full` or `pre_update`) from the local backup authority; database-only frequent backups are rejected for controlled full restore.
+Restore is privileged and explicit. The restore authority consumes only completed full backups (`daily_full` or `pre_update`) from the local backup authority; database-only frequent backups are rejected for controlled full restore.
 
 The non-destructive preflight remains available without enabling destructive restore:
 
@@ -168,7 +168,7 @@ Before reopening, Restore requires exact migration identity, balanced finalized-
 
 Failures before the destructive boundary release owned maintenance when that can be proven safe. Any failure after destructive replacement starts never relies on stale caller bookkeeping: Restore re-establishes and re-proves owned maintenance, Scheduler-fence ownership, and queue-worker quiescence before recording full containment. Recontainment requests `queue:restart`, waits the reviewed worker-quiescence bound, and rechecks maintenance/fence ownership before `worker_quiescence_retained=true` or combined `containment_retained=true` may be recorded. Reports therefore distinguish `maintenance_retained`, `scheduler_mutation_fence_retained`, `worker_quiescence_retained`, and combined `containment_retained` from proven postconditions only. If an intermediate resume step becomes uncertain, the still-held Scheduler fence is not released first; maintenance is re-established and any worker that could have entered during the maintenance-off gap must be stopped/drained before full containment is claimed. A reporting failure after a fully successful reopen is reported separately and is not represented as a contained restore failure. Do not manually deactivate containment, edit ledger/payment/order history, or delete restore/safety-backup evidence to make the system appear healthy; establish the actual state and use the reviewed safety-backup/forward-recovery decision.
 
-The final target-like generated-backup restore rehearsal remains the Phase 0.8 acceptance gate; implementation/unit/integration tests do not substitute for that later Outcome-F evidence.
+Release acceptance requires target-like generated-backup Restore evidence whenever Restore behavior or its release assumptions materially change; implementation/unit/integration tests alone do not substitute for that target-like rehearsal.
 
 ## Update and rollback
 
@@ -239,7 +239,7 @@ If rollback metadata does not prove the current schema safe for the previous cod
 
 If activation fails, preserve diagnostics, prevent unsafe new effects, and use the guarded code-rollback/Restore decision appropriate to the proven schema state. Do not manually edit update reports, `installed-release.json`, `current`, migration rows, financial/provider evidence or update package metadata to manufacture a healthy state.
 
-The final target-like update/rollback rehearsal remains Phase 0.8 Outcome F. Repository tests and Outcome-E integration do not substitute for that later rehearsal.
+Release acceptance requires target-like Update/Rollback evidence whenever updater, rollback, predecessor, package, or compatibility behavior materially changes; repository tests alone do not substitute for that target-like rehearsal.
 
 For the generic outbound Telegram delivery authority, quiesce queue workers and effect consumers before rollback, but do not rely on quiescence as the only race barrier. The migration-owned rollback path must acquire the capability-row exclusive lifecycle fence, wait out runtime transactions that already hold the shared fence, refuse without deactivation if any operation or `telegram.delivery.requested` Outbox authority then exists, and persist the capability as inactive before destructive DDL. New queue/effect transactions must fail closed after that point; a rollback blocked by an external FK must leave the surviving authority tables guarded and inactive. Do not manually edit the capability row, lifecycle session variables, installation lock, or Telegram Outbox guards to force rollback progress. If durable authority exists, retain the schema and use the reviewed forward-fix/restore decision instead of bypassing the refusal.
 
