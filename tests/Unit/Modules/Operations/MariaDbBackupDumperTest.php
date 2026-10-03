@@ -41,6 +41,9 @@ final class MariaDbBackupDumperTest extends TestCase
             self::assertStringStartsWith('--defaults-file=', (string) ($arguments[0] ?? ''));
             self::assertStringNotContainsString('--defaults-extra-file=', $argumentText);
             self::assertStringContainsString('--single-transaction', $argumentText);
+            self::assertStringContainsString('--triggers', $argumentText);
+            self::assertStringNotContainsString('--routines', $argumentText);
+            self::assertStringNotContainsString('--events', $argumentText);
             self::assertStringContainsString('--result-file='.$destination, $argumentText);
 
             $options = (string) file_get_contents($directory.'/capture-options.txt');
