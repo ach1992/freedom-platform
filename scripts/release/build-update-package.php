@@ -266,8 +266,11 @@ try {
         'version' => 1,
         'files' => $checksums,
     ]);
-    if (file_put_contents($stage.'/release-checksums.json', $checksumContents, LOCK_EX) !== strlen($checksumContents)) {
-        throw new RuntimeException('Release checksum list could not be written.');
+    $checksumPath = $stage.'/release-checksums.json';
+    if (file_put_contents($checksumPath, $checksumContents, LOCK_EX) !== strlen($checksumContents)
+        || ! chmod($checksumPath, 0644)
+    ) {
+        throw new RuntimeException('Release checksum list could not be written with canonical permissions.');
     }
 
     $requiredFreeBytes = max(1, $payloadBytes * 3);
@@ -289,8 +292,11 @@ try {
         'rollback' => $metadata['rollback'] ?? null,
     ];
     $manifestContents = jsonObject($manifest);
-    if (file_put_contents($stage.'/release-manifest.json', $manifestContents, LOCK_EX) !== strlen($manifestContents)) {
-        throw new RuntimeException('Release manifest could not be written.');
+    $manifestPath = $stage.'/release-manifest.json';
+    if (file_put_contents($manifestPath, $manifestContents, LOCK_EX) !== strlen($manifestContents)
+        || ! chmod($manifestPath, 0644)
+    ) {
+        throw new RuntimeException('Release manifest could not be written with canonical permissions.');
     }
 
     $archiveFiles = stageFiles($stage);
