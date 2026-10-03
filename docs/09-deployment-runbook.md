@@ -102,6 +102,9 @@ Do not deploy unless the exact release candidate has:
 
 A release package must contain source, lockfile, migrations, release metadata, compatibility metadata, and integrity material without secrets.
 
+For a packaged release, runtime application-version identity comes from the verified root `release-manifest.json`; the shared `APP_VERSION` environment value is only a fallback for source/development or other non-packaged runtime without a release manifest. Update and rollback therefore switch version identity with immutable code instead of mutating shared environment state. An existing malformed, unsupported, unreadable, or symlinked release manifest must fail closed rather than falling back to `APP_VERSION`.
+
+
 Verify package integrity and compatibility before extraction/activation. Reject path traversal, symlink escape, incompatible runtime/schema, and unverified content.
 
 Use the repository's guarded atomic release-switch implementation when available. Do not replace it with ad-hoc edits to an existing deployed release.
