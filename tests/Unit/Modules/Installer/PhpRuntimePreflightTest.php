@@ -18,7 +18,7 @@ final class PhpRuntimePreflightTest extends TestCase
                 'stdout' => json_encode([
                     'php_version' => '8.4.16',
                     'sapi' => 'cli',
-                    'loaded_extensions' => ['json', 'pdo', 'redis'],
+                    'loaded_extensions' => ['json', 'PDO', 'redis'],
                     'ini_file' => '/etc/php/8.4/cli/php.ini',
                     'timezone' => 'UTC',
                     'disabled_functions' => ['exec'],
