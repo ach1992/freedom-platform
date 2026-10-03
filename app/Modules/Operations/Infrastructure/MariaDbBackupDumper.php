@@ -38,8 +38,6 @@ final readonly class MariaDbBackupDumper implements BackupDatabaseDumper
                     '--quick',
                     '--skip-lock-tables',
                     '--hex-blob',
-                    '--routines',
-                    '--events',
                     '--triggers',
                     '--default-character-set=utf8mb4',
                     '--result-file='.$destinationPath,
