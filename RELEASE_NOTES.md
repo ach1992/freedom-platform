@@ -26,7 +26,7 @@ Freedom Platform 1.0.0 provides the Telegram-first Version 1 product boundary de
 - transaction-safe/idempotent financial, provisioning, provider, webhook, and queue processing;
 - Persian-first localized Telegram UX with English fallback;
 - support, content, membership, broadcast, reporting, Operations Center, alerting, backup/restore, update/rollback, and recovery tooling;
-- Marzban/PasarGuard adapter contracts with protected live compatibility acceptance remaining a release gate.
+- Marzban 0.8.4 / PasarGuard 5.4.1 adapter contracts validated through protected live compatibility acceptance.
 
 ## Package trust and compatibility
 
