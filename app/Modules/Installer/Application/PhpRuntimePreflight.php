@@ -171,7 +171,8 @@ final class PhpRuntimePreflight
             return ($this->runner)($binary, $this->probeScript());
         }
 
-        $process = new Process([$binary, '-r', $this->probeScript()], null, null, null, 10.0);
+        $process = new Process([$binary, '/dev/stdin'], null, null, null, 10.0);
+        $process->setInput("<?php\n".$this->probeScript());
         $process->run();
 
         return [
