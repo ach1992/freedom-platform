@@ -118,7 +118,7 @@ final class InstallerAccessBoundaryTest extends TestCase
             $response->assertDontSee($testSecret);
             $response->assertDontSee($lifecycleSecret);
             $this->assertSame($lifecycleSecret, $runner->migrationPassword);
-            $this->assertSame(['config_clear', 'migrations', 'seed', 'owner_bootstrap', 'config_cache', 'telegram_webhook', 'health', 'scheduler', 'installation_report'], $runner->actions);
+            $this->assertSame(['config_clear', 'migrations', 'seed', 'owner_bootstrap', 'config_cache', 'telegram_webhook', 'telegram_report_channel', 'health', 'scheduler', 'installation_report'], $runner->actions);
             $this->assertStringContainsString('DB_PASSWORD="'.$testSecret.'"', (string) file_get_contents($paths['environment']));
             $this->assertStringNotContainsString($lifecycleSecret, (string) file_get_contents($paths['environment']));
             $this->assertFileExists($paths['lock']);
@@ -337,6 +337,11 @@ final class HttpRecordingFinalizationRunner implements InstallerFinalizationRunn
     public function configureTelegramWebhook(): void
     {
         $this->actions[] = 'telegram_webhook';
+    }
+
+    public function verifyTelegramReportChannel(): void
+    {
+        $this->actions[] = 'telegram_report_channel';
     }
 
     public function verifyHealth(): void

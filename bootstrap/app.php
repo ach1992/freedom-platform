@@ -35,6 +35,7 @@ use App\Modules\Telegram\Presentation\Console\ApplyTelegramUpdateRetentionComman
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\ProcessTelegramBroadcastsCommand;
 use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
+use App\Modules\Telegram\Presentation\Console\VerifyTelegramReportChannelCommand;
 use App\Modules\Telegram\Presentation\Http\Middleware\VerifyTelegramWebhookRequest;
 use App\Modules\Wallet\Presentation\Console\WalletMaintenanceCommand;
 use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
@@ -90,6 +91,7 @@ return Application::configure(basePath: dirname(__DIR__))
         PurchasePaymentMaintenanceCommand::class,
         ProcessTelegramBroadcastsCommand::class,
         WalletMaintenanceCommand::class,
+        VerifyTelegramReportChannelCommand::class,
         WriteInstallerReportCommand::class,
     ])
     ->withExceptions(function (Exceptions $exceptions): void {

@@ -94,7 +94,7 @@ return [
             'TELEGRAM_BOT_USERNAME',
             'TELEGRAM_WEBHOOK_SECRET',
             'OWNER_TELEGRAM_ID',
-            'REPORT_CHAT_ID',
+            'REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID',
         ],
         'paths' => [
             storage_path(),

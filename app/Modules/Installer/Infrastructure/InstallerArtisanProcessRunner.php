@@ -78,6 +78,15 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
         );
     }
 
+    public function verifyTelegramReportChannel(): void
+    {
+        $this->run(
+            'telegram_report_channel',
+            ['telegram:report-channel:verify', '--json', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+    }
+
     public function verifyHealth(): void
     {
         $output = $this->run(

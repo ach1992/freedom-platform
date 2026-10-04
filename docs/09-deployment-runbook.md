@@ -88,7 +88,7 @@ Before installation or release activation verify:
 
 ## Installer completion and Owner recovery
 
-The secure installer completes only after the fixed bootstrap chain has succeeded: migrations, idempotent baseline seeding, initial Owner creation, production-safe configuration cache, Telegram bot identity verification via `getMe`, webhook configuration, critical runtime health, Scheduler registration verification, and a secret-free installation report. `installer.lock` is activated only after that complete chain succeeds.
+The secure installer completes only after the fixed bootstrap chain has succeeded: migrations, idempotent baseline seeding, initial Owner creation, production-safe configuration cache, Telegram bot identity verification via `getMe`, webhook configuration, verification of the canonical `REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID` destination by a real quiet Telegram test message, critical runtime health, Scheduler registration verification, and a secret-free installation report. Channel IDs may be negative (for example Telegram channel IDs beginning with `-100`). A missing or zero destination, or a failed test send, aborts finalization and leaves `installer.lock` absent. `installer.lock` is activated only after that complete chain succeeds.
 
 After installation, the database is authoritative for the active Owner. `OWNER_TELEGRAM_ID` is bootstrap input only; changing it in `.env` must not silently mutate a live Owner. Ordinary Owner changes should use the audited in-product transfer flow. When that path is unavailable, a protected local SSH/aaPanel operator may use the reviewed recovery command instead of direct SQL edits:
 

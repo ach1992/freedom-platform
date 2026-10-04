@@ -25,6 +25,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
             $runner->bootstrapOwner();
             $runner->cacheConfiguration();
             $runner->configureTelegramWebhook();
+            $runner->verifyTelegramReportChannel();
             $runner->verifyHealth();
             $runner->verifyScheduler();
             $runner->writeInstallationReport();
@@ -36,6 +37,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
                 'installer:bootstrap-owner --json --no-ansi --no-interaction',
                 'config:cache --no-ansi --no-interaction',
                 'telegram:webhook:configure --json --no-ansi --no-interaction',
+                'telegram:report-channel:verify --json --no-ansi --no-interaction',
                 'health:check --critical --json --redact --no-ansi --no-interaction',
                 'schedule:list --no-ansi --no-interaction',
                 'installer:write-report --json --no-ansi --no-interaction',
@@ -47,6 +49,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
                 'installer:bootstrap-owner=<absent>',
                 'config:cache=<absent>',
                 'telegram:webhook:configure=<absent>',
+                'telegram:report-channel:verify=<absent>',
                 'health:check=<absent>',
                 'schedule:list=<absent>',
                 'installer:write-report=<absent>',
@@ -73,6 +76,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
                 $runner->bootstrapOwner();
                 $runner->cacheConfiguration();
                 $runner->configureTelegramWebhook();
+                $runner->verifyTelegramReportChannel();
                 $runner->verifyHealth();
                 $runner->verifyScheduler();
                 $runner->writeInstallationReport();
@@ -85,6 +89,7 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
                 'installer:bootstrap-owner=<absent>',
                 'config:cache=<absent>',
                 'telegram:webhook:configure=<absent>',
+                'telegram:report-channel:verify=<absent>',
                 'health:check=<absent>',
                 'schedule:list=<absent>',
                 'installer:write-report=<absent>',
@@ -118,13 +123,14 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
                 $runner->bootstrapOwner();
                 $runner->cacheConfiguration();
                 $runner->configureTelegramWebhook();
+                $runner->verifyTelegramReportChannel();
                 $runner->verifyHealth();
                 $runner->verifyScheduler();
                 $runner->writeInstallationReport();
             });
 
             $expected = [];
-            foreach (['config:clear', 'migrate', 'db:seed', 'installer:bootstrap-owner', 'config:cache', 'telegram:webhook:configure', 'health:check', 'schedule:list', 'installer:write-report'] as $command) {
+            foreach (['config:clear', 'migrate', 'db:seed', 'installer:bootstrap-owner', 'config:cache', 'telegram:webhook:configure', 'telegram:report-channel:verify', 'health:check', 'schedule:list', 'installer:write-report'] as $command) {
                 foreach ($keys as $key) {
                     $expected[] = $command.':'.$key.'=<absent>';
                 }

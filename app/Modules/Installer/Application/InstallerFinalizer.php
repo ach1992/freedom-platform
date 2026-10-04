@@ -39,6 +39,9 @@ final readonly class InstallerFinalizer
             'telegram_webhook' => function (): void {
                 $this->runner->configureTelegramWebhook();
             },
+            'telegram_report_channel' => function (): void {
+                $this->runner->verifyTelegramReportChannel();
+            },
             'health' => function (): void {
                 $this->runner->verifyHealth();
             },

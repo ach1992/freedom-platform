@@ -31,7 +31,7 @@ final class InstallerFinalizerTest extends TestCase
 
             $this->assertSame('completed', $result['status']);
             $this->assertSame(
-                ['config_clear', 'migrations', 'seed', 'owner_bootstrap', 'config_cache', 'telegram_webhook', 'health', 'scheduler', 'installation_report'],
+                ['config_clear', 'migrations', 'seed', 'owner_bootstrap', 'config_cache', 'telegram_webhook', 'telegram_report_channel', 'health', 'scheduler', 'installation_report'],
                 $runner->actions,
             );
             $this->assertSame($lifecyclePassword, $runner->migrationPassword);
@@ -257,10 +257,46 @@ final class InstallerFinalizerTest extends TestCase
                 'owner_bootstrap',
                 'config_cache',
                 'telegram_webhook',
+                'telegram_report_channel',
                 'health',
                 'scheduler',
                 'installation_report',
             ], $runner->actions);
+        } finally {
+            $this->cleanup($paths);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_report_channel_verification_failure_prevents_lock_and_rolls_back_environment(): void
+    {
+        $paths = $this->paths('report-channel-failure');
+        $original = "APP_KEY=base64:existing-test-key\nDB_HOST=old-host\n";
+        $this->writeFixture($paths['environment'], $original);
+        $runner = new RecordingFinalizationRunner('telegram_report_channel');
+        [$finalizer, $lock] = $this->finalizer($paths, $runner);
+
+        try {
+            try {
+                $finalizer->finalize(['DB_HOST' => 'database.internal']);
+                $this->fail('A report-channel verification failure must abort finalization.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame('test-only telegram_report_channel failure', $exception->getMessage());
+            }
+
+            $this->assertFalse($lock->exists());
+            $this->assertSame($original, file_get_contents($paths['environment']));
+            $this->assertSame([
+                'config_clear',
+                'migrations',
+                'seed',
+                'owner_bootstrap',
+                'config_cache',
+                'telegram_webhook',
+                'telegram_report_channel',
+                'config_clear',
+            ], $runner->actions);
+            $this->assertFileDoesNotExist($paths['snapshot']);
         } finally {
             $this->cleanup($paths);
         }
@@ -389,6 +425,11 @@ final class RecordingFinalizationRunner implements InstallerFinalizationRunner
     public function configureTelegramWebhook(): void
     {
         $this->record('telegram_webhook');
+    }
+
+    public function verifyTelegramReportChannel(): void
+    {
+        $this->record('telegram_report_channel');
     }
 
     public function verifyHealth(): void

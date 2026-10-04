@@ -18,6 +18,8 @@ interface InstallerFinalizationRunner
 
     public function configureTelegramWebhook(): void;
 
+    public function verifyTelegramReportChannel(): void;
+
     public function verifyHealth(): void;
 
     public function verifyScheduler(): void;
