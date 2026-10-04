@@ -4,6 +4,6 @@ declare(strict_types=1);
 
 return [
     'telegram' => [
-        'report_channel_chat_id' => (int) env('REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID', 0),
+        'report_channel_chat_id' => (int) env('REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID', env('REPORT_CHAT_ID', 0)),
     ],
 ];

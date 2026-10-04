@@ -42,6 +42,24 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
         );
     }
 
+    public function seed(): void
+    {
+        $this->run(
+            'seed',
+            ['db:seed', '--force', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+    }
+
+    public function bootstrapOwner(): void
+    {
+        $this->run(
+            'owner_bootstrap',
+            ['installer:bootstrap-owner', '--json', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+    }
+
     public function cacheConfiguration(): void
     {
         $this->run(
@@ -51,11 +69,65 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
         );
     }
 
+    public function configureTelegramWebhook(): void
+    {
+        $this->run(
+            'telegram_webhook',
+            ['telegram:webhook:configure', '--json', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+    }
+
+    public function verifyTelegramReportChannel(): void
+    {
+        $this->run(
+            'telegram_report_channel',
+            ['telegram:report-channel:verify', '--json', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+    }
+
+    public function verifyHealth(): void
+    {
+        $output = $this->run(
+            'health',
+            ['health:check', '--critical', '--json', '--redact', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+
+        $decoded = json_decode($output, true);
+        if (! is_array($decoded) || ($decoded['status'] ?? null) !== 'healthy') {
+            throw new RuntimeException('The installer finalization health result is invalid.');
+        }
+    }
+
+    public function verifyScheduler(): void
+    {
+        $output = $this->run(
+            'scheduler',
+            ['schedule:list', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+
+        if (! str_contains($output, 'operations.scheduler-heartbeat')) {
+            throw new RuntimeException('The installer finalization Scheduler readiness surface is incomplete.');
+        }
+    }
+
+    public function writeInstallationReport(): void
+    {
+        $this->run(
+            'installation_report',
+            ['installer:write-report', '--json', '--no-ansi', '--no-interaction'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD' => false],
+        );
+    }
+
     /**
      * @param  list<string>  $arguments
      * @param  array<string, string|false>  $environment
      */
-    private function run(string $step, array $arguments, array $environment): void
+    private function run(string $step, array $arguments, array $environment): string
     {
         $this->validateRuntime();
 
@@ -82,6 +154,8 @@ final readonly class InstallerArtisanProcessRunner implements InstallerFinalizat
         if (! $process->isSuccessful()) {
             throw new RuntimeException('The installer finalization process failed the '.$step.' step.');
         }
+
+        return $process->getOutput();
     }
 
     private function validateRuntime(): void

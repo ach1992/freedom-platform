@@ -15,6 +15,6 @@ return [
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
         'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
         'owner_id' => env('OWNER_TELEGRAM_ID'),
-        'report_chat_id' => env('REPORT_CHAT_ID'),
+        'report_chat_id' => env('REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID', env('REPORT_CHAT_ID')),
     ],
 ];

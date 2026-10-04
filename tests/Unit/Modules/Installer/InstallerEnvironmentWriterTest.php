@@ -58,6 +58,8 @@ final class InstallerEnvironmentWriterTest extends TestCase
         $this->assertIsArray($nonPersistableKeys);
         $this->assertContains('TELEGRAM_BOT_USERNAME', $allowedKeys);
         $this->assertContains('BUSINESS_TIMEZONE', $allowedKeys);
+        $this->assertContains('REPORTING_TELEGRAM_REPORT_CHANNEL_CHAT_ID', $allowedKeys);
+        $this->assertNotContains('REPORT_CHAT_ID', $allowedKeys);
         $this->assertNotContains('APP_TIMEZONE', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_URL', $allowedKeys);
         $this->assertContains('TELEGRAM_METADATA_DB_USERNAME', $allowedKeys);
@@ -222,6 +224,45 @@ ENV;
 
             $this->assertFileDoesNotExist($environmentPath);
             $this->assertFileDoesNotExist($snapshotPath);
+        } finally {
+            $this->cleanup($directory);
+        }
+    }
+
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_it_generates_a_safe_webhook_secret_when_the_installer_input_omits_it(): void
+    {
+        [$directory, $environmentPath, $snapshotPath] = $this->paths('webhook-secret');
+        $writer = new InstallerEnvironmentWriter(
+            new InstallerProductionEnvironmentPolicy('testing'),
+            new class implements RandomGenerator
+            {
+                public function bytes(int $length): string
+                {
+                    return str_repeat("\x05", $length);
+                }
+
+                public function integer(int $minimum, int $maximum): int
+                {
+                    return $minimum;
+                }
+            },
+            $environmentPath,
+            $snapshotPath,
+            ['APP_KEY', 'TELEGRAM_WEBHOOK_SECRET'],
+            ['TELEGRAM_LIFECYCLE_DB_PASSWORD'],
+        );
+
+        try {
+            $result = $writer->write([]);
+            $contents = (string) file_get_contents($environmentPath);
+
+            $this->assertContains('TELEGRAM_WEBHOOK_SECRET', $result['changed_keys']);
+            $this->assertMatchesRegularExpression(
+                '/TELEGRAM_WEBHOOK_SECRET="[A-Za-z0-9_-]{32,256}"/',
+                $contents,
+            );
+            $this->assertSame(1, substr_count($contents, 'TELEGRAM_WEBHOOK_SECRET='));
         } finally {
             $this->cleanup($directory);
         }

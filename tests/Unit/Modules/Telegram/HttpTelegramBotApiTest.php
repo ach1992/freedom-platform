@@ -21,6 +21,10 @@ final class HttpTelegramBotApiTest extends TestCase
     {
         $configuration = $this->configuration();
         Http::fake([
+            'https://api.telegram.org/*/getMe' => Http::response([
+                'ok' => true,
+                'result' => ['id' => 123456789, 'is_bot' => true],
+            ]),
             'https://api.telegram.org/*/setWebhook' => Http::response(['ok' => true, 'result' => true]),
             'https://api.telegram.org/*/getWebhookInfo' => Http::response([
                 'ok' => true,
@@ -31,13 +35,82 @@ final class HttpTelegramBotApiTest extends TestCase
             ]),
         ]);
 
-        $info = (new HttpTelegramBotApi($this->app->make(Factory::class), $configuration))
-            ->configureWebhook($configuration->webhookUrl, $configuration->webhookSecret, false);
+        $client = new HttpTelegramBotApi($this->app->make(Factory::class), $configuration);
+        $client->assertBotIdentity();
+        $info = $client->configureWebhook($configuration->webhookUrl, $configuration->webhookSecret, false);
 
         self::assertTrue($info->configured);
         self::assertTrue($info->targetsExpectedUrl);
         self::assertFalse($info->lastErrorPresent);
-        Http::assertSentCount(2);
+        Http::assertSentCount(3);
+    }
+
+    public function test_report_channel_verification_sends_to_a_negative_channel_id_and_validates_provider_echo(): void
+    {
+        $configuration = $this->configuration();
+        $chatId = -1001234567890;
+        Http::fake([
+            'https://api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 77,
+                    'chat' => ['id' => $chatId, 'type' => 'channel'],
+                ],
+            ]),
+        ]);
+
+        (new HttpTelegramBotApi($this->app->make(Factory::class), $configuration))
+            ->verifyReportChannel($chatId);
+
+        Http::assertSent(static fn ($request): bool => str_ends_with($request->url(), '/sendMessage')
+            && $request['chat_id'] === $chatId
+            && is_string($request['text'])
+            && $request['text'] !== ''
+            && $request['disable_notification'] === true
+        );
+        Http::assertSentCount(1);
+    }
+
+    public function test_report_channel_verification_fails_closed_when_provider_echoes_another_chat(): void
+    {
+        $configuration = $this->configuration();
+        Http::fake([
+            'https://api.telegram.org/*/sendMessage' => Http::response([
+                'ok' => true,
+                'result' => [
+                    'message_id' => 77,
+                    'chat' => ['id' => -1009999999999, 'type' => 'channel'],
+                ],
+            ]),
+        ]);
+
+        try {
+            (new HttpTelegramBotApi($this->app->make(Factory::class), $configuration))
+                ->verifyReportChannel(-1001234567890);
+            self::fail('Expected report-channel identity mismatch rejection.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram report channel verification returned an invalid result.', $exception->getMessage());
+            self::assertStringNotContainsString($configuration->botToken, $exception->getMessage());
+        }
+    }
+
+    public function test_bot_identity_validation_fails_closed_on_mismatched_telegram_identity(): void
+    {
+        $configuration = $this->configuration();
+        Http::fake([
+            'https://api.telegram.org/*/getMe' => Http::response([
+                'ok' => true,
+                'result' => ['id' => 987654321, 'is_bot' => true],
+            ]),
+        ]);
+
+        try {
+            (new HttpTelegramBotApi($this->app->make(Factory::class), $configuration))->assertBotIdentity();
+            self::fail('Expected mismatched Telegram bot identity rejection.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Telegram Bot API identity does not match configured bot.', $exception->getMessage());
+            self::assertStringNotContainsString($configuration->botToken, $exception->getMessage());
+        }
     }
 
     public function test_client_disables_redirect_following_at_transport_boundary(): void

@@ -47,6 +47,16 @@ final class InstallerEnvironmentWriter
                 $generatedAppKey = true;
             }
 
+            if (in_array('TELEGRAM_WEBHOOK_SECRET', $this->allowedKeys, true)
+                && ! array_key_exists('TELEGRAM_WEBHOOK_SECRET', $validated)
+                && ! $this->hasConfiguredValue($original ?? '', 'TELEGRAM_WEBHOOK_SECRET')
+            ) {
+                $validated['TELEGRAM_WEBHOOK_SECRET'] = rtrim(strtr(
+                    base64_encode($this->random->bytes(32)),
+                    '+/', '-_',
+                ), '=');
+            }
+
             $contents = $this->merge($original ?? '', $validated);
             $this->productionEnvironmentPolicy->assertSafe($contents);
             $snapshotChecksum = $this->ensureSnapshot($original);

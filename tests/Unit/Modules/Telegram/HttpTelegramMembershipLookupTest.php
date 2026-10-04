@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Tests\Unit\Modules\Telegram;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBotIdentityVerifier;
 use App\Modules\Telegram\Application\Contracts\TelegramMembershipLookup;
 use App\Modules\Telegram\Application\TelegramMembershipEvidence;
+use App\Modules\Telegram\Infrastructure\HttpTelegramBotApi;
 use App\Modules\Telegram\Infrastructure\HttpTelegramMembershipLookup;
 use App\Modules\Telegram\Infrastructure\TelegramRuntimeConfiguration;
 use GuzzleHttp\Psr7\Response as Psr7Response;
@@ -200,6 +202,10 @@ final class HttpTelegramMembershipLookupTest extends TestCase
         self::assertInstanceOf(
             HttpTelegramMembershipLookup::class,
             $this->app->make(TelegramMembershipLookup::class),
+        );
+        self::assertInstanceOf(
+            HttpTelegramBotApi::class,
+            $this->app->make(TelegramBotIdentityVerifier::class),
         );
 
         $webhookApiMethods = array_map(

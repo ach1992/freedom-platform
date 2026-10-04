@@ -27,9 +27,32 @@ final readonly class InstallerFinalizer
             'migrations' => function () use ($lifecycleDatabasePassword): void {
                 $this->runner->migrate($lifecycleDatabasePassword);
             },
+            'seed' => function (): void {
+                $this->runner->seed();
+            },
+            'owner_bootstrap' => function (): void {
+                $this->runner->bootstrapOwner();
+            },
             'config_cache' => function (): void {
                 $this->runner->cacheConfiguration();
             },
-        ]);
+            'telegram_webhook' => function (): void {
+                $this->runner->configureTelegramWebhook();
+            },
+            'telegram_report_channel' => function (): void {
+                $this->runner->verifyTelegramReportChannel();
+            },
+            'health' => function (): void {
+                $this->runner->verifyHealth();
+            },
+            'scheduler' => function (): void {
+                $this->runner->verifyScheduler();
+            },
+            'installation_report' => function (): void {
+                $this->runner->writeInstallationReport();
+            },
+        ], function (): void {
+            $this->runner->clearConfiguration();
+        });
     }
 }

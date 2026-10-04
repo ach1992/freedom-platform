@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Operations\Infrastructure;
 
+use App\Modules\AccessControl\Application\OperatorOwnerAuthorityPersistence;
 use App\Modules\Operations\Application\BackupCompatibilityIdentity;
 use App\Modules\Operations\Application\BackupManager;
 use App\Modules\Operations\Application\BackupRuntimeConfiguration;
@@ -14,6 +15,7 @@ use App\Modules\Operations\Application\Contracts\BackupBundleWriter as BackupBun
 use App\Modules\Operations\Application\Contracts\BackupDatabaseDumper;
 use App\Modules\Operations\Application\Contracts\BackupPayloadCollector as BackupPayloadCollectorContract;
 use App\Modules\Operations\Application\Contracts\BackupRepository;
+use App\Modules\Operations\Application\Contracts\OwnerAuthorityMutator;
 use App\Modules\Operations\Application\Contracts\ReleaseActivator;
 use App\Modules\Operations\Application\Contracts\ReleaseHealthVerifier;
 use App\Modules\Operations\Application\Contracts\RestoreCriticalAuthorityIdentity;
@@ -59,6 +61,7 @@ final class OperationsServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->singleton(OwnerAuthorityMutator::class, OperatorOwnerAuthorityPersistence::class);
 
         $this->app->singleton(
             WorkerRuntimeConfiguration::class,

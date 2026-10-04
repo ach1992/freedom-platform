@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use App\Modules\Customers\Presentation\Console\RecalculateCustomerTiersCommand;
+use App\Modules\Installer\Presentation\Console\BootstrapInstallerOwnerCommand;
 use App\Modules\Installer\Presentation\Console\IssueInstallerTokenCommand;
+use App\Modules\Installer\Presentation\Console\WriteInstallerReportCommand;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerAvailable;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerHttps;
 use App\Modules\Installer\Presentation\Http\Middleware\EnsureInstallerUnlocked;
@@ -16,6 +18,7 @@ use App\Modules\Operations\Presentation\Console\DispatchOutboxCommand;
 use App\Modules\Operations\Presentation\Console\HealthCheckCommand;
 use App\Modules\Operations\Presentation\Console\QueueBackupTelegramExportCommand;
 use App\Modules\Operations\Presentation\Console\RecordWorkerHeartbeatCommand;
+use App\Modules\Operations\Presentation\Console\RecoverOwnerCommand;
 use App\Modules\Operations\Presentation\Console\RecoverUpdateCommand;
 use App\Modules\Operations\Presentation\Console\RestoreBackupCommand;
 use App\Modules\Operations\Presentation\Console\RestoreRuntimeAttestCommand;
@@ -32,6 +35,7 @@ use App\Modules\Telegram\Presentation\Console\ApplyTelegramUpdateRetentionComman
 use App\Modules\Telegram\Presentation\Console\ConfigureTelegramWebhookCommand;
 use App\Modules\Telegram\Presentation\Console\ProcessTelegramBroadcastsCommand;
 use App\Modules\Telegram\Presentation\Console\RequeueTelegramUpdatesCommand;
+use App\Modules\Telegram\Presentation\Console\VerifyTelegramReportChannelCommand;
 use App\Modules\Telegram\Presentation\Http\Middleware\VerifyTelegramWebhookRequest;
 use App\Modules\Wallet\Presentation\Console\WalletMaintenanceCommand;
 use App\Shared\Infrastructure\Http\CorrelationIdMiddleware;
@@ -57,6 +61,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withCommands([
+        BootstrapInstallerOwnerCommand::class,
         ApplyUpdateCommand::class,
         CheckOutboxContractRetirementCommand::class,
         CheckWorkerHeartbeatsCommand::class,
@@ -70,6 +75,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ApplyTelegramUpdateRetentionCommand::class,
         HealthCheckCommand::class,
         IssueInstallerTokenCommand::class,
+        RecoverOwnerCommand::class,
         ProcessServiceAutoRenewalsCommand::class,
         ProcessServiceNotificationsCommand::class,
         ProcessServiceSynchronizationsCommand::class,
@@ -85,6 +91,8 @@ return Application::configure(basePath: dirname(__DIR__))
         PurchasePaymentMaintenanceCommand::class,
         ProcessTelegramBroadcastsCommand::class,
         WalletMaintenanceCommand::class,
+        VerifyTelegramReportChannelCommand::class,
+        WriteInstallerReportCommand::class,
     ])
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->dontFlash('lifecycle_database_password');

@@ -5,18 +5,55 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBotIdentityVerifier;
+use App\Modules\Telegram\Application\Contracts\TelegramReportChannelVerifier;
 use App\Modules\Telegram\Application\TelegramWebhookInfo;
 use Illuminate\Http\Client\Factory;
 use RuntimeException;
 use Throwable;
 
-final readonly class HttpTelegramBotApi implements TelegramBotApi
+final readonly class HttpTelegramBotApi implements TelegramBotApi, TelegramBotIdentityVerifier, TelegramReportChannelVerifier
 {
     /** @requirement INS-001 SEC-001 SEC-005 SEC-008 SEC-009 INT-001 */
     public function __construct(
         private Factory $http,
         private TelegramRuntimeConfiguration $configuration,
     ) {}
+
+    public function assertBotIdentity(): void
+    {
+        $result = $this->request('getMe');
+
+        if (! is_array($result)
+            || ($result['is_bot'] ?? null) !== true
+            || ! is_int($result['id'] ?? null)
+            || ! hash_equals($this->configuration->botId, (string) $result['id'])
+        ) {
+            throw new RuntimeException('Telegram Bot API identity does not match configured bot.');
+        }
+    }
+
+    public function verifyReportChannel(int $chatId): void
+    {
+        if ($chatId === 0) {
+            throw new RuntimeException('Telegram report channel/chat ID is invalid.');
+        }
+
+        $result = $this->request('sendMessage', [
+            'chat_id' => $chatId,
+            'text' => 'Freedom Platform installation verification: report delivery is ready.',
+            'disable_notification' => true,
+        ]);
+
+        if (! is_array($result)
+            || ! is_int($result['message_id'] ?? null)
+            || $result['message_id'] < 1
+            || ! is_array($result['chat'] ?? null)
+            || ($result['chat']['id'] ?? null) !== $chatId
+        ) {
+            throw new RuntimeException('Telegram report channel verification returned an invalid result.');
+        }
+    }
 
     public function configureWebhook(string $url, string $secretToken, bool $dropPendingUpdates): TelegramWebhookInfo
     {

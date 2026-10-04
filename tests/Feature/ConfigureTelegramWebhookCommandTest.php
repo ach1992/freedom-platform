@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBotIdentityVerifier;
 use App\Modules\Telegram\Application\TelegramWebhookInfo;
 use Illuminate\Support\Facades\Artisan;
 use Tests\TestCase;
@@ -27,9 +28,16 @@ final class ConfigureTelegramWebhookCommandTest extends TestCase
             'telegram.api_timeout_seconds' => 15,
         ]);
 
-        $fake = new class implements TelegramBotApi
+        $fake = new class implements TelegramBotApi, TelegramBotIdentityVerifier
         {
             public bool $configured = false;
+
+            public bool $identityValidated = false;
+
+            public function assertBotIdentity(): void
+            {
+                $this->identityValidated = true;
+            }
 
             public function configureWebhook(string $url, string $secretToken, bool $dropPendingUpdates): TelegramWebhookInfo
             {
@@ -46,11 +54,13 @@ final class ConfigureTelegramWebhookCommandTest extends TestCase
             }
         };
         $this->app->instance(TelegramBotApi::class, $fake);
+        $this->app->instance(TelegramBotIdentityVerifier::class, $fake);
 
         $exitCode = Artisan::call('telegram:webhook:configure', ['--json' => true]);
         $output = Artisan::output();
 
         self::assertSame(0, $exitCode);
+        self::assertTrue($fake->identityValidated);
         self::assertTrue($fake->configured);
         self::assertStringContainsString('"targets_expected_url":true', $output);
         self::assertStringNotContainsString($token, $output);

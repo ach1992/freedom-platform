@@ -21,17 +21,38 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
         try {
             $runner->clearConfiguration();
             $runner->migrate();
+            $runner->seed();
+            $runner->bootstrapOwner();
             $runner->cacheConfiguration();
+            $runner->configureTelegramWebhook();
+            $runner->verifyTelegramReportChannel();
+            $runner->verifyHealth();
+            $runner->verifyScheduler();
+            $runner->writeInstallationReport();
 
             $this->assertSame([
                 'config:clear --no-ansi --no-interaction',
                 'migrate --force --isolated=1 --no-ansi --no-interaction',
+                'db:seed --force --no-ansi --no-interaction',
+                'installer:bootstrap-owner --json --no-ansi --no-interaction',
                 'config:cache --no-ansi --no-interaction',
+                'telegram:webhook:configure --json --no-ansi --no-interaction',
+                'telegram:report-channel:verify --json --no-ansi --no-interaction',
+                'health:check --critical --json --redact --no-ansi --no-interaction',
+                'schedule:list --no-ansi --no-interaction',
+                'installer:write-report --json --no-ansi --no-interaction',
             ], file($logPath, FILE_IGNORE_NEW_LINES));
             $this->assertSame([
                 'config:clear=<absent>',
                 'migrate=<absent>',
+                'db:seed=<absent>',
+                'installer:bootstrap-owner=<absent>',
                 'config:cache=<absent>',
+                'telegram:webhook:configure=<absent>',
+                'telegram:report-channel:verify=<absent>',
+                'health:check=<absent>',
+                'schedule:list=<absent>',
+                'installer:write-report=<absent>',
             ], file($environmentLogPath, FILE_IGNORE_NEW_LINES));
         } finally {
             $this->cleanup($directory);
@@ -51,13 +72,27 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
             $this->withEnvironment(['TELEGRAM_LIFECYCLE_DB_PASSWORD' => $parentMarker], function () use ($runner, $migrationMarker): void {
                 $runner->clearConfiguration();
                 $runner->migrate($migrationMarker);
+                $runner->seed();
+                $runner->bootstrapOwner();
                 $runner->cacheConfiguration();
+                $runner->configureTelegramWebhook();
+                $runner->verifyTelegramReportChannel();
+                $runner->verifyHealth();
+                $runner->verifyScheduler();
+                $runner->writeInstallationReport();
             });
 
             $this->assertSame([
                 'config:clear=<absent>',
                 'migrate='.$migrationMarker,
+                'db:seed=<absent>',
+                'installer:bootstrap-owner=<absent>',
                 'config:cache=<absent>',
+                'telegram:webhook:configure=<absent>',
+                'telegram:report-channel:verify=<absent>',
+                'health:check=<absent>',
+                'schedule:list=<absent>',
+                'installer:write-report=<absent>',
             ], file($environmentLogPath, FILE_IGNORE_NEW_LINES));
             $this->assertStringNotContainsString($parentMarker, (string) file_get_contents($environmentLogPath));
         } finally {
@@ -84,11 +119,18 @@ final class InstallerArtisanProcessRunnerTest extends TestCase
             $this->withEnvironment($parent, function () use ($runner): void {
                 $runner->clearConfiguration();
                 $runner->migrate();
+                $runner->seed();
+                $runner->bootstrapOwner();
                 $runner->cacheConfiguration();
+                $runner->configureTelegramWebhook();
+                $runner->verifyTelegramReportChannel();
+                $runner->verifyHealth();
+                $runner->verifyScheduler();
+                $runner->writeInstallationReport();
             });
 
             $expected = [];
-            foreach (['config:clear', 'migrate', 'config:cache'] as $command) {
+            foreach (['config:clear', 'migrate', 'db:seed', 'installer:bootstrap-owner', 'config:cache', 'telegram:webhook:configure', 'telegram:report-channel:verify', 'health:check', 'schedule:list', 'installer:write-report'] as $command) {
                 foreach ($keys as $key) {
                     $expected[] = $command.':'.$key.'=<absent>';
                 }
@@ -195,6 +237,14 @@ if (($argv[1] ?? null) === 'migrate' && is_file(%s)) {
     fwrite(STDERR, 'test-only-sensitive-output');
     exit(17);
 }
+
+if (($argv[1] ?? null) === 'health:check') {
+    echo json_encode(['status' => 'healthy'], JSON_THROW_ON_ERROR);
+}
+
+if (($argv[1] ?? null) === 'schedule:list') {
+    echo "operations.scheduler-heartbeat\n";
+}
 PHP,
             var_export($logPath, true),
             var_export($environmentLogPath, true),
@@ -221,6 +271,14 @@ foreach (['APP_ENV', 'APP_DEBUG', 'APP_URL', 'SESSION_ENCRYPT', 'SESSION_SECURE_
         $command.':'.$key.'='.($value === false ? '<absent>' : $value).PHP_EOL,
         FILE_APPEND,
     );
+}
+
+if ($command === 'health:check') {
+    echo json_encode(['status' => 'healthy'], JSON_THROW_ON_ERROR);
+}
+
+if ($command === 'schedule:list') {
+    echo "operations.scheduler-heartbeat\n";
 }
 PHP,
             var_export($environmentLogPath, true),
