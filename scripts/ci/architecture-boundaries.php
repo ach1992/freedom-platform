@@ -10,7 +10,7 @@ return [
         'Identity' => ['AccessControl'],
         'Installer' => ['Operations'],
         'Localization' => ['AccessControl'],
-        'Operations' => ['AccessControl', 'Payments'],
+        'Operations' => ['AccessControl', 'Identity', 'Payments'],
         'Orders' => ['AccessControl', 'Agents', 'Telegram'],
         'Panels' => ['AccessControl'],
         'Payments' => ['AccessControl', 'Orders', 'Telegram', 'Wallet'],
@@ -25,6 +25,7 @@ return [
     // consumer-owned Application contract without creating a broad module edge.
     // Each entry is source-path plus exact imported symbol.
     'module_dependency_reference_exceptions' => [
+        'app/Modules/AccessControl/Application/OperatorOwnerAuthorityPersistence.php|App\Modules\Operations\Application\Contracts\OwnerAuthorityMutator',
         'app/Modules/Telegram/Application/DatabaseTelegramOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\Contracts\\TelegramOperationsSnapshotSource',
         'app/Modules/Telegram/Application/DatabaseTelegramOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\OperationsCenterFact',
         'app/Modules/Panels/Application/DatabasePanelOperationsSnapshotSource.php|App\\Modules\\Operations\\Application\\Contracts\\PanelOperationsSnapshotSource',

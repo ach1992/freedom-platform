@@ -96,6 +96,29 @@ final readonly class TelegramIdentityAccountService
         return new TelegramIdentityAccountResult($userId, true);
     }
 
+    public function telegramUserIdForUser(Connection $connection, string $botId, int $userId): ?int
+    {
+        if ($botId === '' || $userId < 1) {
+            throw new RuntimeException('Telegram identity lookup input is invalid.');
+        }
+
+        $value = $connection->table('telegram_accounts')
+            ->where('bot_id', $botId)
+            ->where('user_id', $userId)
+            ->value('telegram_user_id');
+
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        if ($normalized === false) {
+            throw new RuntimeException('Stored Telegram identity is invalid.');
+        }
+
+        return $normalized;
+    }
+
     private function touchExistingIdentity(
         Connection $connection,
         int $accountId,

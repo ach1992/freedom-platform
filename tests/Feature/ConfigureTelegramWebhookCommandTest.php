@@ -31,6 +31,13 @@ final class ConfigureTelegramWebhookCommandTest extends TestCase
         {
             public bool $configured = false;
 
+            public bool $identityValidated = false;
+
+            public function assertBotIdentity(): void
+            {
+                $this->identityValidated = true;
+            }
+
             public function configureWebhook(string $url, string $secretToken, bool $dropPendingUpdates): TelegramWebhookInfo
             {
                 $this->configured = $url === 'https://bot.example.test/api/telegram/webhook'
@@ -51,6 +58,7 @@ final class ConfigureTelegramWebhookCommandTest extends TestCase
         $output = Artisan::output();
 
         self::assertSame(0, $exitCode);
+        self::assertTrue($fake->identityValidated);
         self::assertTrue($fake->configured);
         self::assertStringContainsString('"targets_expected_url":true', $output);
         self::assertStringNotContainsString($token, $output);

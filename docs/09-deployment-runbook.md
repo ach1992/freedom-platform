@@ -86,6 +86,21 @@ Before installation or release activation verify:
 - `php artisan health:check --critical --json --redact` passes on the candidate runtime before protected work is reopened. This shared readiness path fails closed on incompatible MariaDB family/version/`@@server_uid`, connection charset/collation/strict-mode drift, missing authentication on required Redis connections, Redis queue `after_commit` drift, or `retry_after` that does not exceed every reviewed Supervisor worker timeout; the atomic release-switch consumes this same check after activation;
 - no secret is exposed in command arguments, Chat, Git, or screenshots.
 
+## Installer completion and Owner recovery
+
+The secure installer completes only after the fixed bootstrap chain has succeeded: migrations, idempotent baseline seeding, initial Owner creation, production-safe configuration cache, Telegram bot identity verification via `getMe`, webhook configuration, critical runtime health, Scheduler registration verification, and a secret-free installation report. `installer.lock` is activated only after that complete chain succeeds.
+
+After installation, the database is authoritative for the active Owner. `OWNER_TELEGRAM_ID` is bootstrap input only; changing it in `.env` must not silently mutate a live Owner. Ordinary Owner changes should use the audited in-product transfer flow. When that path is unavailable, a protected local SSH/aaPanel operator may use the reviewed recovery command instead of direct SQL edits:
+
+```bash
+php artisan access:owner:recover <new-telegram-user-id> \
+  --expected-current=<current-owner-telegram-user-id> \
+  --reason="controlled Owner recovery" \
+  --yes --json
+```
+
+When no database Owner exists, omit `--expected-current`; otherwise it is mandatory optimistic-concurrency evidence and must match the authoritative current Owner. The command consumes the configured bot token internally rather than accepting secrets in argv, runs transactionally, preserves the one-Owner invariant, invalidates pending Owner-transfer intents, increments affected permission versions, and writes a secret-free audit record. Run it only from the protected local operator boundary. Do not support Owner changes by editing `administrators`, Telegram identity rows, or `OWNER_TELEGRAM_ID` directly.
+
 ## Release gate
 
 Do not deploy unless the exact release candidate has:

@@ -8,6 +8,8 @@ use App\Modules\Telegram\Application\TelegramWebhookInfo;
 
 interface TelegramBotApi
 {
+    public function assertBotIdentity(): void;
+
     public function configureWebhook(string $url, string $secretToken, bool $dropPendingUpdates): TelegramWebhookInfo;
 
     public function webhookInfo(): TelegramWebhookInfo;

@@ -31,7 +31,7 @@ final class InstallerFinalizerTest extends TestCase
 
             $this->assertSame('completed', $result['status']);
             $this->assertSame(
-                ['config_clear', 'migrations', 'config_cache'],
+                ['config_clear', 'migrations', 'seed', 'owner_bootstrap', 'config_cache', 'telegram_webhook', 'health', 'scheduler', 'installation_report'],
                 $runner->actions,
             );
             $this->assertSame($lifecyclePassword, $runner->migrationPassword);
@@ -212,6 +212,58 @@ final class InstallerFinalizerTest extends TestCase
         }
     }
 
+    /** @requirement INS-001 SEC-003 SEC-007 SEC-008 QUA-011 */
+    public function test_late_finalization_failure_replays_idempotent_steps_and_locks_only_after_retry_succeeds(): void
+    {
+        $paths = $this->paths('late-retry');
+        $runner = new RecordingFinalizationRunner('telegram_webhook', 1);
+        [$finalizer, $lock] = $this->finalizer($paths, $runner);
+
+        try {
+            try {
+                $finalizer->finalize(['DB_HOST' => 'database.internal']);
+                $this->fail('The simulated webhook failure must abort finalization.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame('test-only telegram_webhook failure', $exception->getMessage());
+            }
+
+            $this->assertFalse($lock->exists());
+            $this->assertSame([
+                'config_clear',
+                'migrations',
+                'seed',
+                'owner_bootstrap',
+                'config_cache',
+                'telegram_webhook',
+            ], $runner->actions);
+
+            $result = $finalizer->finalize(['DB_HOST' => 'database.internal']);
+
+            $this->assertSame('completed', $result['status']);
+            $this->assertTrue($result['resumed']);
+            $this->assertTrue($lock->exists());
+            $this->assertSame([
+                'config_clear',
+                'migrations',
+                'seed',
+                'owner_bootstrap',
+                'config_cache',
+                'telegram_webhook',
+                'config_clear',
+                'migrations',
+                'seed',
+                'owner_bootstrap',
+                'config_cache',
+                'telegram_webhook',
+                'health',
+                'scheduler',
+                'installation_report',
+            ], $runner->actions);
+        } finally {
+            $this->cleanup($paths);
+        }
+    }
+
     /**
      * @param  array{environment: string, snapshot: string, journal: string, lock: string}  $paths
      * @return array{InstallerFinalizer, InstallerLock}
@@ -301,7 +353,10 @@ final class RecordingFinalizationRunner implements InstallerFinalizationRunner
 
     public ?string $migrationPassword = null;
 
-    public function __construct(private readonly ?string $failAt = null) {}
+    public function __construct(
+        private readonly ?string $failAt = null,
+        private int $failuresRemaining = 1,
+    ) {}
 
     public function clearConfiguration(): void
     {
@@ -314,16 +369,47 @@ final class RecordingFinalizationRunner implements InstallerFinalizationRunner
         $this->record('migrations');
     }
 
+    public function seed(): void
+    {
+        $this->record('seed');
+    }
+
+    public function bootstrapOwner(): void
+    {
+        $this->record('owner_bootstrap');
+    }
+
     public function cacheConfiguration(): void
     {
         $this->record('config_cache');
+    }
+
+    public function configureTelegramWebhook(): void
+    {
+        $this->record('telegram_webhook');
+    }
+
+    public function verifyHealth(): void
+    {
+        $this->record('health');
+    }
+
+    public function verifyScheduler(): void
+    {
+        $this->record('scheduler');
+    }
+
+    public function writeInstallationReport(): void
+    {
+        $this->record('installation_report');
     }
 
     private function record(string $action): void
     {
         $this->actions[] = $action;
 
-        if ($this->failAt === $action) {
+        if ($this->failAt === $action && $this->failuresRemaining > 0) {
+            $this->failuresRemaining--;
             throw new RuntimeException('test-only '.$action.' failure');
         }
     }

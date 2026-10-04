@@ -10,5 +10,17 @@ interface InstallerFinalizationRunner
 
     public function migrate(?string $lifecycleDatabasePassword = null): void;
 
+    public function seed(): void;
+
+    public function bootstrapOwner(): void;
+
     public function cacheConfiguration(): void;
+
+    public function configureTelegramWebhook(): void;
+
+    public function verifyHealth(): void;
+
+    public function verifyScheduler(): void;
+
+    public function writeInstallationReport(): void;
 }

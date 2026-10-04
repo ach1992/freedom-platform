@@ -18,6 +18,19 @@ final readonly class HttpTelegramBotApi implements TelegramBotApi
         private TelegramRuntimeConfiguration $configuration,
     ) {}
 
+    public function assertBotIdentity(): void
+    {
+        $result = $this->request('getMe');
+
+        if (! is_array($result)
+            || ($result['is_bot'] ?? null) !== true
+            || ! is_int($result['id'] ?? null)
+            || ! hash_equals($this->configuration->botId, (string) $result['id'])
+        ) {
+            throw new RuntimeException('Telegram Bot API identity does not match configured bot.');
+        }
+    }
+
     public function configureWebhook(string $url, string $secretToken, bool $dropPendingUpdates): TelegramWebhookInfo
     {
         if (! hash_equals($this->configuration->webhookUrl, $url)

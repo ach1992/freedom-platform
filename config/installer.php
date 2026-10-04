@@ -9,6 +9,7 @@ return [
         'INSTALLER_BOOTSTRAP_JOURNAL_PATH',
         storage_path('app/installer/bootstrap-journal.json'),
     ),
+    'report_path' => env('INSTALLER_REPORT_PATH', storage_path('app/installer/install-report.json')),
     'minimum_token_ttl_minutes' => 5,
     'maximum_token_ttl_minutes' => 60,
     'unlock_session_ttl_minutes' => 15,

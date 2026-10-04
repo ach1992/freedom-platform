@@ -118,7 +118,7 @@ final class InstallerAccessBoundaryTest extends TestCase
             $response->assertDontSee($testSecret);
             $response->assertDontSee($lifecycleSecret);
             $this->assertSame($lifecycleSecret, $runner->migrationPassword);
-            $this->assertSame(['config_clear', 'migrations', 'config_cache'], $runner->actions);
+            $this->assertSame(['config_clear', 'migrations', 'seed', 'owner_bootstrap', 'config_cache', 'telegram_webhook', 'health', 'scheduler', 'installation_report'], $runner->actions);
             $this->assertStringContainsString('DB_PASSWORD="'.$testSecret.'"', (string) file_get_contents($paths['environment']));
             $this->assertStringNotContainsString($lifecycleSecret, (string) file_get_contents($paths['environment']));
             $this->assertFileExists($paths['lock']);
@@ -319,8 +319,38 @@ final class HttpRecordingFinalizationRunner implements InstallerFinalizationRunn
         $this->actions[] = 'migrations';
     }
 
+    public function seed(): void
+    {
+        $this->actions[] = 'seed';
+    }
+
+    public function bootstrapOwner(): void
+    {
+        $this->actions[] = 'owner_bootstrap';
+    }
+
     public function cacheConfiguration(): void
     {
         $this->actions[] = 'config_cache';
+    }
+
+    public function configureTelegramWebhook(): void
+    {
+        $this->actions[] = 'telegram_webhook';
+    }
+
+    public function verifyHealth(): void
+    {
+        $this->actions[] = 'health';
+    }
+
+    public function verifyScheduler(): void
+    {
+        $this->actions[] = 'scheduler';
+    }
+
+    public function writeInstallationReport(): void
+    {
+        $this->actions[] = 'installation_report';
     }
 }

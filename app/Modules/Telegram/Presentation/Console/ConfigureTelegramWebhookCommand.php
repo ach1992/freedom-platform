@@ -25,6 +25,8 @@ final class ConfigureTelegramWebhookCommand extends Command
         TelegramRuntime $configuration,
     ): int {
         try {
+            $api->assertBotIdentity();
+
             $info = $this->option('status-only') === true
                 ? $api->webhookInfo()
                 : $api->configureWebhook(
