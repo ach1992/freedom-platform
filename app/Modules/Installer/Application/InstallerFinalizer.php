@@ -48,6 +48,8 @@ final readonly class InstallerFinalizer
             'installation_report' => function (): void {
                 $this->runner->writeInstallationReport();
             },
-        ]);
+        ], function (): void {
+            $this->runner->clearConfiguration();
+        });
     }
 }

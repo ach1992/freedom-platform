@@ -20,17 +20,23 @@ final readonly class InstallerEnvironmentBootstrapper
     /**
      * @param  array<string, string>  $environment
      * @param  array<string, Closure(): void>  $downstreamSteps
+     * @param  null|Closure(): void  $afterEnvironmentRollback
      * @return array{status: 'already_locked'|'completed', completed_steps: list<string>, resumed: bool}
      */
-    public function run(array $environment, array $downstreamSteps): array
-    {
+    public function run(
+        array $environment,
+        array $downstreamSteps,
+        ?Closure $afterEnvironmentRollback = null,
+    ): array {
         if (array_key_exists('environment', $downstreamSteps)) {
             throw new RuntimeException('The environment bootstrap step is reserved.');
         }
 
+        $environmentApplied = false;
         $steps = [
-            'environment' => function () use ($environment): void {
+            'environment' => function () use ($environment, &$environmentApplied): void {
                 $this->environmentWriter->write($environment);
+                $environmentApplied = true;
             },
             ...$downstreamSteps,
         ];
@@ -39,6 +45,11 @@ final readonly class InstallerEnvironmentBootstrapper
             $result = $this->orchestrator->run($steps);
         } catch (Throwable $exception) {
             $this->environmentWriter->rollback();
+
+            if ($environmentApplied && $afterEnvironmentRollback !== null) {
+                $afterEnvironmentRollback();
+            }
+
             $this->journal->record('environment', 'failed');
 
             throw $exception;
