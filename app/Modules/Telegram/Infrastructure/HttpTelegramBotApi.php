@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Infrastructure;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBotIdentityVerifier;
 use App\Modules\Telegram\Application\TelegramWebhookInfo;
 use Illuminate\Http\Client\Factory;
 use RuntimeException;
 use Throwable;
 
-final readonly class HttpTelegramBotApi implements TelegramBotApi
+final readonly class HttpTelegramBotApi implements TelegramBotApi, TelegramBotIdentityVerifier
 {
     /** @requirement INS-001 SEC-001 SEC-005 SEC-008 SEC-009 INT-001 */
     public function __construct(

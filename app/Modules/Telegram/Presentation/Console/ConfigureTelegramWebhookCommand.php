@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Telegram\Presentation\Console;
 
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBotIdentityVerifier;
 use App\Modules\Telegram\Application\Contracts\TelegramRuntime;
 use App\Modules\Telegram\Application\TelegramWebhookInfo;
 use Illuminate\Console\Command;
@@ -22,10 +23,11 @@ final class ConfigureTelegramWebhookCommand extends Command
     /** @requirement INS-001 SEC-008 SEC-009 QUA-013 */
     public function handle(
         TelegramBotApi $api,
+        TelegramBotIdentityVerifier $identityVerifier,
         TelegramRuntime $configuration,
     ): int {
         try {
-            $api->assertBotIdentity();
+            $identityVerifier->assertBotIdentity();
 
             $info = $this->option('status-only') === true
                 ? $api->webhookInfo()

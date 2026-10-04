@@ -16,6 +16,7 @@ use App\Modules\Telegram\Application\Contracts\TelegramAdministratorSearchSource
 use App\Modules\Telegram\Application\Contracts\TelegramAlternativePaymentReview;
 use App\Modules\Telegram\Application\Contracts\TelegramBackupArtifactPresentationSource;
 use App\Modules\Telegram\Application\Contracts\TelegramBotApi;
+use App\Modules\Telegram\Application\Contracts\TelegramBotIdentityVerifier;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastLifecycleTransport;
 use App\Modules\Telegram\Application\Contracts\TelegramBroadcastNavigationResolver;
 use App\Modules\Telegram\Application\Contracts\TelegramCustomerPurchaseCardToCardPayment;
@@ -265,6 +266,13 @@ final class TelegramServiceProvider extends ServiceProvider
         $this->app->singleton(
             TelegramBotApi::class,
             fn (Application $application): TelegramBotApi => new HttpTelegramBotApi(
+                $application->make(Factory::class),
+                $application->make(TelegramRuntimeConfiguration::class),
+            ),
+        );
+        $this->app->singleton(
+            TelegramBotIdentityVerifier::class,
+            fn (Application $application): TelegramBotIdentityVerifier => new HttpTelegramBotApi(
                 $application->make(Factory::class),
                 $application->make(TelegramRuntimeConfiguration::class),
             ),
