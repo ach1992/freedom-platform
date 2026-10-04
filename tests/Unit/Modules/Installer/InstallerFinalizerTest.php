@@ -203,7 +203,7 @@ final class InstallerFinalizerTest extends TestCase
                 $this->assertSame('test-only migrations failure', $exception->getMessage());
             }
 
-            $this->assertSame(['config_clear', 'migrations'], $runner->actions);
+            $this->assertSame(['config_clear', 'migrations', 'config_clear'], $runner->actions);
             $this->assertSame($original, file_get_contents($paths['environment']));
             $this->assertFalse($lock->exists());
             $this->assertFileDoesNotExist($paths['snapshot']);
@@ -235,6 +235,7 @@ final class InstallerFinalizerTest extends TestCase
                 'owner_bootstrap',
                 'config_cache',
                 'telegram_webhook',
+                'config_clear',
             ], $runner->actions);
 
             $result = $finalizer->finalize(['DB_HOST' => 'database.internal']);
@@ -249,6 +250,7 @@ final class InstallerFinalizerTest extends TestCase
                 'owner_bootstrap',
                 'config_cache',
                 'telegram_webhook',
+                'config_clear',
                 'config_clear',
                 'migrations',
                 'seed',
